@@ -9,13 +9,20 @@ Key UX/Workflow rules:
 Supplier participation:
 - Notes field (large textarea) for offer observations.
 - Prevent duplicate supplier participation per procurement (friendly message).
+- Winner: when setting a new winner, previous winners are unset.
 
 Material lines:
 - CPV / NSN / Unit included.
 
 Sorting:
 - Lists ordered by A/A (serial_no), numeric-first when possible.
+
+SECURITY (non-negotiable):
+- UI is never trusted.
+- Service isolation enforced server-side via decorators + per-route checks.
 """
+
+from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
@@ -38,11 +45,23 @@ from ...models import (
 from ...security import procurement_access_required, procurement_edit_required
 from ...audit import log_action, serialize_model
 
-
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
 
-def _parse_decimal(value: str | None):
+# ---------------------------------------------------------------------
+# Decorator factory wiring (CRITICAL)
+# ---------------------------------------------------------------------
+# security.py defines procurement_access_required / procurement_edit_required as decorator factories.
+# We MUST provide a loader that returns the procurement, otherwise Flask endpoint names collide.
+def _load_procurement(procurement_id: int, **_: object) -> Procurement:
+    """Load procurement by id for access/edit decorators."""
+    return Procurement.query.get_or_404(procurement_id)
+
+
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+def _parse_decimal(value: str | None) -> Decimal | None:
     """Parse decimal from user input (accepts comma or dot). Returns None if empty/invalid."""
     if value is None:
         return None
@@ -55,13 +74,19 @@ def _parse_decimal(value: str | None):
         return None
 
 
-def _get_active_option_values(key: str):
-    category = OptionCategory.query.filter_by(key=key).first()
+def _get_active_option_values(category_key: str) -> list[str]:
+    """
+    Return active OptionValue.value list for a given OptionCategory key.
+
+    NOTE:
+    - Category keys must match what seed-options created.
+    - If missing category, return empty list (UI remains usable).
+    """
+    category = OptionCategory.query.filter_by(key=category_key).first()
     if not category:
         return []
     values = (
-        OptionValue.query
-        .filter_by(category_id=category.id, is_active=True)
+        OptionValue.query.filter_by(category_id=category.id, is_active=True)
         .order_by(OptionValue.sort_order.asc(), OptionValue.value.asc())
         .all()
     )
@@ -69,12 +94,18 @@ def _get_active_option_values(key: str):
 
 
 def _base_procurements_query():
+    """Service isolation: non-admin sees only their ServiceUnit procurements."""
     if current_user.is_admin:
         return Procurement.query
     return Procurement.query.filter(Procurement.service_unit_id == current_user.service_unit_id)
 
 
 def _order_by_serial_no(q):
+    """
+    Numeric-first sorting for serial_no:
+    - If serial_no starts numeric -> sort by numeric value
+    - Otherwise lexicographic
+    """
     serial = func.coalesce(Procurement.serial_no, "")
     is_numeric = serial.op("GLOB")("[0-9]*")
     numeric_value = func.cast(serial, Integer)
@@ -88,6 +119,7 @@ def _order_by_serial_no(q):
 
 
 def _render_list(procurements, title: str, subtitle: str, allow_create: bool):
+    """Render shared list template with consistent labels."""
     return render_template(
         "procurements/list.html",
         procurements=procurements,
@@ -97,6 +129,20 @@ def _render_list(procurements, title: str, subtitle: str, allow_create: bool):
     )
 
 
+def _get_handler_candidates(service_unit_id: int | None):
+    """Handler dropdown: only active Personnel of the selected service unit."""
+    if not service_unit_id:
+        return []
+    return (
+        Personnel.query.filter_by(is_active=True, service_unit_id=service_unit_id)
+        .order_by(Personnel.last_name.asc(), Personnel.first_name.asc())
+        .all()
+    )
+
+
+# ---------------------------------------------------------------------
+# Lists
+# ---------------------------------------------------------------------
 @procurements_bp.route("/inbox")
 @login_required
 def inbox_procurements():
@@ -147,32 +193,41 @@ def all_procurements():
 @procurements_bp.route("/")
 @login_required
 def list_procurements():
+    """Default list redirects to Inbox."""
     return redirect(url_for("procurements.inbox_procurements"))
 
 
+# ---------------------------------------------------------------------
+# Create
+# ---------------------------------------------------------------------
 @procurements_bp.route("/new", methods=["GET", "POST"])
 @login_required
 def create_procurement():
+    """
+    Create new procurement.
+
+    SECURITY:
+    - Only admin or manager/deputy can create.
+    - Non-admin cannot pick ServiceUnit; it's forced to their own.
+    """
     if not (current_user.is_admin or current_user.can_manage()):
         abort(403)
 
     service_units = ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
 
+    # NOTE: Keys must match your seeded OptionCategory keys.
     allocation_options = _get_active_option_values("KATANOMH")
     quarterly_options = _get_active_option_values("TRIMHNIAIA")
     status_options = _get_active_option_values("KATASTASH")
     stage_options = _get_active_option_values("STADIO")
 
+    # Default handler candidates (non-admin only)
     handler_candidates = []
     if not current_user.is_admin and current_user.service_unit_id:
-        handler_candidates = (
-            Personnel.query
-            .filter_by(is_active=True, service_unit_id=current_user.service_unit_id)
-            .order_by(Personnel.last_name.asc(), Personnel.first_name.asc())
-            .all()
-        )
+        handler_candidates = _get_handler_candidates(current_user.service_unit_id)
 
     if request.method == "POST":
+        # Service unit selection rules
         if current_user.is_admin:
             su_raw = (request.form.get("service_unit_id") or "").strip()
             try:
@@ -187,13 +242,8 @@ def create_procurement():
             flash("Η σύντομη περιγραφή είναι υποχρεωτική.", "danger")
             return redirect(url_for("procurements.create_procurement"))
 
-        if service_unit_id:
-            handler_candidates = (
-                Personnel.query
-                .filter_by(is_active=True, service_unit_id=service_unit_id)
-                .order_by(Personnel.last_name.asc(), Personnel.first_name.asc())
-                .all()
-            )
+        # Refresh handler candidates based on final service_unit_id
+        handler_candidates = _get_handler_candidates(service_unit_id)
 
         procurement = Procurement(
             service_unit_id=service_unit_id,
@@ -216,6 +266,7 @@ def create_procurement():
             procurement_notes=(request.form.get("procurement_notes") or "").strip() or None,
         )
 
+        # Handler validation (must be active personnel of that service unit)
         handler_pid_raw = (request.form.get("handler_personnel_id") or "").strip()
         try:
             handler_pid = int(handler_pid_raw) if handler_pid_raw else None
@@ -229,6 +280,7 @@ def create_procurement():
                 return redirect(url_for("procurements.create_procurement"))
             procurement.handler_personnel_id = handler_pid
 
+        # send_to_expenses rule: valid only when hop_approval exists
         send_to_expenses = bool(request.form.get("send_to_expenses"))
         if send_to_expenses and not procurement.hop_approval:
             flash("Για μεταφορά σε Εκκρεμείς Δαπάνες απαιτείται ΗΩΠ Έγκρισης.", "warning")
@@ -236,9 +288,10 @@ def create_procurement():
         else:
             procurement.send_to_expenses = bool(send_to_expenses and procurement.hop_approval)
 
+        # Transaction: add + flush + audit + commit once
         db.session.add(procurement)
         procurement.recalc_totals()
-        db.session.commit()
+        db.session.flush()  # ensure procurement.id exists for audit
 
         log_action(procurement, "CREATE", before=None, after=serialize_model(procurement))
         db.session.commit()
@@ -257,10 +310,20 @@ def create_procurement():
     )
 
 
+# ---------------------------------------------------------------------
+# Edit / View
+# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/edit", methods=["GET", "POST"])
 @login_required
-@procurement_access_required
-def edit_procurement(procurement_id):
+@procurement_access_required(_load_procurement)
+def edit_procurement(procurement_id: int):
+    """
+    View/Edit procurement.
+
+    SECURITY:
+    - GET: allowed to all users who can access the procurement (service isolation)
+    - POST: only admin or manager/deputy (enforced here)
+    """
     procurement = Procurement.query.get_or_404(procurement_id)
 
     allocation_options = _get_active_option_values("KATANOMH")
@@ -268,14 +331,7 @@ def edit_procurement(procurement_id):
     status_options = _get_active_option_values("KATASTASH")
     stage_options = _get_active_option_values("STADIO")
 
-    handler_candidates = []
-    if procurement.service_unit_id:
-        handler_candidates = (
-            Personnel.query
-            .filter_by(is_active=True, service_unit_id=procurement.service_unit_id)
-            .order_by(Personnel.last_name.asc(), Personnel.first_name.asc())
-            .all()
-        )
+    handler_candidates = _get_handler_candidates(procurement.service_unit_id)
 
     if request.method == "POST":
         if not (current_user.is_admin or current_user.can_manage()):
@@ -283,6 +339,7 @@ def edit_procurement(procurement_id):
 
         before_snapshot = serialize_model(procurement)
 
+        # Admin can change service unit
         if current_user.is_admin:
             su_raw = (request.form.get("service_unit_id") or "").strip()
             try:
@@ -314,12 +371,14 @@ def edit_procurement(procurement_id):
 
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
 
+        # Handler validation
         handler_pid_raw = (request.form.get("handler_personnel_id") or "").strip()
         try:
             handler_pid = int(handler_pid_raw) if handler_pid_raw else None
         except ValueError:
             handler_pid = None
 
+        handler_candidates = _get_handler_candidates(procurement.service_unit_id)
         if handler_pid and procurement.service_unit_id:
             allowed_ids = {p.id for p in handler_candidates}
             if handler_pid not in allowed_ids:
@@ -329,6 +388,7 @@ def edit_procurement(procurement_id):
         else:
             procurement.handler_personnel_id = None
 
+        # send_to_expenses rule
         send_to_expenses = bool(request.form.get("send_to_expenses"))
         if send_to_expenses and not procurement.hop_approval:
             flash("Για μεταφορά σε Εκκρεμείς Δαπάνες απαιτείται ΗΩΠ Έγκρισης.", "warning")
@@ -337,7 +397,7 @@ def edit_procurement(procurement_id):
             procurement.send_to_expenses = bool(send_to_expenses and procurement.hop_approval)
 
         procurement.recalc_totals()
-        db.session.commit()
+        db.session.flush()
 
         log_action(procurement, "UPDATE", before=before_snapshot, after=serialize_model(procurement))
         db.session.commit()
@@ -358,13 +418,18 @@ def edit_procurement(procurement_id):
     )
 
 
+# ---------------------------------------------------------------------
+# Suppliers participation
+# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/suppliers/add", methods=["POST"])
 @login_required
-@procurement_edit_required
-def add_procurement_supplier(procurement_id):
+@procurement_edit_required(_load_procurement)
+def add_procurement_supplier(procurement_id: int):
     """
-    A supplier can only be added once per procurement.
-    Friendly message instead of IntegrityError crash.
+    Add supplier participation.
+
+    SECURITY:
+    - Only admin or manager/deputy of the procurement's service unit (enforced by decorator).
     """
     procurement = Procurement.query.get_or_404(procurement_id)
 
@@ -375,16 +440,17 @@ def add_procurement_supplier(procurement_id):
         flash("Μη έγκυρος προμηθευτής.", "danger")
         return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
 
+    # Friendly duplicate guard
     exists = ProcurementSupplier.query.filter_by(procurement_id=procurement.id, supplier_id=supplier_id).first()
     if exists:
         flash("Ο συγκεκριμένος προμηθευτής έχει ήδη προστεθεί σε αυτή την προμήθεια.", "warning")
         return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
 
-    offered_amount_raw = request.form.get("offered_amount")
-    offered_amount = _parse_decimal(offered_amount_raw)
+    offered_amount = _parse_decimal(request.form.get("offered_amount"))
     is_winner = bool(request.form.get("is_winner"))
     notes = (request.form.get("notes") or "").strip() or None
 
+    # Winner enforcement: setting a winner clears any previous winners
     if is_winner:
         for link in procurement.supplies_links:
             link.is_winner = False
@@ -399,7 +465,7 @@ def add_procurement_supplier(procurement_id):
 
     db.session.add(link)
     try:
-        db.session.commit()
+        db.session.flush()
     except IntegrityError:
         db.session.rollback()
         flash("Ο συγκεκριμένος προμηθευτής έχει ήδη προστεθεί σε αυτή την προμήθεια.", "warning")
@@ -414,13 +480,14 @@ def add_procurement_supplier(procurement_id):
 
 @procurements_bp.route("/<int:procurement_id>/suppliers/<int:link_id>/delete", methods=["POST"])
 @login_required
-@procurement_edit_required
-def delete_procurement_supplier(procurement_id, link_id):
+@procurement_edit_required(_load_procurement)
+def delete_procurement_supplier(procurement_id: int, link_id: int):
+    """Remove supplier participation (audited)."""
     link = ProcurementSupplier.query.get_or_404(link_id)
     before_snapshot = serialize_model(link)
 
     db.session.delete(link)
-    db.session.commit()
+    db.session.flush()
 
     log_action(link, "DELETE", before=before_snapshot, after=None)
     db.session.commit()
@@ -429,10 +496,14 @@ def delete_procurement_supplier(procurement_id, link_id):
     return redirect(url_for("procurements.edit_procurement", procurement_id=procurement_id))
 
 
+# ---------------------------------------------------------------------
+# Materials
+# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/materials/add", methods=["POST"])
 @login_required
-@procurement_edit_required
-def add_material_line(procurement_id):
+@procurement_edit_required(_load_procurement)
+def add_material_line(procurement_id: int):
+    """Add material/service line (audited)."""
     procurement = Procurement.query.get_or_404(procurement_id)
 
     description = (request.form.get("description") or "").strip()
@@ -455,7 +526,7 @@ def add_material_line(procurement_id):
 
     db.session.add(line)
     procurement.recalc_totals()
-    db.session.commit()
+    db.session.flush()
 
     log_action(line, "CREATE", before=None, after=serialize_model(line))
     db.session.commit()
@@ -466,15 +537,17 @@ def add_material_line(procurement_id):
 
 @procurements_bp.route("/<int:procurement_id>/materials/<int:line_id>/delete", methods=["POST"])
 @login_required
-@procurement_edit_required
-def delete_material_line(procurement_id, line_id):
+@procurement_edit_required(_load_procurement)
+def delete_material_line(procurement_id: int, line_id: int):
+    """Delete material/service line (audited)."""
     line = MaterialLine.query.get_or_404(line_id)
     before_snapshot = serialize_model(line)
 
     db.session.delete(line)
+
     procurement = Procurement.query.get_or_404(procurement_id)
     procurement.recalc_totals()
-    db.session.commit()
+    db.session.flush()
 
     log_action(line, "DELETE", before=before_snapshot, after=None)
     db.session.commit()

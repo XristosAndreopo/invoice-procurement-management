@@ -1,86 +1,167 @@
 {% extends "base.html" %}
 
+{#
+  settings/options_values.html
+
+  Enterprise generic template for OptionValue pages.
+
+  Pattern:
+  - GET: renders values
+  - POST: same endpoint (request.path) with hidden field "action" in {create, update, delete}
+
+  SECURITY:
+  - UI is not trusted; routes enforce permissions.
+  - CSRF token must be posted as hidden field, not printed as text.
+#}
+
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-  <div>
-    <h1 class="h4 fw-bold mb-1">{{ page_title }}</h1>
-    <div class="text-muted small">
-      Διαχείριση λίστας επιλογών. Μπορείς να ορίσεις σειρά (sort order) και ενεργό/ανενεργό.
+<div class="container py-3">
+
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h3 class="mb-1">{{ page_label or (category.label if category else "Λίστα") }}</h3>
+      <div class="text-muted small">
+        Διαχείριση τιμών λίστας (Create / Update / Delete). Οι αλλαγές καταγράφονται σε audit.
+      </div>
     </div>
   </div>
-</div>
 
-<div class="card glass-card shadow-sm border-0 mb-3">
-  <div class="card-body">
-    <h2 class="h6 fw-bold mb-3">Νέα τιμή</h2>
+  <!-- CREATE NEW OPTION VALUE -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <strong>Νέα Τιμή</strong>
+    </div>
+    <div class="card-body">
+      <form method="post" action="{{ request.path }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="create">
 
-    <form method="post" action="{{ url_for(request.endpoint ~ '_add') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Τιμή</label>
+            <input type="text" name="value" class="form-control" maxlength="255" required>
+          </div>
 
-      <div class="row g-2">
-        <div class="col-12 col-md-7">
-          <input name="value" class="form-control" placeholder="Τιμή (π.χ. Εν Εξελίξει)" required>
+          <div class="col-md-3">
+            <label class="form-label">Σειρά</label>
+            <input type="number" name="sort_order" class="form-control" value="0" step="1">
+          </div>
+
+          <div class="col-md-3 d-flex align-items-end">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="is_active" id="create_is_active" checked>
+              <label class="form-check-label" for="create_is_active">
+                Ενεργό
+              </label>
+            </div>
+          </div>
+
+          <div class="col-12">
+            <button type="submit" class="btn btn-primary">
+              Προσθήκη
+            </button>
+          </div>
         </div>
-        <div class="col-12 col-md-3">
-          <input name="sort_order" type="number" class="form-control" placeholder="Sort order (0,1,2...)">
-        </div>
-        <div class="col-12 col-md-2">
-          <button class="btn btn-primary w-100">Προσθήκη</button>
-        </div>
-      </div>
-
-      <div class="form-text mt-2">
-        Tip: Χαμηλότερο sort order = εμφανίζεται πιο πάνω στα dropdowns.
-      </div>
-    </form>
+      </form>
+    </div>
   </div>
-</div>
 
-<div class="card glass-card shadow-sm border-0">
-  <div class="card-body">
-    <h2 class="h6 fw-bold mb-3">Τιμές</h2>
+  <!-- LIST / UPDATE / DELETE -->
+  <div class="card">
+    <div class="card-header">
+      <strong>Υπάρχουσες Τιμές</strong>
+    </div>
 
-    {% if values %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle mb-0">
-          <thead>
-            <tr>
-              <th>Τιμή</th>
-              <th style="width:140px;">Sort</th>
-              <th style="width:140px;">Ενεργό</th>
-              <th style="width:140px;"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for v in values %}
+    <div class="card-body">
+      {% if values and values|length > 0 %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
               <tr>
-                <form method="post" action="{{ url_for(request.endpoint ~ '_update', value_id=v.id) }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <td>
-                    <input name="value" class="form-control form-control-sm" value="{{ v.value }}" required>
-                  </td>
-                  <td>
-                    <input name="sort_order" type="number" class="form-control form-control-sm" value="{{ v.sort_order or 0 }}">
-                  </td>
-                  <td>
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" name="is_active" id="active-{{ v.id }}"
-                             {% if v.is_active %}checked{% endif %}>
-                      <label class="form-check-label small" for="active-{{ v.id }}">Ενεργό</label>
-                    </div>
-                  </td>
-                  <td class="text-end">
-                    <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
-                  </td>
-                </form>
+                <th style="width: 50px;">#</th>
+                <th>Τιμή</th>
+                <th style="width: 120px;">Σειρά</th>
+                <th style="width: 120px;">Ενεργό</th>
+                <th style="width: 220px;" class="text-end">Ενέργειες</th>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="small text-muted">Δεν υπάρχουν τιμές ακόμα.</div>
-    {% endif %}
+            </thead>
+            <tbody>
+              {% for v in values %}
+                <tr>
+                  <td class="text-muted">{{ loop.index }}</td>
+
+                  <td>
+                    <form method="post" action="{{ request.path }}" class="d-flex gap-2">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="action" value="update">
+                      <input type="hidden" name="id" value="{{ v.id }}">
+
+                      <input
+                        type="text"
+                        name="value"
+                        class="form-control form-control-sm"
+                        value="{{ v.value }}"
+                        maxlength="255"
+                        required
+                      >
+                  </td>
+
+                  <td>
+                      <input
+                        type="number"
+                        name="sort_order"
+                        class="form-control form-control-sm"
+                        value="{{ v.sort_order or 0 }}"
+                        step="1"
+                      >
+                  </td>
+
+                  <td>
+                      <div class="form-check">
+                        <input
+                          class="form-check-input"
+                          type="checkbox"
+                          name="is_active"
+                          id="is_active_{{ v.id }}"
+                          {% if v.is_active %}checked{% endif %}
+                        >
+                        <label class="form-check-label small" for="is_active_{{ v.id }}">
+                          {% if v.is_active %}Ναι{% else %}Όχι{% endif %}
+                        </label>
+                      </div>
+                  </td>
+
+                  <td class="text-end">
+                      <button type="submit" class="btn btn-sm btn-outline-primary">
+                        Αποθήκευση
+                      </button>
+                    </form>
+
+                    <form method="post" action="{{ request.path }}" class="d-inline">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="action" value="delete">
+                      <input type="hidden" name="id" value="{{ v.id }}">
+                      <button
+                        type="submit"
+                        class="btn btn-sm btn-outline-danger"
+                        onclick="return confirm('Σίγουρα θέλεις διαγραφή;');"
+                      >
+                        Διαγραφή
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="alert alert-info mb-0">
+          Δεν υπάρχουν ακόμη τιμές σε αυτή την κατηγορία.
+        </div>
+      {% endif %}
+    </div>
   </div>
+
 </div>
 {% endblock %}

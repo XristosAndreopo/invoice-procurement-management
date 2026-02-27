@@ -1,4 +1,6 @@
 """
+app/blueprints/admin/routes.py
+
 Admin Routes – Enterprise Administration Module
 
 Includes:
@@ -11,9 +13,15 @@ Enterprise requirements implemented here:
 - Audit logging for CREATE / UPDATE
 
 NOTES:
-- We do not trust UI. All validations happen server-side.
-- We keep routes compact and explicit (no magic).
+- UI is never trusted. All validations happen server-side.
+- Audit must be recorded in the same transaction as the data change.
+  Pattern: db.session.flush() -> log_action(...) -> db.session.commit()
 """
+
+from __future__ import annotations
+
+from functools import wraps
+from typing import Optional
 
 from flask import (
     Blueprint,
@@ -30,24 +38,23 @@ from ...extensions import db
 from ...models import Personnel, ServiceUnit
 from ...audit import log_action, serialize_model
 
-
-admin_bp = Blueprint(
-    "admin",
-    __name__,
-    url_prefix="/admin",
-)
+admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
 
 # -------------------------------------------------------
 # ADMIN PROTECTION DECORATOR
 # -------------------------------------------------------
 def admin_required(func):
-    """Ensure only admin users can access route."""
-    from functools import wraps
+    """
+    Ensure only admin users can access route.
 
+    SECURITY:
+    - Server-side enforcement (UI never trusted).
+    - Returns HTTP 403 if user is not authenticated admin.
+    """
     @wraps(func)
     def wrapper(*args, **kwargs):
-        if not current_user.is_authenticated or not current_user.is_admin:
+        if not current_user.is_authenticated or not getattr(current_user, "is_admin", False):
             abort(403)
         return func(*args, **kwargs)
 
@@ -57,7 +64,7 @@ def admin_required(func):
 # -------------------------------------------------------
 # HELPERS
 # -------------------------------------------------------
-def _parse_optional_int(value: str):
+def _parse_optional_int(value: str) -> Optional[int]:
     """Parse optional integer from form. Returns None if empty/invalid."""
     if not value:
         return None
@@ -72,8 +79,13 @@ def _service_units_for_dropdown():
     return ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
 
 
-def _validate_service_unit_id(service_unit_id: int | None) -> bool:
-    """Return True if service_unit_id is None or exists."""
+def _validate_service_unit_id(service_unit_id: Optional[int]) -> bool:
+    """
+    Return True if service_unit_id is None or exists in DB.
+
+    SECURITY:
+    - Prevents forging a service_unit_id that doesn't exist.
+    """
     if service_unit_id is None:
         return True
     return ServiceUnit.query.get(service_unit_id) is not None
@@ -88,15 +100,14 @@ def _validate_service_unit_id(service_unit_id: int | None) -> bool:
 def personnel_list():
     """List organizational personnel (admin only)."""
     personnel = (
-        Personnel.query
-        .order_by(Personnel.rank.asc(), Personnel.last_name.asc(), Personnel.first_name.asc())
-        .all()
+        Personnel.query.order_by(
+            Personnel.rank.asc(),
+            Personnel.last_name.asc(),
+            Personnel.first_name.asc(),
+        ).all()
     )
 
-    return render_template(
-        "admin/personnel_list.html",
-        personnel=personnel,
-    )
+    return render_template("admin/personnel_list.html", personnel=personnel)
 
 
 # -------------------------------------------------------
@@ -119,6 +130,7 @@ def create_personnel():
 
         service_unit_id = _parse_optional_int((request.form.get("service_unit_id") or "").strip())
 
+        # Validations (server-side)
         if not agm or not first_name or not last_name:
             flash("ΑΓΜ, Όνομα και Επώνυμο είναι υποχρεωτικά.", "danger")
             return redirect(url_for("admin.create_personnel"))
@@ -142,10 +154,10 @@ def create_personnel():
             service_unit_id=service_unit_id,
         )
 
+        # Transaction: add -> flush (id exists) -> audit -> commit (once)
         db.session.add(person)
-        db.session.commit()
+        db.session.flush()
 
-        # Audit (after commit so id exists)
         log_action(person, "CREATE", before=None, after=serialize_model(person))
         db.session.commit()
 
@@ -166,7 +178,7 @@ def create_personnel():
 @admin_bp.route("/personnel/<int:personnel_id>/edit", methods=["GET", "POST"])
 @login_required
 @admin_required
-def edit_personnel(personnel_id):
+def edit_personnel(personnel_id: int):
     """
     Edit Personnel (admin only).
 
@@ -174,6 +186,9 @@ def edit_personnel(personnel_id):
     - update fields
     - assign/change ServiceUnit
     - activate/deactivate
+
+    ENTERPRISE:
+    - Audit UPDATE in the same transaction.
     """
     person = Personnel.query.get_or_404(personnel_id)
     service_units = _service_units_for_dropdown()
@@ -191,6 +206,7 @@ def edit_personnel(personnel_id):
         service_unit_id = _parse_optional_int((request.form.get("service_unit_id") or "").strip())
         is_active = bool(request.form.get("is_active"))
 
+        # Validations (server-side)
         if not agm or not first_name or not last_name:
             flash("ΑΓΜ, Όνομα και Επώνυμο είναι υποχρεωτικά.", "danger")
             return redirect(url_for("admin.edit_personnel", personnel_id=person.id))
@@ -205,6 +221,7 @@ def edit_personnel(personnel_id):
             flash("Μη έγκυρη υπηρεσία.", "danger")
             return redirect(url_for("admin.edit_personnel", personnel_id=person.id))
 
+        # Apply updates
         person.agm = agm
         person.aem = aem or None
         person.rank = rank or None
@@ -214,8 +231,8 @@ def edit_personnel(personnel_id):
         person.service_unit_id = service_unit_id
         person.is_active = is_active
 
-        db.session.commit()
-
+        # Transaction: flush -> audit -> commit (once)
+        db.session.flush()
         log_action(person, "UPDATE", before=before_snapshot, after=serialize_model(person))
         db.session.commit()
 
