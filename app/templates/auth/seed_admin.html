@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-md-7 col-lg-5">
+    <div class="card glass-card shadow-sm border-0">
+      <div class="card-body p-4">
+        <h1 class="h4 fw-bold mb-2">Δημιουργία Πρώτου Admin</h1>
+        <p class="text-muted small">
+          Αυτή η φόρμα είναι μόνο για την αρχική εγκατάσταση.
+        </p>
+
+        <form method="post">
+          <!-- CSRF hidden field -->
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+          <div class="mb-3">
+            <label class="form-label">Όνομα χρήστη</label>
+            <input name="username" class="form-control" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Κωδικός</label>
+            <input name="password" type="password" class="form-control" required>
+          </div>
+
+          <button class="btn btn-success w-100">
+            Δημιουργία Admin
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

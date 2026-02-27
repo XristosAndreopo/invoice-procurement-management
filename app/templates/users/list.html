@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Χρήστες Συστήματος</h1>
+    <div class="text-muted small">
+      Διαχείριση χρηστών, ρόλων και ανάθεσης υπηρεσιών.
+    </div>
+  </div>
+  <a href="{{ url_for('users.create_user') }}" class="btn btn-primary btn-sm">
+    Νέος Χρήστης
+  </a>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+
+    {% if users %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Ρόλος</th>
+            <th>Υπηρεσία</th>
+            <th>Κατάσταση</th>
+            <th>Ημ/νία Δημιουργίας</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+          <tr>
+            <td class="fw-semibold">{{ user.username }}</td>
+
+            <td>
+              {% if user.is_admin %}
+                <span class="badge bg-danger">Admin</span>
+              {% elif user.can_manage() %}
+                <span class="badge bg-primary">Manager/Deputy</span>
+              {% else %}
+                <span class="badge bg-secondary">Viewer</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if user.service_unit %}
+                {{ user.service_unit.short_name or user.service_unit.description }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+
+            <td>
+              {% if user.is_active %}
+                <span class="badge bg-success">Ενεργός</span>
+              {% else %}
+                <span class="badge bg-secondary">Ανενεργός</span>
+              {% endif %}
+            </td>
+
+            <td class="small text-muted">
+              {{ user.created_at.strftime('%d/%m/%Y %H:%M') }}
+            </td>
+
+            <td class="text-end">
+              <a href="{{ url_for('users.edit_user', user_id=user.id) }}"
+                 class="btn btn-sm btn-outline-secondary">
+                Επεξεργασία
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="small text-muted">
+        Δεν υπάρχουν χρήστες στο σύστημα.
+      </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endblock %}

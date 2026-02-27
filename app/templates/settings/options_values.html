@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">{{ page_title }}</h1>
+    <div class="text-muted small">
+      Διαχείριση λίστας επιλογών. Μπορείς να ορίσεις σειρά (sort order) και ενεργό/ανενεργό.
+    </div>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <h2 class="h6 fw-bold mb-3">Νέα τιμή</h2>
+
+    <form method="post" action="{{ url_for(request.endpoint ~ '_add') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="row g-2">
+        <div class="col-12 col-md-7">
+          <input name="value" class="form-control" placeholder="Τιμή (π.χ. Εν Εξελίξει)" required>
+        </div>
+        <div class="col-12 col-md-3">
+          <input name="sort_order" type="number" class="form-control" placeholder="Sort order (0,1,2...)">
+        </div>
+        <div class="col-12 col-md-2">
+          <button class="btn btn-primary w-100">Προσθήκη</button>
+        </div>
+      </div>
+
+      <div class="form-text mt-2">
+        Tip: Χαμηλότερο sort order = εμφανίζεται πιο πάνω στα dropdowns.
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    <h2 class="h6 fw-bold mb-3">Τιμές</h2>
+
+    {% if values %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Τιμή</th>
+              <th style="width:140px;">Sort</th>
+              <th style="width:140px;">Ενεργό</th>
+              <th style="width:140px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for v in values %}
+              <tr>
+                <form method="post" action="{{ url_for(request.endpoint ~ '_update', value_id=v.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <td>
+                    <input name="value" class="form-control form-control-sm" value="{{ v.value }}" required>
+                  </td>
+                  <td>
+                    <input name="sort_order" type="number" class="form-control form-control-sm" value="{{ v.sort_order or 0 }}">
+                  </td>
+                  <td>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" name="is_active" id="active-{{ v.id }}"
+                             {% if v.is_active %}checked{% endif %}>
+                      <label class="form-check-label small" for="active-{{ v.id }}">Ενεργό</label>
+                    </div>
+                  </td>
+                  <td class="text-end">
+                    <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
+                  </td>
+                </form>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="small text-muted">Δεν υπάρχουν τιμές ακόμα.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

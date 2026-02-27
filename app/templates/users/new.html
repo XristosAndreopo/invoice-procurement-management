@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Νέος Χρήστης</h1>
+    <div class="text-muted small">
+      Δημιουργία νέου λογαριασμού χρήστη (σύνδεση 1-1 με Προσωπικό).
+    </div>
+  </div>
+  <a href="{{ url_for('users.list_users') }}" class="btn btn-outline-secondary btn-sm">
+    &larr; Πίσω στη λίστα
+  </a>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    <div class="row g-3">
+      <!-- LEFT: FORM -->
+      <div class="col-12 col-lg-8">
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Username *</label>
+            <div class="col-8">
+              <input type="text" name="username" class="form-control form-control-sm" required>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Password *</label>
+            <div class="col-8">
+              <input type="password" name="password" class="form-control form-control-sm" required>
+            </div>
+          </div>
+
+          <hr class="my-3">
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Προσωπικό (υποχρεωτικό) *</label>
+            <div class="col-8">
+              <select name="personnel_id" class="form-select form-select-sm" required>
+                <option value="">(επιλέξτε)</option>
+                {% for p in personnel_list %}
+                  <option value="{{ p.id }}">
+                    {{ p.full_name() }} {% if p.agm %}• ΑΓΜ: {{ p.agm }}{% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Εμφανίζονται μόνο ενεργοί που ΔΕΝ έχουν ήδη user (1-1).
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Υπηρεσία</label>
+            <div class="col-8">
+              <select name="service_unit_id" class="form-select form-select-sm">
+                <option value="">(καμία)</option>
+                {% for su in service_units %}
+                  <option value="{{ su.id }}">
+                    {{ su.short_name or su.description }}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Για non-admin χρήστες, αυτή η ανάθεση καθορίζει την απομόνωση υπηρεσίας.
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Ρόλος</label>
+            <div class="col-8">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="is_admin" id="is_admin">
+                <label class="form-check-label" for="is_admin">
+                  Administrator (Πλήρης Πρόσβαση)
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <button class="btn btn-primary btn-sm">
+              Δημιουργία Χρήστη
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- RIGHT: INFO -->
+      <div class="col-12 col-lg-4">
+        <div class="card bg-light border-0 h-100">
+          <div class="card-body py-3 small">
+            <div class="fw-bold mb-2">Σημείωση</div>
+            <ul class="mb-0">
+              <li>Κάθε χρήστης συνδέεται 1-1 με Προσωπικό.</li>
+              <li>Admin βλέπει/διαχειρίζεται τα πάντα.</li>
+              <li>Non-admin βλέπει μόνο την υπηρεσία του.</li>
+              <li>Manager/Deputy προκύπτει από ανάθεση στο ServiceUnit (όχι από checkbox).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

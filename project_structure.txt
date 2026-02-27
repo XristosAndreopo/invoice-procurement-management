@@ -1,0 +1,50 @@
+Invoice Management System/
+├─ .gitignore
+├─ README.md
+├─ requirements.txt
+├─ config.py
+├─ run.py
+├─ wsgi.py                         # optional (prod entrypoint)
+├─ instance/                        # optional (instance config, secrets)
+│  └─ .gitkeep
+├─ migrations/                      # Flask-Migrate (Alembic)
+│  ├─ env.py
+│  ├─ script.py.mako
+│  └─ versions/
+├─ app/
+│  ├─ __init__.py                   # create_app + NAV sections
+│  ├─ extensions.py                 # db, migrate, login_manager, csrf
+│  ├─ models.py                     # all SQLAlchemy models
+│  ├─ seed.py                       # seed-options command helper
+│  ├─ audit.py                      # AuditLog helpers
+│  ├─ security.py                   # authz decorators/guards
+│  ├─ utils.py                      # shared helpers
+│  ├─ blueprints/
+│  │  ├─ __init__.py
+│  │  ├─ auth/
+│  │  │  ├─ __init__.py
+│  │  │  └─ routes.py
+│  │  ├─ procurements/
+│  │  │  ├─ __init__.py
+│  │  │  └─ routes.py
+│  │  ├─ settings/
+│  │  │  ├─ __init__.py
+│  │  │  └─ routes.py
+│  │  ├─ admin/
+│  │  │  ├─ __init__.py
+│  │  │  └─ routes.py
+│  │  └─ users/
+│  │     ├─ __init__.py
+│  │     └─ routes.py
+│  ├─ templates/
+│  │  ├─ base.html
+│  │  ├─ errors/
+│  │  │  └─ 403.html
+│  │  ├─ auth/
+│  │  ├─ procurements/
+│  │  ├─ settings/
+│  │  ├─ admin/
+│  │  └─ users/
+│  └─ static/
+│     └─ app.css
+└─ app.db                           # dev sqlite (ΔΕΝ μπαίνει στο git)

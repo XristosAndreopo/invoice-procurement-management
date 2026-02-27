@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Παράπονα / Αναφορά</h1>
+    <div class="text-muted small">
+      Περιγράψτε το πρόβλημα ή την πρότασή σας. Θα εξεταστεί από τον διαχειριστή.
+    </div>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-4">
+  <div class="card-body">
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="row g-3">
+        <div class="col-12 col-md-4">
+          <label class="form-label">Κατηγορία</label>
+          <select name="category" class="form-select">
+            {% for key, label in categories %}
+              <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-12 col-md-8">
+          <label class="form-label">Τίτλος</label>
+          <input name="subject" class="form-control" required>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Μήνυμα</label>
+          <textarea
+            name="message"
+            class="form-control"
+            rows="5"
+            placeholder="Περιγράψτε όσο πιο αναλυτικά γίνεται το ζήτημα ή την πρότασή σας."
+            required
+          ></textarea>
+        </div>
+
+        <div class="col-12 col-md-4">
+          <label class="form-label">Σχετική προμήθεια (Α/Α)</label>
+          <input
+            name="related_procurement_id"
+            class="form-control"
+            placeholder="π.χ. 123"
+          >
+          <div class="form-text">
+            Προαιρετικό: Α/Α προμήθειας από τη λίστα προμηθειών.
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <button class="btn btn-primary">
+          Υποβολή
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if recent_feedback %}
+  <div class="card glass-card shadow-sm border-0">
+    <div class="card-body">
+      <h2 class="h6 fw-bold mb-3">Πρόσφατα μηνύματά σας</h2>
+      <div class="list-group list-group-flush">
+        {% for fb in recent_feedback %}
+          <div class="list-group-item">
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">{{ fb.subject }}</div>
+                <div class="small text-muted">
+                  {{ fb.created_at.strftime('%d/%m/%Y %H:%M') }}
+                  {% if fb.category %}
+                    •
+                    {% if fb.category == 'complaint' %}Παράπονο{% endif %}
+                    {% if fb.category == 'suggestion' %}Πρόταση{% endif %}
+                    {% if fb.category == 'bug' %}Σφάλμα{% endif %}
+                    {% if fb.category == 'other' %}Άλλο{% endif %}
+                  {% endif %}
+                  {% if fb.related_procurement_id %}
+                    • Προμήθεια Α/Α: {{ fb.related_procurement_id }}
+                  {% endif %}
+                </div>
+              </div>
+              <div class="small text-muted">
+                {{ fb.status or 'new' }}
+              </div>
+            </div>
+            <div class="small mt-2 text-break">
+              {{ fb.message }}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

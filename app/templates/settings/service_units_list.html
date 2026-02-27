@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Υπηρεσίες</h1>
+    <div class="text-muted small">
+      Λίστα υπηρεσιών και ανάθεση Manager/Deputy από το Προσωπικό (admin only).
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('settings.service_unit_create') }}" class="btn btn-primary btn-sm">
+      Νέα Υπηρεσία
+    </a>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    {% if units %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Κωδικός</th>
+              <th>Περιγραφή</th>
+              <th>Συντομογραφία</th>
+              <th>Manager</th>
+              <th>Deputy</th>
+              <th class="text-end"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in units %}
+              <tr>
+                <td class="small"><code>{{ u.code or '—' }}</code></td>
+                <td class="small">{{ u.description }}</td>
+                <td class="small">{{ u.short_name or '—' }}</td>
+                <td class="small">
+                  {% if u.manager %}
+                    {{ u.manager.full_name() }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="small">
+                  {% if u.deputy %}
+                    {{ u.deputy.full_name() }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <a href="{{ url_for('settings.service_unit_edit', unit_id=u.id) }}"
+                     class="btn btn-sm btn-outline-secondary me-1">
+                    Επεξεργασία
+                  </a>
+                  <form
+                    method="post"
+                    action="{{ url_for('settings.service_unit_delete', unit_id=u.id) }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε την υπηρεσία;');"
+                  >
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-sm btn-outline-danger">
+                      Διαγραφή
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="small text-muted">
+        Δεν υπάρχουν καταχωρημένες υπηρεσίες.
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Διαχείριση Παραπόνων</h1>
+    <div class="text-muted small">
+      Προβολή και διαχείριση όλων των παραπόνων / αναφορών που έχουν υποβληθεί.
+    </div>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <form class="row g-3" method="get">
+      <div class="col-12 col-md-4">
+        <label class="form-label">Κατάσταση</label>
+        <select name="status" class="form-select">
+          <option value="">(Όλες)</option>
+          {% for key, label in status_choices.items() %}
+            <option value="{{ key }}" {% if status_filter == key %}selected{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12 col-md-4">
+        <label class="form-label">Κατηγορία</label>
+        <select name="category" class="form-select">
+          <option value="">(Όλες)</option>
+          <option value="complaint" {% if category_filter == 'complaint' %}selected{% endif %}>Παράπονο</option>
+          <option value="suggestion" {% if category_filter == 'suggestion' %}selected{% endif %}>Πρόταση</option>
+          <option value="bug" {% if category_filter == 'bug' %}selected{% endif %}>Σφάλμα</option>
+          <option value="other" {% if category_filter == 'other' %}selected{% endif %}>Άλλο</option>
+        </select>
+      </div>
+
+      <div class="col-12 col-md-4 d-flex align-items-end">
+        <button class="btn btn-outline-primary me-2">
+          Φιλτράρισμα
+        </button>
+        <a href="{{ url_for('settings.feedback_admin') }}" class="btn btn-outline-secondary">
+          Καθαρισμός
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    {% if feedback_items %}
+      <div class="table-responsive">
+        <table class="table align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Ημ/νία</th>
+              <th>Χρήστης</th>
+              <th>Κατηγορία</th>
+              <th>Τίτλος</th>
+              <th>Μήνυμα</th>
+              <th>Προμήθεια</th>
+              <th>Κατάσταση</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for fb in feedback_items %}
+              <tr>
+                <td class="small text-muted">
+                  {{ fb.created_at.strftime('%d/%m/%Y %H:%M') }}
+                </td>
+                <td class="small">
+                  {{ fb.user.username if fb.user else '—' }}
+                </td>
+                <td class="small">
+                  {{ category_labels.get(fb.category, '—') }}
+                </td>
+                <td class="small fw-semibold">
+                  {{ fb.subject }}
+                </td>
+                <td class="small text-break" style="max-width: 280px;">
+                  {{ fb.message }}
+                </td>
+                <td class="small">
+                  {% if fb.related_procurement_id %}
+                    Α/Α: {{ fb.related_procurement_id }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="small">
+                  {{ status_choices.get(fb.status or 'new', 'Νέο') }}
+                </td>
+                <td class="small">
+                  <form method="post" class="d-flex align-items-center">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="feedback_id" value="{{ fb.id }}">
+                    <select name="status" class="form-select form-select-sm me-2">
+                      {% for key, label in status_choices.items() %}
+                        <option value="{{ key }}" {% if (fb.status or 'new') == key %}selected{% endif %}>
+                          {{ label }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                    <button class="btn btn-sm btn-primary">
+                      Ενημέρωση
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="text-muted small">
+        Δεν υπάρχουν καταχωρημένα παράπονα / αναφορές με τα συγκεκριμένα κριτήρια.
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Προμηθευτές</h1>
+    <div class="text-muted small">
+      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, διεύθυνση, τόπος, Τ.Κ., χώρα, τράπεζα, IBAN).
+    </div>
+  </div>
+  <a href="{{ url_for('settings.supplier_create') }}" class="btn btn-primary btn-sm">
+    Νέος Προμηθευτής
+  </a>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    {% if suppliers %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>ΑΦΜ</th>
+              <th>Επωνυμία</th>
+              <th>Διεύθυνση</th>
+              <th>Τόπος</th>
+              <th>Τ.Κ.</th>
+              <th>Χώρα</th>
+              <th>Τράπεζα</th>
+              <th>IBAN</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in suppliers %}
+              <tr>
+                <td class="small fw-semibold">{{ s.afm }}</td>
+                <td class="small">{{ s.name }}</td>
+                <td class="small">{{ s.address or '—' }}</td>
+                <td class="small">{{ s.city or '—' }}</td>
+                <td class="small">{{ s.postal_code or '—' }}</td>
+                <td class="small">{{ s.country or '—' }}</td>
+                <td class="small">{{ s.bank_name or '—' }}</td>
+                <td class="small text-nowrap">
+                  {{ s.iban or '—' }}
+                </td>
+                <td class="text-end">
+                  <a href="{{ url_for('settings.supplier_edit', supplier_id=s.id) }}" class="btn btn-sm btn-outline-secondary me-1">
+                    Επεξεργασία
+                  </a>
+                  <form
+                    method="post"
+                    action="{{ url_for('settings.supplier_delete', supplier_id=s.id) }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε τον προμηθευτή;');"
+                  >
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-sm btn-outline-danger">
+                      Διαγραφή
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="small text-muted">
+        Δεν υπάρχουν καταχωρημένοι προμηθευτές. Πατήστε "Νέος Προμηθευτής" για να προσθέσετε.
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

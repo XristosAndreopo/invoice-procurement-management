@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">{{ form_title }}</h1>
+    <div class="text-muted small">
+      Διαχείριση στοιχείων Υπηρεσίας (Α/Α, περιγραφή, συντομογραφία, ΑΑΗΤ, διοικητής, επιμελητής, υπόλογος εφοδιασμού).
+    </div>
+  </div>
+  <a href="{{ url_for('settings.service_units_list') }}" class="btn btn-outline-secondary btn-sm">
+    &larr; Πίσω στη λίστα Υπηρεσιών
+  </a>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <h2 class="h6 fw-bold mb-3">Βασικά στοιχεία Υπηρεσίας</h2>
+
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="row g-3">
+        <!-- Αριστερή στήλη -->
+        <div class="col-12 col-lg-8">
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Α/Α (κωδικός)</label>
+            <div class="col-8">
+              <input type="text"
+                     name="code"
+                     class="form-control form-control-sm"
+                     placeholder="π.χ. ΥΝΤΕΛ"
+                     value="{{ unit.code if unit and unit.code is not none else '' }}">
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Περιγραφή *</label>
+            <div class="col-8">
+              <input type="text"
+                     name="description"
+                     class="form-control form-control-sm"
+                     placeholder="πλήρης περιγραφή υπηρεσίας"
+                     value="{{ unit.description if unit and unit.description is not none else '' }}"
+                     required>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Συντομογραφία</label>
+            <div class="col-8">
+              <input type="text"
+                     name="short_name"
+                     class="form-control form-control-sm"
+                     placeholder="σύντομη ονομασία (για λίστες)"
+                     value="{{ unit.short_name if unit and unit.short_name is not none else '' }}">
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΑΗΤ</label>
+            <div class="col-8">
+              <input type="text"
+                     name="aahit"
+                     class="form-control form-control-sm"
+                     value="{{ unit.aahit if unit and unit.aahit is not none else '' }}">
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Διοικητής</label>
+            <div class="col-8">
+              <input type="text"
+                     name="commander"
+                     class="form-control form-control-sm"
+                     value="{{ unit.commander if unit and unit.commander is not none else '' }}">
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Επιμελητής</label>
+            <div class="col-8">
+              <input type="text"
+                     name="curator"
+                     class="form-control form-control-sm"
+                     value="{{ unit.curator if unit and unit.curator is not none else '' }}">
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Υπόλογος εφοδιασμού</label>
+            <div class="col-8">
+              <input type="text"
+                     name="supply_officer"
+                     class="form-control form-control-sm"
+                     value="{{ unit.supply_officer if unit and unit.supply_officer is not none else '' }}">
+            </div>
+          </div>
+
+          <hr class="my-3">
+
+          <!-- Manager / Deputy from Personnel -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Manager (Προσωπικό)</label>
+            <div class="col-8">
+              <select name="manager_personnel_id" class="form-select form-select-sm">
+                <option value="">(κανένας)</option>
+                {% for p in personnel_list %}
+                  <option value="{{ p.id }}"
+                          {% if unit and unit.manager_personnel_id == p.id %}selected{% endif %}>
+                    {{ p.full_name() }} {% if p.agm %}• ΑΓΜ: {{ p.agm }}{% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Επιτρέπεται μόνο επιλογή από το ενεργό προσωπικό (διαχείριση μόνο από Admin).
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Deputy (Προσωπικό)</label>
+            <div class="col-8">
+              <select name="deputy_personnel_id" class="form-select form-select-sm">
+                <option value="">(κανένας)</option>
+                {% for p in personnel_list %}
+                  <option value="{{ p.id }}"
+                          {% if unit and unit.deputy_personnel_id == p.id %}selected{% endif %}>
+                    {{ p.full_name() }} {% if p.agm %}• ΑΓΜ: {{ p.agm }}{% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Δεν μπορεί να είναι το ίδιο άτομο με τον Manager.
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Δεξιά στήλη -->
+        <div class="col-12 col-lg-4">
+          <div class="card bg-light border-0 h-100">
+            <div class="card-body py-3 small">
+              <div class="fw-bold mb-2">Σημείωση</div>
+              <p class="mb-2">
+                Ο Manager/Deputy ορίζονται από τον Admin, αποκλειστικά από τη λίστα προσωπικού.
+              </p>
+              <ul class="mb-2">
+                <li>Manager/Deputy έχουν δικαιώματα διαχείρισης προμηθειών της υπηρεσίας.</li>
+                <li>Οι υπόλοιποι χρήστες μπορούν να είναι view-only (reports).</li>
+              </ul>
+              <p class="mb-0 text-muted">
+                Η λίστα προσωπικού (ΑΓΜ, ΑΕΜ, Βαθμός, Ειδικότητα, Ονοματεπώνυμο) θα διαχειρίζεται μόνο από Admin.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3">
+        <button class="btn btn-primary btn-sm">
+          Αποθήκευση Υπηρεσίας
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

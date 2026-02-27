@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Νέα Προμήθεια</h1>
+    <div class="text-muted small">Δημιουργία νέας προμήθειας (με workflow πεδία).</div>
+  </div>
+  <a href="{{ url_for('procurements.inbox_procurements') }}" class="btn btn-outline-secondary btn-sm">
+    &larr; Επιστροφή
+  </a>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <!-- ROW 1: BASIC INFO + RULES -->
+      <div class="row g-3">
+        <div class="col-12 col-lg-8">
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Υπηρεσία</label>
+            <div class="col-8">
+              {% if current_user.is_admin %}
+                <select name="service_unit_id" class="form-select form-select-sm">
+                  <option value="">(επιλέξτε)</option>
+                  {% for su in service_units %}
+                    <option value="{{ su.id }}">{{ su.short_name or su.description }}</option>
+                  {% endfor %}
+                </select>
+              {% else %}
+                <input type="text" class="form-control form-control-sm"
+                       value="{{ current_user.service_unit.short_name if current_user.service_unit else '' }}" disabled>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Α/Α</label>
+            <div class="col-8">
+              <input type="text" name="serial_no" class="form-control form-control-sm">
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Σύντομη Περιγραφή *</label>
+            <div class="col-8">
+              <input type="text" name="description" class="form-control form-control-sm" required>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΛΕ</label>
+            <div class="col-8">
+              <input type="text" name="ale" class="form-control form-control-sm">
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Κατανομή</label>
+            <div class="col-8">
+              <select name="allocation" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for v in allocation_options %}
+                  <option value="{{ v }}">{{ v }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Τριμηνιαία</label>
+            <div class="col-8">
+              <select name="quarterly" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for v in quarterly_options %}
+                  <option value="{{ v }}">{{ v }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Κατάσταση</label>
+            <div class="col-8">
+              <select name="status" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for v in status_options %}
+                  <option value="{{ v }}">{{ v }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Στάδιο</label>
+            <div class="col-8">
+              <select name="stage" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for v in stage_options %}
+                  <option value="{{ v }}">{{ v }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Χειριστής (Προσωπικό)</label>
+            <div class="col-8">
+              <select name="handler_personnel_id" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for p in handler_candidates %}
+                  <option value="{{ p.id }}">{{ p.full_name() }}</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Εμφανίζεται μόνο ενεργό προσωπικό της υπηρεσίας.</div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="col-12 col-lg-4">
+          <div class="card bg-light border-0 h-100">
+            <div class="card-body py-3 small">
+              <div class="fw-bold mb-2">Κανόνες</div>
+              <ul class="mb-0">
+                <li>Ακυρωμένες: εμφανίζονται μόνο στις “Όλες”.</li>
+                <li>Για “Εκκρεμείς Δαπάνες”: απαιτείται ΗΩΠ Έγκρισης + επιλογή μεταφοράς.</li>
+                <li>Η υπηρεσία non-admin ορίζεται αυτόματα.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <hr class="my-3">
+
+      <!-- ROW 2: HOP FIELDS (LEFT) + NOTES (RIGHT) -->
+      <div class="row g-3">
+        <div class="col-12 col-lg-8">
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Δέσμευσης</label>
+            <div class="col-8"><input name="hop_commitment" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προωθητικού Δέσμευσης 1</label>
+            <div class="col-8"><input name="hop_forward1_commitment" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προωθητικού Δέσμευσης 2</label>
+            <div class="col-8"><input name="hop_forward2_commitment" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προέγκρισης</label>
+            <div class="col-8"><input name="hop_preapproval" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προωθητικού 1 (Προέγκρισης)</label>
+            <div class="col-8"><input name="hop_forward1_preapproval" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προωθητικού 2 (Προέγκρισης)</label>
+            <div class="col-8"><input name="hop_forward2_preapproval" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Έγκρισης</label>
+            <div class="col-8"><input name="hop_approval" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΑΥ</label>
+            <div class="col-8"><input name="aay" class="form-control form-control-sm"></div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Μεταφορά σε Εκκρεμείς Δαπάνες</label>
+            <div class="col-8">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="send_to_expenses" id="send_to_expenses">
+                <label class="form-check-label" for="send_to_expenses">
+                  Ναι (λειτουργεί μόνο αν υπάρχει ΗΩΠ Έγκρισης)
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΦΠΑ</label>
+            <div class="col-8">
+              <input name="vat_rate" class="form-control form-control-sm" placeholder="24 ή 0.24">
+            </div>
+          </div>
+
+        </div>
+
+        <div class="col-12 col-lg-4">
+          <div class="card bg-light border-0 h-100">
+            <div class="card-body py-3 small">
+              <div class="fw-bold mb-2">Παρατηρήσεις Προμήθειας</div>
+              <textarea
+                name="procurement_notes"
+                class="form-control"
+                rows="14"
+                placeholder="Παρατηρήσεις χειριστή για την προμήθεια (εσωτερικές σημειώσεις)."
+              ></textarea>
+              <div class="form-text mt-2">
+                Εσωτερικό πεδίο. Δεν επηρεάζει τα ποσά/υπολογισμούς.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3">
+        <button class="btn btn-primary">Δημιουργία</button>
+      </div>
+
+    </form>
+  </div>
+</div>
+{% endblock %}

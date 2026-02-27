@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Θέμα εμφάνισης</h1>
+    <div class="text-muted small">
+      Επιλέξτε πώς θέλετε να φαίνεται η εφαρμογή για τον λογαριασμό σας.
+    </div>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="row g-3">
+        {% for key, meta in themes.items() %}
+          {% set label = meta[0] %}
+          {% set description = meta[1] %}
+          <div class="col-12 col-md-4">
+            <div class="form-check theme-option-card p-3 border rounded h-100">
+              <input
+                class="form-check-input"
+                type="radio"
+                name="theme"
+                id="theme-{{ key }}"
+                value="{{ key }}"
+                {% if current_user.theme == key %}checked{% endif %}
+              >
+              <label class="form-check-label fw-semibold" for="theme-{{ key }}">
+                {{ label }}
+              </label>
+              <div class="small text-muted mt-1">
+                {{ description }}
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="mt-4">
+        <button class="btn btn-primary">
+          Αποθήκευση
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

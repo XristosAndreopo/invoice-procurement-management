@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Προμηθευτές</h1>
+    <div class="text-muted small">
+      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, διεύθυνση, IBAN κ.λπ.).
+    </div>
+  </div>
+  <a href="{{ url_for('settings.data_overview') }}" class="btn btn-outline-secondary btn-sm">
+    &larr; Στοιχεία / Πληροφορίες
+  </a>
+</div>
+
+{# Φόρμα Προμηθευτή #}
+{% include "settings/suppliers_form.html" %}
+
+{# Λίστα Προμηθευτών #}
+{% include "settings/suppliers_list.html" %}
+{% endblock %}

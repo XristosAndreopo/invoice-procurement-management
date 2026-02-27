@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Προσωπικό Οργανισμού</h1>
+    <div class="text-muted small">Διαχείριση προσωπικού και ανάθεση υπηρεσίας.</div>
+  </div>
+  <a href="{{ url_for('admin.create_personnel') }}" class="btn btn-primary btn-sm">
+    Νέο Προσωπικό
+  </a>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    {% if personnel %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>ΑΓΜ</th>
+              <th>ΑΕΜ</th>
+              <th>Βαθμός</th>
+              <th>Ειδικότητα</th>
+              <th>Ονοματεπώνυμο</th>
+              <th>Υπηρεσία</th>
+              <th>Κατάσταση</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in personnel %}
+              <tr>
+                <td class="small fw-semibold">{{ p.agm }}</td>
+                <td class="small">{{ p.aem or '—' }}</td>
+                <td class="small">{{ p.rank or '—' }}</td>
+                <td class="small">{{ p.specialty or '—' }}</td>
+                <td class="small">{{ p.full_name() }}</td>
+                <td class="small">
+                  {% if p.service_unit %}
+                    {{ p.service_unit.short_name or p.service_unit.description }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="small">
+                  {% if p.is_active %}
+                    <span class="badge bg-success">Ενεργό</span>
+                  {% else %}
+                    <span class="badge bg-secondary">Ανενεργό</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <a href="{{ url_for('admin.edit_personnel', personnel_id=p.id) }}"
+                     class="btn btn-sm btn-outline-secondary">
+                    Επεξεργασία
+                  </a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="text-muted small">Δεν υπάρχει καταχωρημένο προσωπικό.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

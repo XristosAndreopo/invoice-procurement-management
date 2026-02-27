@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">{{ page_title or "Λίστα Προμηθειών" }}</h1>
+    {% if page_subtitle %}
+      <div class="text-muted small">{{ page_subtitle }}</div>
+    {% endif %}
+  </div>
+
+  {# Νέα Προμήθεια ΜΟΝΟ από τη μη-εγκεκριμένες (inbox) #}
+  {% if allow_create %}
+    <a href="{{ url_for('procurements.create_procurement') }}" class="btn btn-primary btn-sm">
+      Νέα Προμήθεια
+    </a>
+  {% endif %}
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    {% if procurements %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Υπηρεσία</th>
+              <th>Α/Α</th>
+              <th>Σύντομη Περιγραφή</th>
+              <th>ΑΛΕ</th>
+              <th>Κατανομή</th>
+              <th>Τριμηνιαία</th>
+              <th>Μειοδότης</th>
+              <th>Κατάσταση</th>
+              <th>Στάδιο</th>
+              <th>Χειριστής</th>
+              <th class="text-end">Γενικό Σύνολο</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in procurements %}
+              {% set row_style = "" %}
+              {% if p.status == 'Ακυρωμένη' %}
+                {% set row_style = "background-color:#f8d7da;" %}
+              {% elif p.status == 'Πέρας' %}
+                {% set row_style = "background-color:#d4edda;" %}
+              {% elif p.stage == 'Αποστολή Δαπάνης' %}
+                {% set row_style = "background-color:#ffe5b4;" %}
+              {% elif p.stage == 'Έγκριση' %}
+                {% set row_style = "background-color:#fff3cd;" %}
+              {% endif %}
+
+              <tr style="{{ row_style }}">
+                <td class="small">
+                  {{ p.service_unit.short_name or p.service_unit.description if p.service_unit else '—' }}
+                </td>
+                <td class="small">{{ p.serial_no or '—' }}</td>
+                <td class="small text-truncate" style="max-width: 260px;">{{ p.description or '—' }}</td>
+                <td class="small">{{ p.ale or '—' }}</td>
+                <td class="small">{{ p.allocation or '—' }}</td>
+                <td class="small">{{ p.quarterly or '—' }}</td>
+                <td class="small">{{ p.winner_supplier_display or '—' }}</td>
+                <td class="small">{{ p.status or '—' }}</td>
+                <td class="small">{{ p.stage or '—' }}</td>
+                <td class="small">{{ p.handler_display or '—' }}</td>
+                <td class="small text-end">
+                  {% if p.grand_total is not none %}
+                    {{ "{:,.2f}".format(p.grand_total) }} €
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <a href="{{ url_for('procurements.edit_procurement', procurement_id=p.id) }}"
+                     class="btn btn-sm btn-outline-secondary">
+                    Άνοιγμα
+                  </a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="small text-muted">Δεν υπάρχουν εγγραφές.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
