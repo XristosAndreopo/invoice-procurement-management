@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 0c2cd9f64e15
+Revision ID: 46a6ada13c23
 Revises: 
-Create Date: 2026-02-27 22:40:01.689814
+Create Date: 2026-02-27 23:33:23.777571
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '0c2cd9f64e15'
+revision = '46a6ada13c23'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -226,6 +226,7 @@ def upgrade():
     sa.Column('hop_commitment', sa.String(length=50), nullable=True),
     sa.Column('hop_forward1_commitment', sa.String(length=50), nullable=True),
     sa.Column('hop_forward2_commitment', sa.String(length=50), nullable=True),
+    sa.Column('hop_approval_commitment', sa.String(length=50), nullable=True),
     sa.Column('hop_preapproval', sa.String(length=50), nullable=True),
     sa.Column('hop_forward1_preapproval', sa.String(length=50), nullable=True),
     sa.Column('hop_forward2_preapproval', sa.String(length=50), nullable=True),
@@ -252,6 +253,7 @@ def upgrade():
         batch_op.create_index(batch_op.f('ix_procurements_handler'), ['handler'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_handler_personnel_id'), ['handler_personnel_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_hop_approval'), ['hop_approval'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_hop_approval_commitment'), ['hop_approval_commitment'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_hop_commitment'), ['hop_commitment'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_hop_forward1_commitment'), ['hop_forward1_commitment'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_hop_forward1_preapproval'), ['hop_forward1_preapproval'], unique=False)
@@ -356,6 +358,7 @@ def downgrade():
         batch_op.drop_index(batch_op.f('ix_procurements_hop_forward1_preapproval'))
         batch_op.drop_index(batch_op.f('ix_procurements_hop_forward1_commitment'))
         batch_op.drop_index(batch_op.f('ix_procurements_hop_commitment'))
+        batch_op.drop_index(batch_op.f('ix_procurements_hop_approval_commitment'))
         batch_op.drop_index(batch_op.f('ix_procurements_hop_approval'))
         batch_op.drop_index(batch_op.f('ix_procurements_handler_personnel_id'))
         batch_op.drop_index(batch_op.f('ix_procurements_handler'))

@@ -54,9 +54,9 @@
             </div>
           </div>
 
-          <!-- NEW: Α/Α 2 / Φόρος Εισοδήματος επιλογή -->
+          <!-- NEW: Φόρος Εισοδήματος επιλογή -->
           <div class="mb-2 row align-items-center">
-            <label class="col-4 col-form-label col-form-label-sm">Α/Α 2 (Φόρος Εισοδήματος)</label>
+            <label class="col-4 col-form-label col-form-label-sm">Τύπος Προμήθειας</label>
             <div class="col-8">
               <select name="income_tax_rule_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
                 <option value="">(—)</option>
@@ -67,7 +67,7 @@
                 {% endfor %}
               </select>
               <div class="form-text">
-                Η επιλογή συμπληρώνει την περιγραφή Α/Α 2 και χρησιμοποιείται στον υπολογισμό ΦΕ.
+                Η επιλογή χρησιμοποιείται στον υπολογισμό ΦΕ.
               </div>
             </div>
           </div>
@@ -173,43 +173,61 @@
           <div class="card bg-light border-0 h-100">
             <div class="card-body py-3 small">
 
-              <div class="mb-2">
-                <strong>Μειοδότης</strong><br>
-                {{ procurement.winner_supplier_display or '—' }}
+              <!-- Centered Winner -->
+              <div class="text-center mb-2">
+                <div class="fw-bold">Μειοδότης</div>
+                <div class="mt-1">{{ procurement.winner_supplier_display or '—' }}</div>
               </div>
 
-              <div>
-                Σύνολο:
-                {% if procurement.sum_total %}{{ "{:,.2f}".format(procurement.sum_total) }} €{% else %}—{% endif %}
+              <hr class="my-2">
+
+              <!-- Centered "Ποσά Προέγκρισης" -->
+              <div class="text-center mb-2">
+                <div class="fw-bold">Ποσά Προέγκρισης</div>
               </div>
-              <div>
-                ΦΠΑ:
-                {% if procurement.vat_amount %}{{ "{:,.2f}".format(procurement.vat_amount) }} €{% else %}—{% endif %}
+
+              <!-- Amounts aligned: label left / value right -->
+              <div class="d-flex justify-content-between">
+                <span>Σύνολο</span>
+                <span class="fw-semibold">
+                  {% if procurement.sum_total %}{{ "{:,.2f}".format(procurement.sum_total) }} €{% else %}—{% endif %}
+                </span>
               </div>
-              <div class="fw-bold">
-                Γενικό Σύνολο:
-                {% if procurement.grand_total %}{{ "{:,.2f}".format(procurement.grand_total) }} €{% else %}—{% endif %}
+              <div class="d-flex justify-content-between">
+                <span>ΦΠΑ</span>
+                <span class="fw-semibold">
+                  {% if procurement.vat_amount %}{{ "{:,.2f}".format(procurement.vat_amount) }} €{% else %}—{% endif %}
+                </span>
+              </div>
+              <div class="d-flex justify-content-between">
+                <span class="fw-bold">Γενικό Σύνολο</span>
+                <span class="fw-bold">
+                  {% if procurement.grand_total %}{{ "{:,.2f}".format(procurement.grand_total) }} €{% else %}—{% endif %}
+                </span>
               </div>
 
               <hr class="my-2">
 
               <!-- ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ -->
-              <div class="fw-bold mb-1">ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ</div>
+              <div class="fw-bold mb-2">ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ</div>
 
-              <div class="mb-1">
-                Σύνολο: <strong>{{ "{:,.2f}".format(analysis["sum_total"]) }} €</strong>
+              <div class="d-flex justify-content-between mb-1">
+                <span>Σύνολο</span>
+                <span class="fw-semibold">{{ "{:,.2f}".format(analysis["sum_total"]) }} €</span>
               </div>
 
               {% set pw = analysis["public_withholdings"] %}
               {% if pw["total_amount"] and pw["total_amount"] != 0 %}
                 <div class="mt-2">
-                  <div class="fw-semibold">
-                    Κρατήσεις υπέρ δημοσίου ({{ pw["total_percent"] }}%): {{ "{:,.2f}".format(pw["total_amount"]) }} €
+                  <div class="d-flex justify-content-between fw-semibold">
+                    <span>Κρατήσεις υπέρ δημοσίου ({{ pw["total_percent"] }}%)</span>
+                    <span>{{ "{:,.2f}".format(pw["total_amount"]) }} €</span>
                   </div>
-                  <div class="mt-1">
+
+                  <div class="mt-2">
                     {% for item in pw["items"] %}
                       <div class="d-flex justify-content-between">
-                        <span>{{ item["label"] }} {{ item["percent"] }}%</span>
+                        <span>{{ item["label"] }} ({{ item["percent"] }}%)</span>
                         <span>{{ "{:,.2f}".format(item["amount"]) }} €</span>
                       </div>
                     {% endfor %}
@@ -220,25 +238,28 @@
               {% set it = analysis["income_tax"] %}
               {% if it["amount"] and it["amount"] != 0 %}
                 <div class="mt-2">
-                  <div class="fw-semibold">
-                    Φόρος Εισοδήματος ({{ it["rate_percent"] }}%): {{ "{:,.2f}".format(it["amount"]) }} €
+                  <div class="d-flex justify-content-between fw-semibold">
+                    <span>Φόρος Εισοδήματος ({{ it["rate_percent"] }}%)</span>
+                    <span>{{ "{:,.2f}".format(it["amount"]) }} €</span>
                   </div>
                   <div class="text-muted" style="font-size: 12px;">
-                    Υπολογισμός: [Σύνολο - Κρατήσεις] * {{ it["rate_percent"] }}%
+                    Υπολογισμός: [Σύνολο - Κρατήσεις] × {{ it["rate_percent"] }}%
                   </div>
                 </div>
               {% endif %}
 
               {% if analysis["vat_amount"] and analysis["vat_amount"] != 0 %}
                 <div class="mt-2">
-                  <div class="fw-semibold">
-                    ΦΠΑ ({{ analysis["vat_percent"] }}%): {{ "{:,.2f}".format(analysis["vat_amount"]) }} €
+                  <div class="d-flex justify-content-between fw-semibold">
+                    <span>ΦΠΑ ({{ analysis["vat_percent"] }}%)</span>
+                    <span>{{ "{:,.2f}".format(analysis["vat_amount"]) }} €</span>
                   </div>
                 </div>
               {% endif %}
 
-              <div class="mt-2 fw-bold">
-                Τελικό Πληρωτέο Ποσό: {{ "{:,.2f}".format(analysis["payable_total"]) }} €
+              <div class="mt-2 pt-2 border-top d-flex justify-content-between fw-bold">
+                <span>Τελικό Πληρωτέο Ποσό</span>
+                <span>{{ "{:,.2f}".format(analysis["payable_total"]) }} €</span>
               </div>
 
             </div>
@@ -273,6 +294,14 @@
             <div class="col-8">
               <input name="hop_forward2_commitment" class="form-control form-control-sm"
                      value="{{ procurement.hop_forward2_commitment or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+          
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Έγκρισης Δέσμευσης</label>
+            <div class="col-8">
+              <input name="hop_approval_commitment" class="form-control form-control-sm"
+                     value="{{ procurement.hop_approval_commitment or '' }}" {% if not can_edit %}disabled{% endif %}>
             </div>
           </div>
 

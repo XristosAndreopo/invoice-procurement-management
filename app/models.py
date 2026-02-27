@@ -491,7 +491,7 @@ class Procurement(db.Model):
     hop_commitment = db.Column(db.String(50), nullable=True, index=True)
     hop_forward1_commitment = db.Column(db.String(50), nullable=True, index=True)
     hop_forward2_commitment = db.Column(db.String(50), nullable=True, index=True)
-
+    hop_approval_commitment = db.Column(db.String(50), nullable=True, index=True)
     hop_preapproval = db.Column(db.String(50), nullable=True, index=True)
     hop_forward1_preapproval = db.Column(db.String(50), nullable=True, index=True)
     hop_forward2_preapproval = db.Column(db.String(50), nullable=True, index=True)

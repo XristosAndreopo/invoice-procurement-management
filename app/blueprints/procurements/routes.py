@@ -289,6 +289,7 @@ def create_procurement():
             hop_commitment=(request.form.get("hop_commitment") or "").strip() or None,
             hop_forward1_commitment=(request.form.get("hop_forward1_commitment") or "").strip() or None,
             hop_forward2_commitment=(request.form.get("hop_forward2_commitment") or "").strip() or None,
+            hop_approval_commitment=(request.form.get("hop_approval_commitment") or "").strip() or None,
             hop_preapproval=(request.form.get("hop_preapproval") or "").strip() or None,
             hop_forward1_preapproval=(request.form.get("hop_forward1_preapproval") or "").strip() or None,
             hop_forward2_preapproval=(request.form.get("hop_forward2_preapproval") or "").strip() or None,
@@ -372,6 +373,7 @@ def edit_procurement(procurement_id: int):
         procurement.hop_commitment = (request.form.get("hop_commitment") or "").strip() or None
         procurement.hop_forward1_commitment = (request.form.get("hop_forward1_commitment") or "").strip() or None
         procurement.hop_forward2_commitment = (request.form.get("hop_forward2_commitment") or "").strip() or None
+        procurement.hop_approval_commitment = (request.form.get("hop_approval_commitment") or "").strip() or None
         procurement.hop_preapproval = (request.form.get("hop_preapproval") or "").strip() or None
         procurement.hop_forward1_preapproval = (request.form.get("hop_forward1_preapproval") or "").strip() or None
         procurement.hop_forward2_preapproval = (request.form.get("hop_forward2_preapproval") or "").strip() or None
