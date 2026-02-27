@@ -16,7 +16,6 @@
     <form method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-      <!-- ROW 1: BASIC INFO + RULES -->
       <div class="row g-3">
         <div class="col-12 col-lg-8">
 
@@ -41,6 +40,34 @@
             <label class="col-4 col-form-label col-form-label-sm">Α/Α</label>
             <div class="col-8">
               <input type="text" name="serial_no" class="form-control form-control-sm">
+            </div>
+          </div>
+
+          <!-- NEW: AA2 description from Income Tax Rule -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Α/Α 2 (Φόρος Εισοδήματος)</label>
+            <div class="col-8">
+              <select name="income_tax_rule_id" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for r in income_tax_rules %}
+                  <option value="{{ r.id }}">{{ r.description }} ({{ r.rate_percent }}% > {{ r.threshold_amount }}€)</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Η επιλογή αυτή συμπληρώνει την περιγραφή Α/Α 2 και χρησιμοποιείται στον υπολογισμό ΦΕ.</div>
+            </div>
+          </div>
+
+          <!-- NEW: Committee (per service unit) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Επιτροπή Προμηθειών</label>
+            <div class="col-8">
+              <select name="committee_id" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for c in committees %}
+                  <option value="{{ c.id }}">{{ c.description }}</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Εμφανίζονται μόνο οι ενεργές επιτροπές της υπηρεσίας.</div>
             </div>
           </div>
 
@@ -137,7 +164,6 @@
 
       <hr class="my-3">
 
-      <!-- ROW 2: HOP FIELDS (LEFT) + NOTES (RIGHT) -->
       <div class="row g-3">
         <div class="col-12 col-lg-8">
 
@@ -190,6 +216,20 @@
                   Ναι (λειτουργεί μόνο αν υπάρχει ΗΩΠ Έγκρισης)
                 </label>
               </div>
+            </div>
+          </div>
+
+          <!-- NEW: Withholding profile selection (above VAT as requested) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Κρατήσεις (Περιγραφή)</label>
+            <div class="col-8">
+              <select name="withholding_profile_id" class="form-select form-select-sm">
+                <option value="">(—)</option>
+                {% for p in withholding_profiles %}
+                  <option value="{{ p.id }}">{{ p.description }}</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Επιλέγεται η περιγραφή κρατήσεων που θα χρησιμοποιηθεί στην ανάλυση δαπάνης.</div>
             </div>
           </div>
 

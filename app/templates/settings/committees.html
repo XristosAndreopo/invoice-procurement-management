@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-3">
+  <h3 class="mb-3">Επιτροπές Προμηθειών</h3>
+
+  {% if is_admin %}
+    <form method="get" class="row g-2 mb-3">
+      <div class="col-md-6">
+        <select name="service_unit_id" class="form-select">
+          <option value="">(επιλέξτε υπηρεσία)</option>
+          {% for su in service_units %}
+            <option value="{{ su.id }}" {% if scope_service_unit_id == su.id %}selected{% endif %}>
+              {{ su.short_name or su.description }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-outline-primary w-100">Φόρτωση</button>
+      </div>
+    </form>
+  {% endif %}
+
+  {% if scope_service_unit_id %}
+    <div class="card mb-4">
+      <div class="card-header"><strong>Νέα Επιτροπή</strong></div>
+      <div class="card-body">
+        <form method="post" action="{{ request.path }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="create">
+          <input type="hidden" name="service_unit_id" value="{{ scope_service_unit_id }}">
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Περιγραφή</label>
+              <input name="description" class="form-control" required>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Ταυτότητα</label>
+              <input name="identity_text" class="form-control" placeholder="ΑΔ Φ... / Σ....">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Πρόεδρος</label>
+              <select name="president_personnel_id" class="form-select">
+                <option value="">(—)</option>
+                {% for p in personnel_list %}
+                  <option value="{{ p.id }}">{{ p.full_name() }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Α' Μέλος</label>
+              <select name="member1_personnel_id" class="form-select">
+                <option value="">(—)</option>
+                {% for p in personnel_list %}
+                  <option value="{{ p.id }}">{{ p.full_name() }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Β' Μέλος</label>
+              <select name="member2_personnel_id" class="form-select">
+                <option value="">(—)</option>
+                {% for p in personnel_list %}
+                  <option value="{{ p.id }}">{{ p.full_name() }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div class="col-md-2">
+              <div class="form-check mt-4">
+                <input class="form-check-input" type="checkbox" name="is_active" id="c_active_new" checked>
+                <label class="form-check-label" for="c_active_new">Ενεργό</label>
+              </div>
+            </div>
+
+            <div class="col-12">
+              <button class="btn btn-primary">Προσθήκη</button>
+            </div>
+          </div>
+        </form>
+        <div class="form-text mt-2">
+          Κάθε υπηρεσία έχει τις δικές της επιτροπές. Τα μέλη πρέπει να είναι ενεργό προσωπικό της ίδιας υπηρεσίας.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><strong>Υπάρχουσες Επιτροπές</strong></div>
+      <div class="card-body">
+        {% if committees %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Περιγραφή</th>
+                  <th>Ταυτότητα</th>
+                  <th>Πρόεδρος</th>
+                  <th>Α' Μέλος</th>
+                  <th>Β' Μέλος</th>
+                  <th>Ενεργό</th>
+                  <th class="text-end">Ενέργειες</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in committees %}
+                <tr>
+                  <td>
+                    <form method="post" action="{{ request.path }}" class="d-flex gap-2">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="action" value="update">
+                      <input type="hidden" name="service_unit_id" value="{{ scope_service_unit_id }}">
+                      <input type="hidden" name="id" value="{{ c.id }}">
+                      <input name="description" class="form-control form-control-sm" value="{{ c.description }}" required>
+                  </td>
+
+                  <td>
+                    <input name="identity_text" class="form-control form-control-sm" value="{{ c.identity_text or '' }}">
+                  </td>
+
+                  <td>
+                    <select name="president_personnel_id" class="form-select form-select-sm">
+                      <option value="">(—)</option>
+                      {% for p in personnel_list %}
+                        <option value="{{ p.id }}" {% if c.president_personnel_id == p.id %}selected{% endif %}>
+                          {{ p.full_name() }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  </td>
+
+                  <td>
+                    <select name="member1_personnel_id" class="form-select form-select-sm">
+                      <option value="">(—)</option>
+                      {% for p in personnel_list %}
+                        <option value="{{ p.id }}" {% if c.member1_personnel_id == p.id %}selected{% endif %}>
+                          {{ p.full_name() }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  </td>
+
+                  <td>
+                    <select name="member2_personnel_id" class="form-select form-select-sm">
+                      <option value="">(—)</option>
+                      {% for p in personnel_list %}
+                        <option value="{{ p.id }}" {% if c.member2_personnel_id == p.id %}selected{% endif %}>
+                          {{ p.full_name() }}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  </td>
+
+                  <td>
+                    <input type="checkbox" name="is_active" {% if c.is_active %}checked{% endif %}>
+                  </td>
+
+                  <td class="text-end">
+                      <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
+                    </form>
+
+                    <form method="post" action="{{ request.path }}" class="d-inline">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="action" value="delete">
+                      <input type="hidden" name="service_unit_id" value="{{ scope_service_unit_id }}">
+                      <input type="hidden" name="id" value="{{ c.id }}">
+                      <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Διαγραφή;');">Διαγραφή</button>
+                    </form>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="alert alert-info mb-0">Δεν υπάρχουν επιτροπές.</div>
+        {% endif %}
+      </div>
+    </div>
+  {% else %}
+    <div class="alert alert-info">Επίλεξε υπηρεσία για να δεις/ορίσεις επιτροπές.</div>
+  {% endif %}
+</div>
+{% endblock %}

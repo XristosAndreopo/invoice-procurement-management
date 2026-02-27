@@ -7,53 +7,47 @@ Enterprise scope:
 - Theme selection (all logged-in users)
 - Feedback form (all logged-in users)
 - Feedback admin (admin-only)
-- ServiceUnits CRUD (admin-only)
-- Suppliers CRUD (admin-only)
+- ServiceUnits CRUD (admin-only)  <-- REQUIRED by existing templates
+- Suppliers CRUD (admin-only)     <-- REQUIRED by existing templates
 - OptionValue pages (enterprise dropdown master data)
-  - Admin-only: status, stage, allocation, quarterly, vat, withholdings
-  - Manager+Admin: committees
+- NEW enterprise pages:
+  - Income Tax Rules (Φόρος Εισοδήματος) (admin-only)
+  - Withholding Profiles table (Κρατήσεις - Πίνακας) (admin-only)
+  - Procurement Committees per ServiceUnit (manager+admin)
 
 SECURITY:
-- UI is never trusted. All permissions are enforced here server-side.
-- A global Viewer read-only guard also blocks unexpected POSTs (see app/security.py),
-  but each route still enforces role requirements explicitly.
+- UI is never trusted. All permissions are enforced server-side.
+- Viewer read-only guard exists globally, but we still enforce explicit decorators here.
 
 AUDIT:
-- CREATE/UPDATE/DELETE for master data is audited via app/audit.py.
+- Master-data changes are audited via app/audit.py.
+  Pattern: db.session.flush() -> log_action(...) -> db.session.commit()
 """
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from decimal import Decimal, InvalidOperation
+from typing import Dict, Optional, Set
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, redirect, render_template, request, url_for, abort
 from flask_login import current_user, login_required
 
 from ...audit import log_action, serialize_model
 from ...extensions import db
-from ...models import Feedback, OptionCategory, OptionValue, Personnel, ServiceUnit, Supplier
+from ...models import (
+    Feedback,
+    OptionCategory,
+    OptionValue,
+    Personnel,
+    ServiceUnit,
+    Supplier,
+    IncomeTaxRule,
+    WithholdingProfile,
+    ProcurementCommittee,
+)
 from ...security import admin_required, manager_required
 
 settings_bp = Blueprint("settings", __name__, url_prefix="/settings")
-
-
-# ----------------------------------------------------------------------
-# Canonical OptionCategory keys
-# ----------------------------------------------------------------------
-# IMPORTANT:
-# These keys MUST match the keys used by the procurement module.
-# procurements/routes.py currently expects:
-#   - KATANOMH, TRIMHNIAIA, KATASTASH, STADIO
-#
-# We also standardize the rest here for enterprise consistency:
-#   - FPA, KRATHSEIS, EPITROPES
-OPTION_KEY_STATUS = "KATASTASH"
-OPTION_KEY_STAGE = "STADIO"
-OPTION_KEY_ALLOCATION = "KATANOMH"
-OPTION_KEY_QUARTERLY = "TRIMHNIAIA"
-OPTION_KEY_VAT = "FPA"
-OPTION_KEY_WITHHOLDINGS = "KRATHSEIS"
-OPTION_KEY_COMMITTEES = "EPITROPES"
 
 
 # ----------------------------------------------------------------------
@@ -69,28 +63,35 @@ def _parse_optional_int(value: str) -> Optional[int]:
         return None
 
 
-def _active_personnel_for_dropdown():
-    """Active personnel list for dropdown selection."""
-    return (
-        Personnel.query.filter_by(is_active=True)
-        .order_by(Personnel.last_name.asc(), Personnel.first_name.asc())
-        .all()
-    )
+def _parse_decimal(value: str | None) -> Optional[Decimal]:
+    """Parse decimal supporting comma/dot; returns None if empty/invalid."""
+    if value is None:
+        return None
+    raw = str(value).strip().replace(",", ".")
+    if raw == "":
+        return None
+    try:
+        return Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _active_personnel_for_dropdown(service_unit_id: Optional[int] = None):
+    """Active personnel list for dropdown selection (optionally filtered by service unit)."""
+    q = Personnel.query.filter_by(is_active=True)
+    if service_unit_id:
+        q = q.filter_by(service_unit_id=service_unit_id)
+    return q.order_by(Personnel.last_name.asc(), Personnel.first_name.asc()).all()
 
 
 def _get_or_create_category(key: str, label: str) -> OptionCategory:
     """
     Ensure an OptionCategory exists.
 
-    This prevents runtime issues if categories have not been seeded yet.
-
-    NOTE:
-    - We commit immediately for this small, idempotent operation.
-    - In enterprise production, you might prefer to seed via CLI only, but this is safe.
+    Safe even if seed wasn't run yet.
     """
     category = OptionCategory.query.filter_by(key=key).first()
     if category:
-        # Keep the label in sync if you ever rename it (optional).
         if category.label != label:
             category.label = label
             db.session.commit()
@@ -109,6 +110,19 @@ def _option_values_for_category(category: OptionCategory):
         .order_by(OptionValue.sort_order.asc(), OptionValue.value.asc())
         .all()
     )
+
+
+def _ensure_committee_scope_or_403(service_unit_id: int):
+    """
+    Manager/Deputy can manage committees ONLY for their own ServiceUnit.
+    Admin can manage all.
+    """
+    if current_user.is_admin:
+        return
+    if not current_user.service_unit_id or current_user.service_unit_id != service_unit_id:
+        abort(403)
+    if not current_user.can_manage():
+        abort(403)
 
 
 # ----------------------------------------------------------------------
@@ -190,11 +204,7 @@ def feedback():
         .limit(5)
         .all()
     )
-    return render_template(
-        "settings/feedback.html",
-        categories=categories,
-        recent_feedback=recent_feedback,
-    )
+    return render_template("settings/feedback.html", categories=categories, recent_feedback=recent_feedback)
 
 
 # ----------------------------------------------------------------------
@@ -211,19 +221,12 @@ def feedback_admin():
         "resolved": "Επιλυμένο",
         "closed": "Κλειστό",
     }
-    category_labels = {
-        "complaint": "Παράπονο",
-        "suggestion": "Πρόταση",
-        "bug": "Σφάλμα",
-        "other": "Άλλο",
-        None: "—",
-    }
 
     if request.method == "POST":
-        fb_id_raw = request.form.get("feedback_id") or ""
-        new_status = request.form.get("status") or ""
+        fb_id_raw = (request.form.get("feedback_id") or "").strip()
+        new_status = (request.form.get("status") or "").strip()
 
-        fb_id = _parse_optional_int(fb_id_raw.strip())
+        fb_id = _parse_optional_int(fb_id_raw)
         if fb_id is None or new_status not in status_choices:
             flash("Μη έγκυρη ενημέρωση κατάστασης.", "danger")
             return redirect(url_for("settings.feedback_admin"))
@@ -238,28 +241,16 @@ def feedback_admin():
         flash("Η κατάσταση ενημερώθηκε.", "success")
         return redirect(url_for("settings.feedback_admin"))
 
-    status_filter = (request.args.get("status") or "").strip()
-    category_filter = (request.args.get("category") or "").strip()
-
-    query = Feedback.query.order_by(Feedback.created_at.desc())
-    if status_filter:
-        query = query.filter(Feedback.status == status_filter)
-    if category_filter:
-        query = query.filter(Feedback.category == category_filter)
-
-    feedback_items = query.all()
+    feedback_items = Feedback.query.order_by(Feedback.created_at.desc()).all()
     return render_template(
         "settings/feedback_admin.html",
         feedback_items=feedback_items,
         status_choices=status_choices,
-        category_labels=category_labels,
-        status_filter=status_filter,
-        category_filter=category_filter,
     )
 
 
 # ----------------------------------------------------------------------
-# SERVICE UNITS CRUD (admin only)
+# SERVICE UNITS CRUD (admin only) - REQUIRED endpoints for templates
 # ----------------------------------------------------------------------
 @settings_bp.route("/service-units")
 @login_required
@@ -274,7 +265,7 @@ def service_units_list():
 @login_required
 @admin_required
 def service_unit_create():
-    """Create ServiceUnit (admin-only)."""
+    """Create ServiceUnit (admin-only). Endpoint name required by templates."""
     personnel_list = _active_personnel_for_dropdown()
 
     if request.method == "POST":
@@ -297,7 +288,7 @@ def service_unit_create():
             flash("Ο ίδιος/η ίδια δεν μπορεί να είναι και Manager και Deputy.", "danger")
             return redirect(url_for("settings.service_unit_create"))
 
-        active_ids = {p.id for p in personnel_list}
+        active_ids: Set[int] = {p.id for p in personnel_list}
         if manager_pid and manager_pid not in active_ids:
             flash("Μη έγκυρος Manager. Επιτρέπεται μόνο ενεργό προσωπικό.", "danger")
             return redirect(url_for("settings.service_unit_create"))
@@ -316,9 +307,9 @@ def service_unit_create():
             manager_personnel_id=manager_pid,
             deputy_personnel_id=deputy_pid,
         )
+
         db.session.add(unit)
         db.session.flush()
-
         log_action(entity=unit, action="CREATE", after=serialize_model(unit))
         db.session.commit()
 
@@ -358,7 +349,7 @@ def service_unit_edit(unit_id: int):
             flash("Ο ίδιος/η ίδια δεν μπορεί να είναι και Manager και Deputy.", "danger")
             return redirect(url_for("settings.service_unit_edit", unit_id=unit_id))
 
-        active_ids = {p.id for p in personnel_list}
+        active_ids: Set[int] = {p.id for p in personnel_list}
         if manager_pid and manager_pid not in active_ids:
             flash("Μη έγκυρος Manager. Επιτρέπεται μόνο ενεργό προσωπικό.", "danger")
             return redirect(url_for("settings.service_unit_edit", unit_id=unit_id))
@@ -396,7 +387,6 @@ def service_unit_delete(unit_id: int):
 
     db.session.delete(unit)
     db.session.flush()
-
     log_action(entity=unit, action="DELETE", before=before, after=None)
     db.session.commit()
 
@@ -405,7 +395,7 @@ def service_unit_delete(unit_id: int):
 
 
 # ----------------------------------------------------------------------
-# SUPPLIERS CRUD (admin only)
+# SUPPLIERS CRUD (admin only) - REQUIRED endpoints for templates
 # ----------------------------------------------------------------------
 @settings_bp.route("/suppliers")
 @login_required
@@ -448,9 +438,9 @@ def supplier_create():
             bank_name=bank_name or None,
             iban=iban or None,
         )
+
         db.session.add(supplier)
         db.session.flush()
-
         log_action(entity=supplier, action="CREATE", after=serialize_model(supplier))
         db.session.commit()
 
@@ -515,7 +505,6 @@ def supplier_delete(supplier_id: int):
 
     db.session.delete(supplier)
     db.session.flush()
-
     log_action(entity=supplier, action="DELETE", before=before)
     db.session.commit()
 
@@ -524,7 +513,7 @@ def supplier_delete(supplier_id: int):
 
 
 # ----------------------------------------------------------------------
-# OPTION VALUES (Enterprise dropdown master-data)
+# OPTION VALUES (generic page)
 # ----------------------------------------------------------------------
 def _options_page(key: str, label: str):
     """
@@ -533,17 +522,12 @@ def _options_page(key: str, label: str):
     Pattern:
     - GET: list
     - POST: action in {create, update, delete}
-    - Audited for CREATE/UPDATE/DELETE.
-
-    NOTE:
-    - Permissions are enforced by the route decorator (admin_required / manager_required).
     """
     category = _get_or_create_category(key=key, label=label)
 
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
 
-        # CREATE
         if action == "create":
             value = (request.form.get("value") or "").strip()
             sort_order = _parse_optional_int((request.form.get("sort_order") or "").strip()) or 0
@@ -553,22 +537,15 @@ def _options_page(key: str, label: str):
                 flash("Η τιμή είναι υποχρεωτική.", "danger")
                 return redirect(request.path)
 
-            ov = OptionValue(
-                category_id=category.id,
-                value=value,
-                sort_order=sort_order,
-                is_active=is_active,
-            )
+            ov = OptionValue(category_id=category.id, value=value, sort_order=sort_order, is_active=is_active)
             db.session.add(ov)
             db.session.flush()
-
             log_action(entity=ov, action="CREATE", after=serialize_model(ov))
             db.session.commit()
 
             flash("Η τιμή προστέθηκε.", "success")
             return redirect(request.path)
 
-        # UPDATE
         if action == "update":
             ov_id = _parse_optional_int((request.form.get("id") or "").strip())
             if ov_id is None:
@@ -601,7 +578,6 @@ def _options_page(key: str, label: str):
             flash("Η εγγραφή ενημερώθηκε.", "success")
             return redirect(request.path)
 
-        # DELETE
         if action == "delete":
             ov_id = _parse_optional_int((request.form.get("id") or "").strip())
             if ov_id is None:
@@ -614,9 +590,9 @@ def _options_page(key: str, label: str):
                 return redirect(request.path)
 
             before = serialize_model(ov)
+
             db.session.delete(ov)
             db.session.flush()
-
             log_action(entity=ov, action="DELETE", before=before)
             db.session.commit()
 
@@ -627,67 +603,371 @@ def _options_page(key: str, label: str):
         return redirect(request.path)
 
     values = _option_values_for_category(category)
-    return render_template(
-        "settings/options_values.html",
-        category=category,
-        values=values,
-        page_label=label,
-    )
+    return render_template("settings/options_values.html", category=category, values=values, page_label=label)
 
 
-# Admin-only option pages (canonical keys to match procurements)
 @settings_bp.route("/options/status", methods=["GET", "POST"])
 @login_required
 @admin_required
 def options_status():
-    """Option values page: Κατάσταση (admin-only)."""
-    return _options_page(key=OPTION_KEY_STATUS, label="Κατάσταση")
+    return _options_page(key="KATASTASH", label="Κατάσταση")
 
 
 @settings_bp.route("/options/stage", methods=["GET", "POST"])
 @login_required
 @admin_required
 def options_stage():
-    """Option values page: Στάδιο (admin-only)."""
-    return _options_page(key=OPTION_KEY_STAGE, label="Στάδιο")
+    return _options_page(key="STADIO", label="Στάδιο")
 
 
 @settings_bp.route("/options/allocation", methods=["GET", "POST"])
 @login_required
 @admin_required
 def options_allocation():
-    """Option values page: Κατανομή (admin-only)."""
-    return _options_page(key=OPTION_KEY_ALLOCATION, label="Κατανομή")
+    return _options_page(key="KATANOMH", label="Κατανομή")
 
 
 @settings_bp.route("/options/quarterly", methods=["GET", "POST"])
 @login_required
 @admin_required
 def options_quarterly():
-    """Option values page: Τριμηνιαία (admin-only)."""
-    return _options_page(key=OPTION_KEY_QUARTERLY, label="Τριμηνιαία")
+    return _options_page(key="TRIMHNIAIA", label="Τριμηνιαία")
 
 
 @settings_bp.route("/options/vat", methods=["GET", "POST"])
 @login_required
 @admin_required
 def options_vat():
-    """Option values page: ΦΠΑ (admin-only)."""
-    return _options_page(key=OPTION_KEY_VAT, label="ΦΠΑ")
+    return _options_page(key="FPA", label="ΦΠΑ")
 
 
-@settings_bp.route("/options/withholdings", methods=["GET", "POST"])
+# ----------------------------------------------------------------------
+# NEW: Income Tax Rules (admin only)
+# ----------------------------------------------------------------------
+@settings_bp.route("/income-tax", methods=["GET", "POST"])
 @login_required
 @admin_required
-def options_withholdings():
-    """Option values page: Κρατήσεις (admin-only)."""
-    return _options_page(key=OPTION_KEY_WITHHOLDINGS, label="Κρατήσεις")
+def income_tax_rules():
+    """Admin-only CRUD for IncomeTaxRule."""
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+
+        if action == "create":
+            desc = (request.form.get("description") or "").strip()
+            rate = _parse_decimal(request.form.get("rate_percent")) or Decimal("0.00")
+            threshold = _parse_decimal(request.form.get("threshold_amount")) or Decimal("150.00")
+            is_active = bool(request.form.get("is_active") == "on")
+
+            if not desc:
+                flash("Η περιγραφή είναι υποχρεωτική.", "danger")
+                return redirect(request.path)
+
+            rule = IncomeTaxRule(
+                description=desc,
+                rate_percent=rate,
+                threshold_amount=threshold,
+                is_active=is_active,
+            )
+            db.session.add(rule)
+            db.session.flush()
+            log_action(rule, "CREATE", after=serialize_model(rule))
+            db.session.commit()
+
+            flash("Ο κανόνας ΦΕ προστέθηκε.", "success")
+            return redirect(request.path)
+
+        if action == "update":
+            rid = _parse_optional_int((request.form.get("id") or "").strip())
+            if rid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(request.path)
+
+            rule = IncomeTaxRule.query.get_or_404(rid)
+            before = serialize_model(rule)
+
+            desc = (request.form.get("description") or "").strip()
+            rate = _parse_decimal(request.form.get("rate_percent")) or Decimal("0.00")
+            threshold = _parse_decimal(request.form.get("threshold_amount")) or Decimal("150.00")
+            is_active = bool(request.form.get("is_active") == "on")
+
+            if not desc:
+                flash("Η περιγραφή είναι υποχρεωτική.", "danger")
+                return redirect(request.path)
+
+            rule.description = desc
+            rule.rate_percent = rate
+            rule.threshold_amount = threshold
+            rule.is_active = is_active
+
+            db.session.flush()
+            log_action(rule, "UPDATE", before=before, after=serialize_model(rule))
+            db.session.commit()
+
+            flash("Ο κανόνας ΦΕ ενημερώθηκε.", "success")
+            return redirect(request.path)
+
+        if action == "delete":
+            rid = _parse_optional_int((request.form.get("id") or "").strip())
+            if rid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(request.path)
+
+            rule = IncomeTaxRule.query.get_or_404(rid)
+            before = serialize_model(rule)
+
+            db.session.delete(rule)
+            db.session.flush()
+            log_action(rule, "DELETE", before=before)
+            db.session.commit()
+
+            flash("Ο κανόνας ΦΕ διαγράφηκε.", "success")
+            return redirect(request.path)
+
+        flash("Μη έγκυρη ενέργεια.", "danger")
+        return redirect(request.path)
+
+    rules = IncomeTaxRule.query.order_by(IncomeTaxRule.description.asc()).all()
+    return render_template("settings/income_tax_rules.html", rules=rules)
 
 
-# Committees: manager + admin
-@settings_bp.route("/options/committees", methods=["GET", "POST"])
+# ----------------------------------------------------------------------
+# NEW: Withholding Profiles (admin only)
+# ----------------------------------------------------------------------
+@settings_bp.route("/withholding-profiles", methods=["GET", "POST"])
+@login_required
+@admin_required
+def withholding_profiles():
+    """Admin-only CRUD for WithholdingProfile (table)."""
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+
+        if action == "create":
+            desc = (request.form.get("description") or "").strip()
+            mt = _parse_decimal(request.form.get("mt_eloa_percent")) or Decimal("0.00")
+            ea = _parse_decimal(request.form.get("eadhsy_percent")) or Decimal("0.00")
+            k1 = _parse_decimal(request.form.get("withholding1_percent")) or Decimal("0.00")
+            k2 = _parse_decimal(request.form.get("withholding2_percent")) or Decimal("0.00")
+            is_active = bool(request.form.get("is_active") == "on")
+
+            if not desc:
+                flash("Η περιγραφή είναι υποχρεωτική.", "danger")
+                return redirect(request.path)
+
+            p = WithholdingProfile(
+                description=desc,
+                mt_eloa_percent=mt,
+                eadhsy_percent=ea,
+                withholding1_percent=k1,
+                withholding2_percent=k2,
+                is_active=is_active,
+            )
+            db.session.add(p)
+            db.session.flush()
+            log_action(p, "CREATE", after=serialize_model(p))
+            db.session.commit()
+
+            flash("Το προφίλ κρατήσεων προστέθηκε.", "success")
+            return redirect(request.path)
+
+        if action == "update":
+            pid = _parse_optional_int((request.form.get("id") or "").strip())
+            if pid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(request.path)
+
+            p = WithholdingProfile.query.get_or_404(pid)
+            before = serialize_model(p)
+
+            desc = (request.form.get("description") or "").strip()
+            mt = _parse_decimal(request.form.get("mt_eloa_percent")) or Decimal("0.00")
+            ea = _parse_decimal(request.form.get("eadhsy_percent")) or Decimal("0.00")
+            k1 = _parse_decimal(request.form.get("withholding1_percent")) or Decimal("0.00")
+            k2 = _parse_decimal(request.form.get("withholding2_percent")) or Decimal("0.00")
+            is_active = bool(request.form.get("is_active") == "on")
+
+            if not desc:
+                flash("Η περιγραφή είναι υποχρεωτική.", "danger")
+                return redirect(request.path)
+
+            p.description = desc
+            p.mt_eloa_percent = mt
+            p.eadhsy_percent = ea
+            p.withholding1_percent = k1
+            p.withholding2_percent = k2
+            p.is_active = is_active
+
+            db.session.flush()
+            log_action(p, "UPDATE", before=before, after=serialize_model(p))
+            db.session.commit()
+
+            flash("Το προφίλ κρατήσεων ενημερώθηκε.", "success")
+            return redirect(request.path)
+
+        if action == "delete":
+            pid = _parse_optional_int((request.form.get("id") or "").strip())
+            if pid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(request.path)
+
+            p = WithholdingProfile.query.get_or_404(pid)
+            before = serialize_model(p)
+
+            db.session.delete(p)
+            db.session.flush()
+            log_action(p, "DELETE", before=before)
+            db.session.commit()
+
+            flash("Το προφίλ κρατήσεων διαγράφηκε.", "success")
+            return redirect(request.path)
+
+        flash("Μη έγκυρη ενέργεια.", "danger")
+        return redirect(request.path)
+
+    profiles = WithholdingProfile.query.order_by(WithholdingProfile.description.asc()).all()
+    return render_template("settings/withholding_profiles.html", profiles=profiles)
+
+
+# ----------------------------------------------------------------------
+# NEW: Committees per ServiceUnit (manager+admin)
+# ----------------------------------------------------------------------
+@settings_bp.route("/committees", methods=["GET", "POST"])
 @login_required
 @manager_required
-def options_committees():
-    """Option values page: Επιτροπές Προμηθειών (manager+admin)."""
-    return _options_page(key=OPTION_KEY_COMMITTEES, label="Επιτροπές Προμηθειών")
+def committees():
+    """
+    Manager/Admin manage committees.
+    Non-admin managers manage only their service unit (server-side enforced).
+    """
+    if current_user.is_admin:
+        scope_service_unit_id = _parse_optional_int((request.args.get("service_unit_id") or "").strip())
+    else:
+        scope_service_unit_id = current_user.service_unit_id
+
+    service_units = ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
+
+    committees_list = []
+    personnel_list = []
+
+    if scope_service_unit_id:
+        _ensure_committee_scope_or_403(scope_service_unit_id)
+        committees_list = (
+            ProcurementCommittee.query
+            .filter_by(service_unit_id=scope_service_unit_id)
+            .order_by(ProcurementCommittee.description.asc())
+            .all()
+        )
+        personnel_list = _active_personnel_for_dropdown(scope_service_unit_id)
+
+    if request.method == "POST":
+        su_id = _parse_optional_int((request.form.get("service_unit_id") or "").strip())
+        if not su_id:
+            flash("Η υπηρεσία είναι υποχρεωτική.", "danger")
+            return redirect(url_for("settings.committees"))
+
+        _ensure_committee_scope_or_403(su_id)
+
+        allowed_ids = {p.id for p in _active_personnel_for_dropdown(su_id)}
+
+        def _validate_member(pid: Optional[int]) -> Optional[int]:
+            if pid is None:
+                return None
+            return pid if pid in allowed_ids else None
+
+        action = (request.form.get("action") or "").strip()
+
+        if action == "create":
+            desc = (request.form.get("description") or "").strip()
+            identity = (request.form.get("identity_text") or "").strip() or None
+            president_id = _validate_member(_parse_optional_int((request.form.get("president_personnel_id") or "").strip()))
+            member1_id = _validate_member(_parse_optional_int((request.form.get("member1_personnel_id") or "").strip()))
+            member2_id = _validate_member(_parse_optional_int((request.form.get("member2_personnel_id") or "").strip()))
+            is_active = bool(request.form.get("is_active") == "on")
+
+            if not desc:
+                flash("Η περιγραφή είναι υποχρεωτική.", "danger")
+                return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+            c = ProcurementCommittee(
+                service_unit_id=su_id,
+                description=desc,
+                identity_text=identity,
+                president_personnel_id=president_id,
+                member1_personnel_id=member1_id,
+                member2_personnel_id=member2_id,
+                is_active=is_active,
+            )
+            db.session.add(c)
+            db.session.flush()
+            log_action(c, "CREATE", after=serialize_model(c))
+            db.session.commit()
+
+            flash("Η επιτροπή προστέθηκε.", "success")
+            return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+        if action == "update":
+            cid = _parse_optional_int((request.form.get("id") or "").strip())
+            if cid is None:
+                flash("Μη έγκυρη επιτροπή.", "danger")
+                return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+            c = ProcurementCommittee.query.get_or_404(cid)
+            if c.service_unit_id != su_id:
+                abort(403)
+
+            before = serialize_model(c)
+
+            desc = (request.form.get("description") or "").strip()
+            identity = (request.form.get("identity_text") or "").strip() or None
+            president_id = _validate_member(_parse_optional_int((request.form.get("president_personnel_id") or "").strip()))
+            member1_id = _validate_member(_parse_optional_int((request.form.get("member1_personnel_id") or "").strip()))
+            member2_id = _validate_member(_parse_optional_int((request.form.get("member2_personnel_id") or "").strip()))
+            is_active = bool(request.form.get("is_active") == "on")
+
+            if not desc:
+                flash("Η περιγραφή είναι υποχρεωτική.", "danger")
+                return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+            c.description = desc
+            c.identity_text = identity
+            c.president_personnel_id = president_id
+            c.member1_personnel_id = member1_id
+            c.member2_personnel_id = member2_id
+            c.is_active = is_active
+
+            db.session.flush()
+            log_action(c, "UPDATE", before=before, after=serialize_model(c))
+            db.session.commit()
+
+            flash("Η επιτροπή ενημερώθηκε.", "success")
+            return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+        if action == "delete":
+            cid = _parse_optional_int((request.form.get("id") or "").strip())
+            if cid is None:
+                flash("Μη έγκυρη επιτροπή.", "danger")
+                return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+            c = ProcurementCommittee.query.get_or_404(cid)
+            if c.service_unit_id != su_id:
+                abort(403)
+
+            before = serialize_model(c)
+            db.session.delete(c)
+            db.session.flush()
+            log_action(c, "DELETE", before=before)
+            db.session.commit()
+
+            flash("Η επιτροπή διαγράφηκε.", "success")
+            return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+        flash("Μη έγκυρη ενέργεια.", "danger")
+        return redirect(url_for("settings.committees", service_unit_id=su_id))
+
+    return render_template(
+        "settings/committees.html",
+        service_units=service_units,
+        committees=committees_list,
+        personnel_list=personnel_list,
+        scope_service_unit_id=scope_service_unit_id,
+        is_admin=current_user.is_admin,
+    )

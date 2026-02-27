@@ -1,25 +1,21 @@
 """
-Procurement routes – Enterprise Secured Version
+app/blueprints/procurements/routes.py
 
-Key UX/Workflow rules:
-- New procurement can be created only from Inbox list (UI rule).
-- Edit is accessible from all lists (security enforced in backend).
-- After create, all fields must remain visible/editable on edit page.
+Procurement routes – Enterprise Secured Version (V4)
 
-Supplier participation:
-- Notes field (large textarea) for offer observations.
-- Prevent duplicate supplier participation per procurement (friendly message).
-- Winner: when setting a new winner, previous winners are unset.
-
-Material lines:
-- CPV / NSN / Unit included.
-
-Sorting:
-- Lists ordered by A/A (serial_no), numeric-first when possible.
-
-SECURITY (non-negotiable):
-- UI is never trusted.
-- Service isolation enforced server-side via decorators + per-route checks.
+Guarantees:
+- Exposes `procurements_bp` at module import time (prevents ImportError).
+- Uses decorator factories correctly (no Flask endpoint collisions).
+- Server-side permission checks (UI never trusted).
+- Supports:
+  - Inbox / Pending Expenses / All lists
+  - Create + Edit procurement
+  - Supplier participation add/delete
+  - Material lines add/delete
+  - AA2 selection via IncomeTaxRule
+  - Withholding selection via WithholdingProfile
+  - Committee selection via ProcurementCommittee (service-unit scoped)
+  - Payment analysis display via Procurement.compute_payment_analysis()
 """
 
 from __future__ import annotations
@@ -41,20 +37,22 @@ from ...models import (
     OptionCategory,
     OptionValue,
     Personnel,
+    IncomeTaxRule,
+    WithholdingProfile,
+    ProcurementCommittee,
 )
 from ...security import procurement_access_required, procurement_edit_required
 from ...audit import log_action, serialize_model
 
+# IMPORTANT: this name MUST exist at import time
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
 
 # ---------------------------------------------------------------------
-# Decorator factory wiring (CRITICAL)
+# Decorator loader (CRITICAL)
 # ---------------------------------------------------------------------
-# security.py defines procurement_access_required / procurement_edit_required as decorator factories.
-# We MUST provide a loader that returns the procurement, otherwise Flask endpoint names collide.
 def _load_procurement(procurement_id: int, **_: object) -> Procurement:
-    """Load procurement by id for access/edit decorators."""
+    """Loader for decorator factories."""
     return Procurement.query.get_or_404(procurement_id)
 
 
@@ -62,7 +60,7 @@ def _load_procurement(procurement_id: int, **_: object) -> Procurement:
 # Helpers
 # ---------------------------------------------------------------------
 def _parse_decimal(value: str | None) -> Decimal | None:
-    """Parse decimal from user input (accepts comma or dot). Returns None if empty/invalid."""
+    """Parse decimal from user input (accepts comma or dot)."""
     if value is None:
         return None
     raw = str(value).strip().replace(",", ".")
@@ -74,14 +72,21 @@ def _parse_decimal(value: str | None) -> Decimal | None:
         return None
 
 
-def _get_active_option_values(category_key: str) -> list[str]:
-    """
-    Return active OptionValue.value list for a given OptionCategory key.
+def _parse_optional_int(value: str | None) -> int | None:
+    """Parse optional int from form."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
-    NOTE:
-    - Category keys must match what seed-options created.
-    - If missing category, return empty list (UI remains usable).
-    """
+
+def _get_active_option_values(category_key: str) -> list[str]:
+    """Return active OptionValue.value list for an OptionCategory key."""
     category = OptionCategory.query.filter_by(key=category_key).first()
     if not category:
         return []
@@ -94,18 +99,14 @@ def _get_active_option_values(category_key: str) -> list[str]:
 
 
 def _base_procurements_query():
-    """Service isolation: non-admin sees only their ServiceUnit procurements."""
+    """Service isolation: non-admin sees only their service unit."""
     if current_user.is_admin:
         return Procurement.query
     return Procurement.query.filter(Procurement.service_unit_id == current_user.service_unit_id)
 
 
 def _order_by_serial_no(q):
-    """
-    Numeric-first sorting for serial_no:
-    - If serial_no starts numeric -> sort by numeric value
-    - Otherwise lexicographic
-    """
+    """Numeric-first ordering for serial_no (SQLite GLOB)."""
     serial = func.coalesce(Procurement.serial_no, "")
     is_numeric = serial.op("GLOB")("[0-9]*")
     numeric_value = func.cast(serial, Integer)
@@ -118,19 +119,7 @@ def _order_by_serial_no(q):
     )
 
 
-def _render_list(procurements, title: str, subtitle: str, allow_create: bool):
-    """Render shared list template with consistent labels."""
-    return render_template(
-        "procurements/list.html",
-        procurements=procurements,
-        page_title=title,
-        page_subtitle=subtitle,
-        allow_create=allow_create,
-    )
-
-
-def _get_handler_candidates(service_unit_id: int | None):
-    """Handler dropdown: only active Personnel of the selected service unit."""
+def _handler_candidates(service_unit_id: int | None):
     if not service_unit_id:
         return []
     return (
@@ -138,6 +127,24 @@ def _get_handler_candidates(service_unit_id: int | None):
         .order_by(Personnel.last_name.asc(), Personnel.first_name.asc())
         .all()
     )
+
+
+def _committees_for_service_unit(service_unit_id: int | None):
+    if not service_unit_id:
+        return []
+    return (
+        ProcurementCommittee.query.filter_by(service_unit_id=service_unit_id, is_active=True)
+        .order_by(ProcurementCommittee.description.asc())
+        .all()
+    )
+
+
+def _active_income_tax_rules():
+    return IncomeTaxRule.query.filter_by(is_active=True).order_by(IncomeTaxRule.description.asc()).all()
+
+
+def _active_withholding_profiles():
+    return WithholdingProfile.query.filter_by(is_active=True).order_by(WithholdingProfile.description.asc()).all()
 
 
 # ---------------------------------------------------------------------
@@ -150,11 +157,11 @@ def inbox_procurements():
     q = q.filter((Procurement.status.is_(None)) | (Procurement.status != "Ακυρωμένη"))
     q = q.filter((Procurement.send_to_expenses.is_(False)) | (Procurement.send_to_expenses.is_(None)))
     procurements = _order_by_serial_no(q).all()
-
-    return _render_list(
-        procurements,
-        "Λίστα Προμηθειών (μη εγκεκριμένες)",
-        "Εδώ δημιουργούνται νέες προμήθειες. Ακυρωμένες εμφανίζονται μόνο στις “Όλες”.",
+    return render_template(
+        "procurements/list.html",
+        procurements=procurements,
+        page_title="Λίστα Προμηθειών (μη εγκεκριμένες)",
+        page_subtitle="Εδώ δημιουργούνται νέες προμήθειες. Ακυρωμένες εμφανίζονται μόνο στις “Όλες”.",
         allow_create=(current_user.is_admin or current_user.can_manage()),
     )
 
@@ -167,11 +174,11 @@ def pending_expenses():
     q = q.filter(Procurement.hop_approval.isnot(None))
     q = q.filter(Procurement.send_to_expenses.is_(True))
     procurements = _order_by_serial_no(q).all()
-
-    return _render_list(
-        procurements,
-        "Εκκρεμείς Δαπάνες",
-        "Εγκεκριμένες προμήθειες που μεταφέρθηκαν στις δαπάνες.",
+    return render_template(
+        "procurements/list.html",
+        procurements=procurements,
+        page_title="Εκκρεμείς Δαπάνες",
+        page_subtitle="Εγκεκριμένες προμήθειες που μεταφέρθηκαν στις δαπάνες.",
         allow_create=False,
     )
 
@@ -181,11 +188,11 @@ def pending_expenses():
 def all_procurements():
     q = _base_procurements_query()
     procurements = _order_by_serial_no(q).all()
-
-    return _render_list(
-        procurements,
-        "Όλες οι Προμήθειες",
-        "Περιλαμβάνει και τις ακυρωμένες.",
+    return render_template(
+        "procurements/list.html",
+        procurements=procurements,
+        page_title="Όλες οι Προμήθειες",
+        page_subtitle="Περιλαμβάνει και τις ακυρωμένες.",
         allow_create=False,
     )
 
@@ -193,7 +200,6 @@ def all_procurements():
 @procurements_bp.route("/")
 @login_required
 def list_procurements():
-    """Default list redirects to Inbox."""
     return redirect(url_for("procurements.inbox_procurements"))
 
 
@@ -203,37 +209,28 @@ def list_procurements():
 @procurements_bp.route("/new", methods=["GET", "POST"])
 @login_required
 def create_procurement():
-    """
-    Create new procurement.
-
-    SECURITY:
-    - Only admin or manager/deputy can create.
-    - Non-admin cannot pick ServiceUnit; it's forced to their own.
-    """
     if not (current_user.is_admin or current_user.can_manage()):
         abort(403)
 
     service_units = ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
 
-    # NOTE: Keys must match your seeded OptionCategory keys.
     allocation_options = _get_active_option_values("KATANOMH")
     quarterly_options = _get_active_option_values("TRIMHNIAIA")
     status_options = _get_active_option_values("KATASTASH")
     stage_options = _get_active_option_values("STADIO")
 
-    # Default handler candidates (non-admin only)
+    income_tax_rules = _active_income_tax_rules()
+    withholding_profiles = _active_withholding_profiles()
+
     handler_candidates = []
+    committees = []
     if not current_user.is_admin and current_user.service_unit_id:
-        handler_candidates = _get_handler_candidates(current_user.service_unit_id)
+        handler_candidates = _handler_candidates(current_user.service_unit_id)
+        committees = _committees_for_service_unit(current_user.service_unit_id)
 
     if request.method == "POST":
-        # Service unit selection rules
         if current_user.is_admin:
-            su_raw = (request.form.get("service_unit_id") or "").strip()
-            try:
-                service_unit_id = int(su_raw) if su_raw else None
-            except ValueError:
-                service_unit_id = None
+            service_unit_id = _parse_optional_int(request.form.get("service_unit_id"))
         else:
             service_unit_id = current_user.service_unit_id
 
@@ -242,8 +239,42 @@ def create_procurement():
             flash("Η σύντομη περιγραφή είναι υποχρεωτική.", "danger")
             return redirect(url_for("procurements.create_procurement"))
 
-        # Refresh handler candidates based on final service_unit_id
-        handler_candidates = _get_handler_candidates(service_unit_id)
+        handler_candidates = _handler_candidates(service_unit_id)
+        committees = _committees_for_service_unit(service_unit_id)
+
+        handler_pid = _parse_optional_int(request.form.get("handler_personnel_id"))
+        if handler_pid:
+            allowed = {p.id for p in handler_candidates}
+            if handler_pid not in allowed:
+                flash("Μη έγκυρος Χειριστής για την επιλεγμένη υπηρεσία.", "danger")
+                return redirect(url_for("procurements.create_procurement"))
+
+        income_tax_rule_id = _parse_optional_int(request.form.get("income_tax_rule_id"))
+        if income_tax_rule_id:
+            rule = IncomeTaxRule.query.get(income_tax_rule_id)
+            if not rule or not rule.is_active:
+                flash("Μη έγκυρος κανόνας Φόρου Εισοδήματος.", "danger")
+                return redirect(url_for("procurements.create_procurement"))
+        else:
+            rule = None
+
+        withholding_profile_id = _parse_optional_int(request.form.get("withholding_profile_id"))
+        if withholding_profile_id:
+            wp = WithholdingProfile.query.get(withholding_profile_id)
+            if not wp or not wp.is_active:
+                flash("Μη έγκυρο προφίλ κρατήσεων.", "danger")
+                return redirect(url_for("procurements.create_procurement"))
+        else:
+            wp = None
+
+        committee_id = _parse_optional_int(request.form.get("committee_id"))
+        if committee_id:
+            c = ProcurementCommittee.query.get(committee_id)
+            if not c or not c.is_active or c.service_unit_id != service_unit_id:
+                flash("Μη έγκυρη επιτροπή για την υπηρεσία.", "danger")
+                return redirect(url_for("procurements.create_procurement"))
+        else:
+            c = None
 
         procurement = Procurement(
             service_unit_id=service_unit_id,
@@ -264,23 +295,12 @@ def create_procurement():
             hop_approval=(request.form.get("hop_approval") or "").strip() or None,
             aay=(request.form.get("aay") or "").strip() or None,
             procurement_notes=(request.form.get("procurement_notes") or "").strip() or None,
+            handler_personnel_id=handler_pid,
+            income_tax_rule_id=rule.id if rule else None,
+            withholding_profile_id=wp.id if wp else None,
+            committee_id=c.id if c else None,
         )
 
-        # Handler validation (must be active personnel of that service unit)
-        handler_pid_raw = (request.form.get("handler_personnel_id") or "").strip()
-        try:
-            handler_pid = int(handler_pid_raw) if handler_pid_raw else None
-        except ValueError:
-            handler_pid = None
-
-        if handler_pid and service_unit_id:
-            allowed_ids = {p.id for p in handler_candidates}
-            if handler_pid not in allowed_ids:
-                flash("Μη έγκυρος Χειριστής για την επιλεγμένη υπηρεσία.", "danger")
-                return redirect(url_for("procurements.create_procurement"))
-            procurement.handler_personnel_id = handler_pid
-
-        # send_to_expenses rule: valid only when hop_approval exists
         send_to_expenses = bool(request.form.get("send_to_expenses"))
         if send_to_expenses and not procurement.hop_approval:
             flash("Για μεταφορά σε Εκκρεμείς Δαπάνες απαιτείται ΗΩΠ Έγκρισης.", "warning")
@@ -288,11 +308,9 @@ def create_procurement():
         else:
             procurement.send_to_expenses = bool(send_to_expenses and procurement.hop_approval)
 
-        # Transaction: add + flush + audit + commit once
         db.session.add(procurement)
         procurement.recalc_totals()
-        db.session.flush()  # ensure procurement.id exists for audit
-
+        db.session.flush()
         log_action(procurement, "CREATE", before=None, after=serialize_model(procurement))
         db.session.commit()
 
@@ -307,23 +325,19 @@ def create_procurement():
         status_options=status_options,
         stage_options=stage_options,
         handler_candidates=handler_candidates,
+        income_tax_rules=income_tax_rules,
+        withholding_profiles=withholding_profiles,
+        committees=committees,
     )
 
 
 # ---------------------------------------------------------------------
-# Edit / View
+# Edit
 # ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/edit", methods=["GET", "POST"])
 @login_required
 @procurement_access_required(_load_procurement)
 def edit_procurement(procurement_id: int):
-    """
-    View/Edit procurement.
-
-    SECURITY:
-    - GET: allowed to all users who can access the procurement (service isolation)
-    - POST: only admin or manager/deputy (enforced here)
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
 
     allocation_options = _get_active_option_values("KATANOMH")
@@ -331,7 +345,11 @@ def edit_procurement(procurement_id: int):
     status_options = _get_active_option_values("KATASTASH")
     stage_options = _get_active_option_values("STADIO")
 
-    handler_candidates = _get_handler_candidates(procurement.service_unit_id)
+    income_tax_rules = _active_income_tax_rules()
+    withholding_profiles = _active_withholding_profiles()
+
+    handler_candidates = _handler_candidates(procurement.service_unit_id)
+    committees = _committees_for_service_unit(procurement.service_unit_id)
 
     if request.method == "POST":
         if not (current_user.is_admin or current_user.can_manage()):
@@ -339,56 +357,71 @@ def edit_procurement(procurement_id: int):
 
         before_snapshot = serialize_model(procurement)
 
-        # Admin can change service unit
         if current_user.is_admin:
-            su_raw = (request.form.get("service_unit_id") or "").strip()
-            try:
-                procurement.service_unit_id = int(su_raw) if su_raw else None
-            except ValueError:
-                procurement.service_unit_id = None
+            procurement.service_unit_id = _parse_optional_int(request.form.get("service_unit_id"))
 
         procurement.serial_no = (request.form.get("serial_no") or "").strip() or None
         procurement.description = (request.form.get("description") or "").strip() or None
         procurement.ale = (request.form.get("ale") or "").strip() or None
-
         procurement.allocation = (request.form.get("allocation") or "").strip() or None
         procurement.quarterly = (request.form.get("quarterly") or "").strip() or None
         procurement.status = (request.form.get("status") or "").strip() or None
         procurement.stage = (request.form.get("stage") or "").strip() or None
-
         procurement.vat_rate = _parse_decimal(request.form.get("vat_rate"))
 
         procurement.hop_commitment = (request.form.get("hop_commitment") or "").strip() or None
         procurement.hop_forward1_commitment = (request.form.get("hop_forward1_commitment") or "").strip() or None
         procurement.hop_forward2_commitment = (request.form.get("hop_forward2_commitment") or "").strip() or None
-
         procurement.hop_preapproval = (request.form.get("hop_preapproval") or "").strip() or None
         procurement.hop_forward1_preapproval = (request.form.get("hop_forward1_preapproval") or "").strip() or None
         procurement.hop_forward2_preapproval = (request.form.get("hop_forward2_preapproval") or "").strip() or None
-
         procurement.hop_approval = (request.form.get("hop_approval") or "").strip() or None
         procurement.aay = (request.form.get("aay") or "").strip() or None
-
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
 
-        # Handler validation
-        handler_pid_raw = (request.form.get("handler_personnel_id") or "").strip()
-        try:
-            handler_pid = int(handler_pid_raw) if handler_pid_raw else None
-        except ValueError:
-            handler_pid = None
+        handler_candidates = _handler_candidates(procurement.service_unit_id)
+        committees = _committees_for_service_unit(procurement.service_unit_id)
 
-        handler_candidates = _get_handler_candidates(procurement.service_unit_id)
-        if handler_pid and procurement.service_unit_id:
-            allowed_ids = {p.id for p in handler_candidates}
-            if handler_pid not in allowed_ids:
+        handler_pid = _parse_optional_int(request.form.get("handler_personnel_id"))
+        if handler_pid:
+            allowed = {p.id for p in handler_candidates}
+            if handler_pid not in allowed:
                 flash("Μη έγκυρος Χειριστής για την υπηρεσία.", "danger")
                 return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
             procurement.handler_personnel_id = handler_pid
         else:
             procurement.handler_personnel_id = None
 
-        # send_to_expenses rule
+        income_tax_rule_id = _parse_optional_int(request.form.get("income_tax_rule_id"))
+        if income_tax_rule_id:
+            rule = IncomeTaxRule.query.get(income_tax_rule_id)
+            if not rule or not rule.is_active:
+                flash("Μη έγκυρος κανόνας Φόρου Εισοδήματος.", "danger")
+                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+            procurement.income_tax_rule_id = rule.id
+        else:
+            procurement.income_tax_rule_id = None
+
+        wp_id = _parse_optional_int(request.form.get("withholding_profile_id"))
+        if wp_id:
+            wp = WithholdingProfile.query.get(wp_id)
+            if not wp or not wp.is_active:
+                flash("Μη έγκυρο προφίλ κρατήσεων.", "danger")
+                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+            procurement.withholding_profile_id = wp.id
+        else:
+            procurement.withholding_profile_id = None
+
+        committee_id = _parse_optional_int(request.form.get("committee_id"))
+        if committee_id:
+            c = ProcurementCommittee.query.get(committee_id)
+            if not c or not c.is_active or c.service_unit_id != procurement.service_unit_id:
+                flash("Μη έγκυρη επιτροπή για την υπηρεσία.", "danger")
+                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+            procurement.committee_id = c.id
+        else:
+            procurement.committee_id = None
+
         send_to_expenses = bool(request.form.get("send_to_expenses"))
         if send_to_expenses and not procurement.hop_approval:
             flash("Για μεταφορά σε Εκκρεμείς Δαπάνες απαιτείται ΗΩΠ Έγκρισης.", "warning")
@@ -398,12 +431,13 @@ def edit_procurement(procurement_id: int):
 
         procurement.recalc_totals()
         db.session.flush()
-
         log_action(procurement, "UPDATE", before=before_snapshot, after=serialize_model(procurement))
         db.session.commit()
 
         flash("Η προμήθεια ενημερώθηκε.", "success")
         return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+
+    analysis = procurement.compute_payment_analysis()
 
     return render_template(
         "procurements/edit.html",
@@ -415,6 +449,10 @@ def edit_procurement(procurement_id: int):
         status_options=status_options,
         stage_options=stage_options,
         handler_candidates=handler_candidates,
+        income_tax_rules=income_tax_rules,
+        withholding_profiles=withholding_profiles,
+        committees=committees,
+        analysis=analysis,
     )
 
 
@@ -425,22 +463,13 @@ def edit_procurement(procurement_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def add_procurement_supplier(procurement_id: int):
-    """
-    Add supplier participation.
-
-    SECURITY:
-    - Only admin or manager/deputy of the procurement's service unit (enforced by decorator).
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
 
-    supplier_id_raw = (request.form.get("supplier_id") or "").strip()
-    try:
-        supplier_id = int(supplier_id_raw)
-    except ValueError:
+    supplier_id = _parse_optional_int(request.form.get("supplier_id"))
+    if not supplier_id:
         flash("Μη έγκυρος προμηθευτής.", "danger")
         return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
 
-    # Friendly duplicate guard
     exists = ProcurementSupplier.query.filter_by(procurement_id=procurement.id, supplier_id=supplier_id).first()
     if exists:
         flash("Ο συγκεκριμένος προμηθευτής έχει ήδη προστεθεί σε αυτή την προμήθεια.", "warning")
@@ -450,7 +479,6 @@ def add_procurement_supplier(procurement_id: int):
     is_winner = bool(request.form.get("is_winner"))
     notes = (request.form.get("notes") or "").strip() or None
 
-    # Winner enforcement: setting a winner clears any previous winners
     if is_winner:
         for link in procurement.supplies_links:
             link.is_winner = False
@@ -482,13 +510,11 @@ def add_procurement_supplier(procurement_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def delete_procurement_supplier(procurement_id: int, link_id: int):
-    """Remove supplier participation (audited)."""
     link = ProcurementSupplier.query.get_or_404(link_id)
     before_snapshot = serialize_model(link)
 
     db.session.delete(link)
     db.session.flush()
-
     log_action(link, "DELETE", before=before_snapshot, after=None)
     db.session.commit()
 
@@ -503,7 +529,6 @@ def delete_procurement_supplier(procurement_id: int, link_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def add_material_line(procurement_id: int):
-    """Add material/service line (audited)."""
     procurement = Procurement.query.get_or_404(procurement_id)
 
     description = (request.form.get("description") or "").strip()
@@ -527,7 +552,6 @@ def add_material_line(procurement_id: int):
     db.session.add(line)
     procurement.recalc_totals()
     db.session.flush()
-
     log_action(line, "CREATE", before=None, after=serialize_model(line))
     db.session.commit()
 
@@ -539,16 +563,13 @@ def add_material_line(procurement_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def delete_material_line(procurement_id: int, line_id: int):
-    """Delete material/service line (audited)."""
     line = MaterialLine.query.get_or_404(line_id)
     before_snapshot = serialize_model(line)
 
     db.session.delete(line)
-
     procurement = Procurement.query.get_or_404(procurement_id)
     procurement.recalc_totals()
     db.session.flush()
-
     log_action(line, "DELETE", before=before_snapshot, after=None)
     db.session.commit()
 

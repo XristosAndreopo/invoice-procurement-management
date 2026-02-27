@@ -23,7 +23,7 @@
     <form method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-      <!-- ROW 1: BASIC INFO + SUMMARY -->
+      <!-- ROW 1: BASIC INFO + SUMMARY + ANALYSIS -->
       <div class="row g-3">
         <div class="col-12 col-lg-8">
 
@@ -51,6 +51,40 @@
             <div class="col-8">
               <input name="serial_no" class="form-control form-control-sm"
                      value="{{ procurement.serial_no or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <!-- NEW: Α/Α 2 / Φόρος Εισοδήματος επιλογή -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Α/Α 2 (Φόρος Εισοδήματος)</label>
+            <div class="col-8">
+              <select name="income_tax_rule_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for r in income_tax_rules %}
+                  <option value="{{ r.id }}" {% if procurement.income_tax_rule_id == r.id %}selected{% endif %}>
+                    {{ r.description }} ({{ r.rate_percent }}% > {{ r.threshold_amount }}€)
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Η επιλογή συμπληρώνει την περιγραφή Α/Α 2 και χρησιμοποιείται στον υπολογισμό ΦΕ.
+              </div>
+            </div>
+          </div>
+
+          <!-- NEW: Επιτροπή (ανά υπηρεσία) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Επιτροπή Προμηθειών</label>
+            <div class="col-8">
+              <select name="committee_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for c in committees %}
+                  <option value="{{ c.id }}" {% if procurement.committee_id == c.id %}selected{% endif %}>
+                    {{ c.description }}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Εμφανίζονται μόνο οι ενεργές επιτροπές της υπηρεσίας.</div>
             </div>
           </div>
 
@@ -138,10 +172,12 @@
         <div class="col-12 col-lg-4">
           <div class="card bg-light border-0 h-100">
             <div class="card-body py-3 small">
+
               <div class="mb-2">
                 <strong>Μειοδότης</strong><br>
                 {{ procurement.winner_supplier_display or '—' }}
               </div>
+
               <div>
                 Σύνολο:
                 {% if procurement.sum_total %}{{ "{:,.2f}".format(procurement.sum_total) }} €{% else %}—{% endif %}
@@ -154,6 +190,57 @@
                 Γενικό Σύνολο:
                 {% if procurement.grand_total %}{{ "{:,.2f}".format(procurement.grand_total) }} €{% else %}—{% endif %}
               </div>
+
+              <hr class="my-2">
+
+              <!-- ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ -->
+              <div class="fw-bold mb-1">ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ</div>
+
+              <div class="mb-1">
+                Σύνολο: <strong>{{ "{:,.2f}".format(analysis["sum_total"]) }} €</strong>
+              </div>
+
+              {% set pw = analysis["public_withholdings"] %}
+              {% if pw["total_amount"] and pw["total_amount"] != 0 %}
+                <div class="mt-2">
+                  <div class="fw-semibold">
+                    Κρατήσεις υπέρ δημοσίου ({{ pw["total_percent"] }}%): {{ "{:,.2f}".format(pw["total_amount"]) }} €
+                  </div>
+                  <div class="mt-1">
+                    {% for item in pw["items"] %}
+                      <div class="d-flex justify-content-between">
+                        <span>{{ item["label"] }} {{ item["percent"] }}%</span>
+                        <span>{{ "{:,.2f}".format(item["amount"]) }} €</span>
+                      </div>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% endif %}
+
+              {% set it = analysis["income_tax"] %}
+              {% if it["amount"] and it["amount"] != 0 %}
+                <div class="mt-2">
+                  <div class="fw-semibold">
+                    Φόρος Εισοδήματος ({{ it["rate_percent"] }}%): {{ "{:,.2f}".format(it["amount"]) }} €
+                  </div>
+                  <div class="text-muted" style="font-size: 12px;">
+                    Υπολογισμός: [Σύνολο - Κρατήσεις] * {{ it["rate_percent"] }}%
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if analysis["vat_amount"] and analysis["vat_amount"] != 0 %}
+                <div class="mt-2">
+                  <div class="fw-semibold">
+                    ΦΠΑ ({{ analysis["vat_percent"] }}%): {{ "{:,.2f}".format(analysis["vat_amount"]) }} €
+                  </div>
+                </div>
+              {% endif %}
+
+              <div class="mt-2 fw-bold">
+                Τελικό Πληρωτέο Ποσό: {{ "{:,.2f}".format(analysis["payable_total"]) }} €
+              </div>
+
             </div>
           </div>
         </div>
@@ -161,7 +248,7 @@
 
       <hr class="my-3">
 
-      <!-- ROW 2: HOP FIELDS (LEFT) + NOTES (RIGHT) -->
+      <!-- ROW 2: HOP FIELDS + NOTES -->
       <div class="row g-3">
         <div class="col-12 col-lg-8">
 
@@ -240,6 +327,22 @@
                   Ναι (λειτουργεί μόνο αν υπάρχει ΗΩΠ Έγκρισης)
                 </label>
               </div>
+            </div>
+          </div>
+
+          <!-- NEW: Κρατήσεις επιλογή (πάνω από ΦΠΑ) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Κρατήσεις (Περιγραφή)</label>
+            <div class="col-8">
+              <select name="withholding_profile_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for p in withholding_profiles %}
+                  <option value="{{ p.id }}" {% if procurement.withholding_profile_id == p.id %}selected{% endif %}>
+                    {{ p.description }}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Η επιλογή επηρεάζει την Ανάλυση Δαπάνης.</div>
             </div>
           </div>
 

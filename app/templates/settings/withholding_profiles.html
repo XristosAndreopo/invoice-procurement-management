@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-3">
+  <h3 class="mb-3">Κρατήσεις (Πίνακας)</h3>
+
+  <div class="card mb-4">
+    <div class="card-header"><strong>Νέο Προφίλ</strong></div>
+    <div class="card-body">
+      <form method="post" action="{{ request.path }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="create">
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Περιγραφή</label>
+            <input name="description" class="form-control" required>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">ΜΤ-ΕΛΟΑ %</label>
+            <input name="mt_eloa_percent" class="form-control" value="0">
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">ΕΑΔΗΣΥ %</label>
+            <input name="eadhsy_percent" class="form-control" value="0">
+          </div>
+
+          <div class="col-md-2 d-flex align-items-end">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="is_active" id="wp_active_new" checked>
+              <label class="form-check-label" for="wp_active_new">Ενεργό</label>
+            </div>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Κράτηση 1 %</label>
+            <input name="withholding1_percent" class="form-control" value="0">
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Κράτηση 2 %</label>
+            <input name="withholding2_percent" class="form-control" value="0">
+          </div>
+
+          <div class="col-12">
+            <button class="btn btn-primary">Προσθήκη</button>
+          </div>
+        </div>
+      </form>
+
+      <div class="form-text mt-2">
+        Το “Σύνολο” είναι το άθροισμα: ΜΤ-ΕΛΟΑ + ΕΑΔΗΣΥ + Κράτηση 1 + Κράτηση 2.
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><strong>Υπάρχοντα Προφίλ</strong></div>
+    <div class="card-body">
+      {% if profiles %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Περιγραφή</th>
+              <th style="width: 110px;">ΜΤ-ΕΛΟΑ</th>
+              <th style="width: 110px;">ΕΑΔΗΣΥ</th>
+              <th style="width: 110px;">Κράτηση 1</th>
+              <th style="width: 110px;">Κράτηση 2</th>
+              <th style="width: 90px;">Σύνολο</th>
+              <th style="width: 80px;">Ενεργό</th>
+              <th style="width: 220px;" class="text-end">Ενέργειες</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in profiles %}
+            <tr>
+              <td>
+                <form method="post" action="{{ request.path }}" class="d-flex gap-2">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="action" value="update">
+                  <input type="hidden" name="id" value="{{ p.id }}">
+                  <input name="description" class="form-control form-control-sm" value="{{ p.description }}" required>
+              </td>
+
+              <td><input name="mt_eloa_percent" class="form-control form-control-sm" value="{{ p.mt_eloa_percent }}"></td>
+              <td><input name="eadhsy_percent" class="form-control form-control-sm" value="{{ p.eadhsy_percent }}"></td>
+              <td><input name="withholding1_percent" class="form-control form-control-sm" value="{{ p.withholding1_percent }}"></td>
+              <td><input name="withholding2_percent" class="form-control form-control-sm" value="{{ p.withholding2_percent }}"></td>
+
+              <td><span class="badge bg-secondary">{{ p.total_percent }}%</span></td>
+
+              <td><input type="checkbox" name="is_active" {% if p.is_active %}checked{% endif %}></td>
+
+              <td class="text-end">
+                  <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
+                </form>
+
+                <form method="post" action="{{ request.path }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="id" value="{{ p.id }}">
+                  <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Διαγραφή;');">Διαγραφή</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <div class="alert alert-info mb-0">Δεν υπάρχουν προφίλ.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

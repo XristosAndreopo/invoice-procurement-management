@@ -1,19 +1,21 @@
 """
-Invoice Management System – Enterprise Domain Models (V3+)
+Invoice Management System – Enterprise Domain Models (V4)
 
-Enterprise add-ons in this revision:
-- Personnel belongs to a ServiceUnit (optional) for handler filtering.
-- Procurement.handler_personnel_id (FK) instead of free-text handler.
-- Procurement workflow fields (ΗΩΠ*) and send_to_expenses flag.
-- ProcurementSupplier.notes for offer observations.
+Includes existing V3+ models and adds enterprise master-data for:
+- Income Tax Rules (Φόρος Εισοδήματος / Α/Α 2 description source)
+- Withholding Profiles (Κρατήσεις υπέρ δημοσίου multi-column)
+- Procurement Committees (ανά ServiceUnit, managed by Manager/Admin)
 
-NEW in this revision (per UX request):
-- Add preapproval forward fields:
-  - hop_forward1_preapproval
-  - hop_forward2_preapproval
-- Add AAΥ field (aay) under approval.
-- Add Procurement notes (procurement_notes) for handler observations.
+Procurement enhancements:
+- income_tax_rule_id (drives Α/Α 2 description + FE calculation)
+- withholding_profile_id (drives κρατήσεις selection + breakdown)
+- committee_id (service-specific committee selection)
+
+IMPORTANT:
+- UI is never trusted. Any selection must be validated server-side in routes.
 """
+
+from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -24,6 +26,34 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from .extensions import db
 
 
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+def _to_decimal(value) -> Decimal:
+    """Convert Numeric/None to Decimal safely."""
+    if value is None:
+        return Decimal("0.00")
+    return Decimal(str(value))
+
+
+def _normalize_percent(rate: Decimal) -> Decimal:
+    """
+    Normalize percent value to fraction:
+    - If rate is 6 => 0.06
+    - If rate is 0.06 => 0.06
+    """
+    if rate > Decimal("1"):
+        return (rate / Decimal("100")).quantize(Decimal("0.0000001"))
+    return rate.quantize(Decimal("0.0000001"))
+
+
+def _money(x: Decimal) -> Decimal:
+    return x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+# ---------------------------------------------------------------------
+# Core directory & users
+# ---------------------------------------------------------------------
 class Personnel(db.Model):
     """Organizational directory person (Admin-managed)."""
 
@@ -42,7 +72,7 @@ class Personnel(db.Model):
 
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
 
-    # ✅ Personnel assigned to a ServiceUnit (for handler selection)
+    # Personnel assigned to a ServiceUnit (for handler selection)
     service_unit_id = db.Column(
         db.Integer,
         db.ForeignKey("service_units.id", ondelete="SET NULL"),
@@ -139,6 +169,9 @@ class User(UserMixin, db.Model):
         return f"<User {self.username}>"
 
 
+# ---------------------------------------------------------------------
+# Generic option lists (existing)
+# ---------------------------------------------------------------------
 class OptionCategory(db.Model):
     __tablename__ = "option_categories"
 
@@ -173,6 +206,144 @@ class OptionValue(db.Model):
     __table_args__ = (db.UniqueConstraint("category_id", "value", name="uq_category_value"),)
 
 
+# ---------------------------------------------------------------------
+# Enterprise master-data (NEW)
+# ---------------------------------------------------------------------
+class IncomeTaxRule(db.Model):
+    """
+    Income tax rule (Φόρος Εισοδήματος).
+
+    This is the source of the 'Α/Α 2 description' selection in Procurement.
+    Calculation uses:
+    - threshold_amount (e.g. 150.00)
+    - rate_percent (e.g. 8.00 or 4.00)
+    """
+
+    __tablename__ = "income_tax_rules"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    description = db.Column(db.String(255), nullable=False, unique=True, index=True)
+
+    # Stored as percent (e.g. 8.00). Normalized in calculations.
+    rate_percent = db.Column(db.Numeric(6, 2), nullable=False, default=Decimal("0.00"))
+
+    # Threshold pre-VAT amount (e.g. 150.00)
+    threshold_amount = db.Column(db.Numeric(12, 2), nullable=False, default=Decimal("150.00"))
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+class WithholdingProfile(db.Model):
+    """
+    Withholding profile (Κρατήσεις υπέρ δημοσίου).
+
+    Fields are stored as percent values:
+    - mt_eloa_percent (e.g. 6.00)
+    - eadhsy_percent (e.g. 0.10)
+    - withholding1_percent, withholding2_percent (reserved for future use)
+    """
+
+    __tablename__ = "withholding_profiles"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    description = db.Column(db.String(255), nullable=False, unique=True, index=True)
+
+    mt_eloa_percent = db.Column(db.Numeric(6, 2), nullable=False, default=Decimal("0.00"))
+    eadhsy_percent = db.Column(db.Numeric(6, 2), nullable=False, default=Decimal("0.00"))
+    withholding1_percent = db.Column(db.Numeric(6, 2), nullable=False, default=Decimal("0.00"))
+    withholding2_percent = db.Column(db.Numeric(6, 2), nullable=False, default=Decimal("0.00"))
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    @property
+    def total_percent(self) -> Decimal:
+        total = (
+            _to_decimal(self.mt_eloa_percent)
+            + _to_decimal(self.eadhsy_percent)
+            + _to_decimal(self.withholding1_percent)
+            + _to_decimal(self.withholding2_percent)
+        )
+        return _money(total)
+
+
+class ProcurementCommittee(db.Model):
+    """
+    Procurement committee per ServiceUnit.
+
+    Managed by:
+    - Admin (all)
+    - Manager/Deputy of the specific service unit (server-side enforced in routes)
+
+    Each member is a Personnel of the same ServiceUnit (validated server-side).
+    """
+
+    __tablename__ = "procurement_committees"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    service_unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey("service_units.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    description = db.Column(db.String(255), nullable=False, index=True)
+    identity_text = db.Column(db.String(255), nullable=True)
+
+    president_personnel_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    member1_personnel_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    member2_personnel_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    service_unit = db.relationship("ServiceUnit", backref=db.backref("committees", lazy=True))
+
+    president = db.relationship("Personnel", foreign_keys=[president_personnel_id])
+    member1 = db.relationship("Personnel", foreign_keys=[member1_personnel_id])
+    member2 = db.relationship("Personnel", foreign_keys=[member2_personnel_id])
+
+    __table_args__ = (
+        db.UniqueConstraint("service_unit_id", "description", name="uq_committee_serviceunit_desc"),
+    )
+
+    def members_display(self) -> str:
+        parts = []
+        if self.president:
+            parts.append(f"Πρόεδρος: {self.president.full_name()}")
+        if self.member1:
+            parts.append(f"Α' Μέλος: {self.member1.full_name()}")
+        if self.member2:
+            parts.append(f"Β' Μέλος: {self.member2.full_name()}")
+        return " | ".join(parts) if parts else "—"
+
+
+# ---------------------------------------------------------------------
+# Service unit, suppliers
+# ---------------------------------------------------------------------
 class ServiceUnit(db.Model):
     """Organizational unit. Manager/Deputy selected from Personnel."""
 
@@ -242,6 +413,9 @@ class Supplier(db.Model):
         return f"<Supplier {self.afm} - {self.name}>"
 
 
+# ---------------------------------------------------------------------
+# Procurement domain
+# ---------------------------------------------------------------------
 class Procurement(db.Model):
     __tablename__ = "procurements"
 
@@ -269,15 +443,41 @@ class Procurement(db.Model):
     # legacy free text
     handler = db.Column(db.String(255), index=True)
 
-    # ✅ handler as Personnel FK (preferred)
+    # handler as Personnel FK (preferred)
     handler_personnel_id = db.Column(
         db.Integer,
         db.ForeignKey("personnel.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-
     handler_personnel = db.relationship("Personnel", foreign_keys=[handler_personnel_id])
+
+    # NEW: AA 2 description source (Income Tax Rule)
+    income_tax_rule_id = db.Column(
+        db.Integer,
+        db.ForeignKey("income_tax_rules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    income_tax_rule = db.relationship("IncomeTaxRule", foreign_keys=[income_tax_rule_id])
+
+    # NEW: Withholding selection (table profile)
+    withholding_profile_id = db.Column(
+        db.Integer,
+        db.ForeignKey("withholding_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    withholding_profile = db.relationship("WithholdingProfile", foreign_keys=[withholding_profile_id])
+
+    # NEW: committee selection (service-specific)
+    committee_id = db.Column(
+        db.Integer,
+        db.ForeignKey("procurement_committees.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    committee = db.relationship("ProcurementCommittee", foreign_keys=[committee_id])
 
     requested_amount = db.Column(db.Numeric(12, 2))
     approved_amount = db.Column(db.Numeric(12, 2))
@@ -287,26 +487,21 @@ class Procurement(db.Model):
     vat_amount = db.Column(db.Numeric(12, 2))
     grand_total = db.Column(db.Numeric(12, 2))
 
-    # ✅ ΗΩΠ workflow fields (stored as text identifiers)
+    # ΗΩΠ workflow fields
     hop_commitment = db.Column(db.String(50), nullable=True, index=True)
     hop_forward1_commitment = db.Column(db.String(50), nullable=True, index=True)
     hop_forward2_commitment = db.Column(db.String(50), nullable=True, index=True)
 
     hop_preapproval = db.Column(db.String(50), nullable=True, index=True)
-
-    # ✅ NEW: preapproval forwards (under hop_preapproval in UI)
     hop_forward1_preapproval = db.Column(db.String(50), nullable=True, index=True)
     hop_forward2_preapproval = db.Column(db.String(50), nullable=True, index=True)
 
     hop_approval = db.Column(db.String(50), nullable=True, index=True)
 
-    # ✅ NEW: AAΥ (below approval)
     aay = db.Column(db.String(50), nullable=True, index=True)
 
-    # ✅ NEW: procurement notes (handler observations)
     procurement_notes = db.Column(db.Text, nullable=True)
 
-    # ✅ explicit switch to move to Pending Expenses (only valid after approval)
     send_to_expenses = db.Column(db.Boolean, default=False, nullable=False, index=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
@@ -345,13 +540,20 @@ class Procurement(db.Model):
             return self.handler_personnel.full_name()
         return self.handler or None
 
+    @property
+    def aa2_description(self) -> str | None:
+        """Α/Α 2 description derived from selected IncomeTaxRule."""
+        if self.income_tax_rule and self.income_tax_rule.description:
+            return self.income_tax_rule.description
+        return None
+
     def recalc_totals(self):
         total = Decimal("0.00")
         for line in self.materials:
             if line.quantity and line.unit_price:
                 total += Decimal(str(line.quantity)) * Decimal(str(line.unit_price))
 
-        self.sum_total = total.quantize(Decimal("0.01"))
+        self.sum_total = _money(total)
 
         if not self.vat_rate:
             self.vat_amount = Decimal("0.00")
@@ -359,12 +561,143 @@ class Procurement(db.Model):
             return
 
         rate = Decimal(str(self.vat_rate))
-        if rate > 1:
-            rate = rate / Decimal("100")
+        rate = _normalize_percent(rate)
 
-        vat = (self.sum_total * rate).quantize(Decimal("0.01"))
+        vat = _money(self.sum_total * rate)
         self.vat_amount = vat
-        self.grand_total = (self.sum_total + vat).quantize(Decimal("0.01"))
+        self.grand_total = _money(self.sum_total + vat)
+
+    # -----------------------------
+    # Enterprise payment breakdown
+    # -----------------------------
+    def compute_public_withholdings(self) -> dict:
+        """
+        Compute public withholdings breakdown based on selected WithholdingProfile.
+
+        Returns:
+          {
+            "items": [{"label": "...", "percent": Decimal, "amount": Decimal}, ...],
+            "total_percent": Decimal,
+            "total_amount": Decimal
+          }
+        """
+        base = _to_decimal(self.sum_total)
+        profile = self.withholding_profile
+
+        if not profile or not profile.is_active:
+            return {"items": [], "total_percent": Decimal("0.00"), "total_amount": Decimal("0.00")}
+
+        parts = [
+            ("ΜΤ-ΕΛΟΑ", _to_decimal(profile.mt_eloa_percent)),
+            ("ΕΑΔΗΣΥ", _to_decimal(profile.eadhsy_percent)),
+            ("ΚΡΑΤΗΣΗ 1", _to_decimal(profile.withholding1_percent)),
+            ("ΚΡΑΤΗΣΗ 2", _to_decimal(profile.withholding2_percent)),
+        ]
+
+        items = []
+        total_amount = Decimal("0.00")
+        total_percent = Decimal("0.00")
+
+        for label, pct in parts:
+            if pct is None:
+                pct = Decimal("0.00")
+            pct_money = _money(pct)
+            if pct_money == Decimal("0.00"):
+                continue
+
+            frac = _normalize_percent(pct_money)
+            amt = _money(base * frac)
+            items.append({"label": label, "percent": pct_money, "amount": amt})
+            total_amount += amt
+            total_percent += pct_money
+
+        return {
+            "items": items,
+            "total_percent": _money(total_percent),
+            "total_amount": _money(total_amount),
+        }
+
+    def compute_income_tax(self) -> dict:
+        """
+        Compute income tax (ΦΕ) based on selected IncomeTaxRule and threshold.
+
+        Formula per requirement:
+          FE = (SumTotal - PublicWithholdingsTotal) * rate%
+
+        Returns:
+          {"description": str|None, "rate_percent": Decimal, "threshold": Decimal, "amount": Decimal}
+        """
+        base_total = _to_decimal(self.sum_total)
+        withh = self.compute_public_withholdings()
+        after_withholdings = _money(base_total - _to_decimal(withh["total_amount"]))
+
+        rule = self.income_tax_rule
+        if not rule or not rule.is_active:
+            return {
+                "description": None,
+                "rate_percent": Decimal("0.00"),
+                "threshold": Decimal("0.00"),
+                "amount": Decimal("0.00"),
+            }
+
+        threshold = _to_decimal(rule.threshold_amount)
+        rate_pct = _to_decimal(rule.rate_percent)
+
+        if base_total <= threshold:
+            return {
+                "description": rule.description,
+                "rate_percent": _money(rate_pct),
+                "threshold": _money(threshold),
+                "amount": Decimal("0.00"),
+            }
+
+        rate_frac = _normalize_percent(rate_pct)
+        amt = _money(after_withholdings * rate_frac)
+
+        return {
+            "description": rule.description,
+            "rate_percent": _money(rate_pct),
+            "threshold": _money(threshold),
+            "amount": amt,
+        }
+
+    def compute_payment_analysis(self) -> dict:
+        """
+        Full payment analysis required by UX.
+
+        Returns:
+          {
+            "sum_total": Decimal,
+            "public_withholdings": {...},
+            "income_tax": {...},
+            "vat_percent": Decimal,
+            "vat_amount": Decimal,
+            "payable_total": Decimal
+          }
+        """
+        sum_total = _to_decimal(self.sum_total)
+        public_withh = self.compute_public_withholdings()
+        income_tax = self.compute_income_tax()
+
+        vat_pct = _to_decimal(self.vat_rate)
+        vat_frac = _normalize_percent(vat_pct) if vat_pct else Decimal("0.00")
+        vat_amount = _money(sum_total * vat_frac)
+
+        payable = _money(
+            sum_total
+            - _to_decimal(public_withh["total_amount"])
+            - _to_decimal(income_tax["amount"])
+            + vat_amount
+        )
+
+        return {
+            "sum_total": _money(sum_total),
+            "public_withholdings": public_withh,
+            "income_tax": income_tax,
+            "vat_percent": _money(vat_pct),
+            "vat_amount": _money(vat_amount),
+            "payable_total": _money(payable),
+        }
 
 
 class ProcurementSupplier(db.Model):
@@ -390,7 +723,6 @@ class ProcurementSupplier(db.Model):
     is_winner = db.Column(db.Boolean, default=False)
     offered_amount = db.Column(db.Numeric(12, 2))
 
-    # ✅ large notes/observations for offers
     notes = db.Column(db.Text, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

@@ -25,9 +25,6 @@ from .extensions import csrf, db, login_manager, migrate
 from .models import User
 from .security import viewer_readonly_guard
 
-# Blueprint imports kept inside create_app() where possible to reduce import side effects.
-
-
 # -------------------------------------------------------------------
 # NAVIGATION STRUCTURE (UI visibility only; security enforced in routes)
 # -------------------------------------------------------------------
@@ -59,25 +56,31 @@ NAV_SECTIONS = [
         "key": "management",
         "label": "Διαχείριση",
         "auth_required": True,
-        # visible to all logged-in users, items filtered below
         "items": [
             # --- Admin-only master data ---
             {"label": "Προσωπικό", "endpoint": "admin.personnel_list", "admin_only": True},
             {"label": "Χρήστες", "endpoint": "users.list_users", "admin_only": True},
             {"label": "Υπηρεσίες", "endpoint": "settings.service_units_list", "admin_only": True},
             {"label": "Προμηθευτές", "endpoint": "settings.suppliers_list", "admin_only": True},
+
             # --- Option lists (Admin-only) ---
             {"label": "Κατάσταση", "endpoint": "settings.options_status", "admin_only": True},
             {"label": "Στάδιο", "endpoint": "settings.options_stage", "admin_only": True},
             {"label": "Κατανομή", "endpoint": "settings.options_allocation", "admin_only": True},
             {"label": "Τριμηνιαία", "endpoint": "settings.options_quarterly", "admin_only": True},
             {"label": "ΦΠΑ", "endpoint": "settings.options_vat", "admin_only": True},
-            {"label": "Κρατήσεις", "endpoint": "settings.options_withholdings", "admin_only": True},
-            # --- Committees (Manager + Admin) ---
-            {"label": "Επιτροπές Προμηθειών", "endpoint": "settings.options_committees", "admin_only": False},
+
+            # --- NEW Admin-only enterprise master data ---
+            {"label": "Φόρος Εισοδήματος", "endpoint": "settings.income_tax_rules", "admin_only": True},
+            {"label": "Κρατήσεις (Πίνακας)", "endpoint": "settings.withholding_profiles", "admin_only": True},
+
+            # --- Committees per service unit (Manager + Admin) ---
+            {"label": "Επιτροπές Προμηθειών", "endpoint": "settings.committees", "admin_only": False},
+
             # --- User utilities (All users) ---
             {"label": "Θέμα Εμφάνισης", "endpoint": "settings.theme", "admin_only": False},
             {"label": "Παράπονα/Αναφορά", "endpoint": "settings.feedback", "admin_only": False},
+
             # --- Feedback management (Admin-only) ---
             {"label": "Διαχείριση Παραπόνων", "endpoint": "settings.feedback_admin", "admin_only": True},
         ],
@@ -161,7 +164,7 @@ def create_app() -> Flask:
                         continue
 
                 # Committees: allowed for manager+admin
-                if item["endpoint"] == "settings.options_committees":
+                if item["endpoint"] == "settings.committees":
                     if not (
                         current_user.is_authenticated
                         and (current_user.is_admin or current_user.can_manage())
