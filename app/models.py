@@ -11,6 +11,11 @@ Procurement enhancements:
 - withholding_profile_id (drives κρατήσεις selection + breakdown)
 - committee_id (service-specific committee selection)
 
+NEW (V4.1) – Procurement implementation phase fields:
+- adam_aay, ada_aay
+- adam_prosklisis, adam_apofasis_anathesis
+- contract_number, adam_contract, protocol_number
+
 IMPORTANT:
 - UI is never trusted. Any selection must be validated server-side in routes.
 """
@@ -38,13 +43,41 @@ def _to_decimal(value) -> Decimal:
 
 def _normalize_percent(rate: Decimal) -> Decimal:
     """
-    Normalize percent value to fraction:
-    - If rate is 6 => 0.06
+    Normalize percent value to fraction (for inputs that may be percent or fraction):
+    - If rate is 6    => 0.06
     - If rate is 0.06 => 0.06
+
+    IMPORTANT:
+    - Keep this behavior for fields where UI may send 24 or 0.24 (e.g. VAT).
+    - For master-data percents that are always stored as percent (e.g. 0.10 means 0.10%),
+      DO NOT use this helper. Use _percent_to_fraction().
     """
     if rate > Decimal("1"):
         return (rate / Decimal("100")).quantize(Decimal("0.0000001"))
     return rate.quantize(Decimal("0.0000001"))
+
+
+def _percent_to_fraction(percent_value: Decimal) -> Decimal:
+    """
+    Convert a percent value (ALWAYS percent) to fraction:
+      0.10% => 0.001
+      6.00% => 0.06
+
+    This is required for WithholdingProfile where stored values are percents,
+    including sub-1% values like 0.10%.
+    """
+    return (percent_value / Decimal("100")).quantize(Decimal("0.0000001"))
+
+
+def _display_percent(rate: Decimal) -> Decimal:
+    """
+    Display percent for UI:
+    - If stored as 24 => 24
+    - If stored as 0.24 => 24
+    """
+    if rate <= Decimal("1") and rate != Decimal("0"):
+        return (rate * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return rate.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _money(x: Decimal) -> Decimal:
@@ -244,6 +277,9 @@ class WithholdingProfile(db.Model):
     - mt_eloa_percent (e.g. 6.00)
     - eadhsy_percent (e.g. 0.10)
     - withholding1_percent, withholding2_percent (reserved for future use)
+
+    IMPORTANT:
+    - 0.10 means 0.10% (not 10%).
     """
 
     __tablename__ = "withholding_profiles"
@@ -452,7 +488,7 @@ class Procurement(db.Model):
     )
     handler_personnel = db.relationship("Personnel", foreign_keys=[handler_personnel_id])
 
-    # NEW: AA 2 description source (Income Tax Rule)
+    # AA 2 description source (Income Tax Rule)
     income_tax_rule_id = db.Column(
         db.Integer,
         db.ForeignKey("income_tax_rules.id", ondelete="SET NULL"),
@@ -461,7 +497,7 @@ class Procurement(db.Model):
     )
     income_tax_rule = db.relationship("IncomeTaxRule", foreign_keys=[income_tax_rule_id])
 
-    # NEW: Withholding selection (table profile)
+    # Withholding selection (table profile)
     withholding_profile_id = db.Column(
         db.Integer,
         db.ForeignKey("withholding_profiles.id", ondelete="SET NULL"),
@@ -470,7 +506,7 @@ class Procurement(db.Model):
     )
     withholding_profile = db.relationship("WithholdingProfile", foreign_keys=[withholding_profile_id])
 
-    # NEW: committee selection (service-specific)
+    # Committee selection (service-specific) – selected in implementation phase
     committee_id = db.Column(
         db.Integer,
         db.ForeignKey("procurement_committees.id", ondelete="SET NULL"),
@@ -495,10 +531,18 @@ class Procurement(db.Model):
     hop_preapproval = db.Column(db.String(50), nullable=True, index=True)
     hop_forward1_preapproval = db.Column(db.String(50), nullable=True, index=True)
     hop_forward2_preapproval = db.Column(db.String(50), nullable=True, index=True)
-
     hop_approval = db.Column(db.String(50), nullable=True, index=True)
 
     aay = db.Column(db.String(50), nullable=True, index=True)
+
+    # Implementation phase fields
+    adam_aay = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΑΑΥ
+    ada_aay = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑ ΑΑΥ
+    adam_prosklisis = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΠΡΟΣΚΛΗΣΗΣ
+    adam_apofasis_anathesis = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΑΠΟΦΑΣΗΣ ΑΝΑΘΕΣΗΣ
+    contract_number = db.Column(db.String(100), nullable=True, index=True)  # ΑΡΙΘΜΟΣ ΣΥΜΒΑΣΗΣ
+    adam_contract = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΣΥΜΒΑΣΗΣ
+    protocol_number = db.Column(db.String(100), nullable=True, index=True)  # ΑΡΙΘΜΟΣ ΠΡΩΤΟΚΟΛΛΟΥ
 
     procurement_notes = db.Column(db.Text, nullable=True)
 
@@ -574,12 +618,9 @@ class Procurement(db.Model):
         """
         Compute public withholdings breakdown based on selected WithholdingProfile.
 
-        Returns:
-          {
-            "items": [{"label": "...", "percent": Decimal, "amount": Decimal}, ...],
-            "total_percent": Decimal,
-            "total_amount": Decimal
-          }
+        IMPORTANT:
+        - WithholdingProfile percent fields are ALWAYS percents (0.10 means 0.10%).
+        - Therefore we must always convert by dividing by 100.
         """
         base = _to_decimal(self.sum_total)
         profile = self.withholding_profile
@@ -599,14 +640,13 @@ class Procurement(db.Model):
         total_percent = Decimal("0.00")
 
         for label, pct in parts:
-            if pct is None:
-                pct = Decimal("0.00")
-            pct_money = _money(pct)
+            pct_money = _money(pct or Decimal("0.00"))
             if pct_money == Decimal("0.00"):
                 continue
 
-            frac = _normalize_percent(pct_money)
+            frac = _percent_to_fraction(pct_money)
             amt = _money(base * frac)
+
             items.append({"label": label, "percent": pct_money, "amount": amt})
             total_amount += amt
             total_percent += pct_money
@@ -623,9 +663,6 @@ class Procurement(db.Model):
 
         Formula per requirement:
           FE = (SumTotal - PublicWithholdingsTotal) * rate%
-
-        Returns:
-          {"description": str|None, "rate_percent": Decimal, "threshold": Decimal, "amount": Decimal}
         """
         base_total = _to_decimal(self.sum_total)
         withh = self.compute_public_withholdings()
@@ -664,23 +701,13 @@ class Procurement(db.Model):
     def compute_payment_analysis(self) -> dict:
         """
         Full payment analysis required by UX.
-
-        Returns:
-          {
-            "sum_total": Decimal,
-            "public_withholdings": {...},
-            "income_tax": {...},
-            "vat_percent": Decimal,
-            "vat_amount": Decimal,
-            "payable_total": Decimal
-          }
         """
         sum_total = _to_decimal(self.sum_total)
         public_withh = self.compute_public_withholdings()
         income_tax = self.compute_income_tax()
 
-        vat_pct = _to_decimal(self.vat_rate)
-        vat_frac = _normalize_percent(vat_pct) if vat_pct else Decimal("0.00")
+        vat_pct_raw = _to_decimal(self.vat_rate)
+        vat_frac = _normalize_percent(vat_pct_raw) if vat_pct_raw else Decimal("0.00")
         vat_amount = _money(sum_total * vat_frac)
 
         payable = _money(
@@ -694,7 +721,8 @@ class Procurement(db.Model):
             "sum_total": _money(sum_total),
             "public_withholdings": public_withh,
             "income_tax": income_tax,
-            "vat_percent": _money(vat_pct),
+            # For UI: always show percent number (24.00) even if stored as 0.24
+            "vat_percent": _display_percent(vat_pct_raw),
             "vat_amount": _money(vat_amount),
             "payable_total": _money(payable),
         }

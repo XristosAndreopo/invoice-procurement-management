@@ -54,7 +54,7 @@
             </div>
           </div>
 
-          <!-- NEW: Φόρος Εισοδήματος επιλογή -->
+          <!-- Φόρος Εισοδήματος επιλογή -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τύπος Προμήθειας</label>
             <div class="col-8">
@@ -72,21 +72,7 @@
             </div>
           </div>
 
-          <!-- NEW: Επιτροπή (ανά υπηρεσία) -->
-          <div class="mb-2 row align-items-center">
-            <label class="col-4 col-form-label col-form-label-sm">Επιτροπή Προμηθειών</label>
-            <div class="col-8">
-              <select name="committee_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
-                <option value="">(—)</option>
-                {% for c in committees %}
-                  <option value="{{ c.id }}" {% if procurement.committee_id == c.id %}selected{% endif %}>
-                    {{ c.description }}
-                  </option>
-                {% endfor %}
-              </select>
-              <div class="form-text">Εμφανίζονται μόνο οι ενεργές επιτροπές της υπηρεσίας.</div>
-            </div>
-          </div>
+          {# Επιτροπή Προμηθειών: ΔΕΝ εμφανίζεται στο edit. Μόνο στη φάση υλοποίησης (implementation). #}
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Σύντομη Περιγραφή *</label>
@@ -194,7 +180,7 @@
                 </span>
               </div>
               <div class="d-flex justify-content-between">
-                <span>ΦΠΑ</span>
+                <span>ΦΠΑ ({{ analysis["vat_percent"] }}%)</span>
                 <span class="fw-semibold">
                   {% if procurement.vat_amount %}{{ "{:,.2f}".format(procurement.vat_amount) }} €{% else %}—{% endif %}
                 </span>
@@ -345,6 +331,31 @@
             </div>
           </div>
 
+          <!-- NEW: κάτω από ΑΑΥ και πριν από μεταφορά -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΑΑΥ</label>
+            <div class="col-8">
+              <input name="adam_aay" class="form-control form-control-sm"
+                     value="{{ procurement.adam_aay or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑ ΑΑΥ</label>
+            <div class="col-8">
+              <input name="ada_aay" class="form-control form-control-sm"
+                     value="{{ procurement.ada_aay or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΠΡΟΣΚΛΗΣΗΣ</label>
+            <div class="col-8">
+              <input name="adam_prosklisis" class="form-control form-control-sm"
+                     value="{{ procurement.adam_prosklisis or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Μεταφορά σε Εκκρεμείς Δαπάνες</label>
             <div class="col-8">
@@ -359,7 +370,7 @@
             </div>
           </div>
 
-          <!-- NEW: Κρατήσεις επιλογή (πάνω από ΦΠΑ) -->
+          <!-- Κρατήσεις επιλογή (πάνω από ΦΠΑ) -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Κρατήσεις (Περιγραφή)</label>
             <div class="col-8">

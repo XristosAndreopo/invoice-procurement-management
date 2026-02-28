@@ -72,10 +72,17 @@
                   {% endif %}
                 </td>
                 <td class="text-end">
-                  <a href="{{ url_for('procurements.edit_procurement', procurement_id=p.id) }}"
-                     class="btn btn-sm btn-outline-secondary">
-                    Άνοιγμα
-                  </a>
+                  {% if open_mode == "implementation" %}
+                    <a href="{{ url_for('procurements.implementation_procurement', procurement_id=p.id) }}"
+                       class="btn btn-sm btn-outline-secondary">
+                      Άνοιγμα
+                    </a>
+                  {% else %}
+                    <a href="{{ url_for('procurements.edit_procurement', procurement_id=p.id) }}"
+                       class="btn btn-sm btn-outline-secondary">
+                      Άνοιγμα
+                    </a>
+                  {% endif %}
                 </td>
               </tr>
             {% endfor %}

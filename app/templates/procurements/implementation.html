@@ -1,0 +1,464 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set vat_pct = analysis["vat_percent"] if analysis and analysis.get("vat_percent") is not none else "" %}
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Προμήθεια #{{ procurement.id }} — Τελική Φάση Υλοποίησης</h1>
+    <div class="text-muted small">
+      Εμφανίζονται μόνο τα απαραίτητα πεδία για υλοποίηση και δαπάνες. Τα υπόλοιπα παραμένουν ως έχουν.
+    </div>
+  </div>
+  <a href="{{ url_for('procurements.pending_expenses') }}" class="btn btn-outline-secondary btn-sm">
+    &larr; Επιστροφή
+  </a>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+
+    <div class="row g-3">
+      <div class="col-12 col-lg-8">
+        <h2 class="h6 fw-bold mb-3">Βασικά στοιχεία (ως έχουν)</h2>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Υπηρεσία</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled
+                   value="{{ procurement.service_unit.short_name if procurement.service_unit else '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Α/Α</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.serial_no or '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Σύντομη Περιγραφή</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.description or '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">ΑΛΕ</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.ale or '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Κατανομή</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.allocation or '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Τριμηνιαία</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.quarterly or '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Κατάσταση</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.status or '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Στάδιο</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.stage or '' }}">
+          </div>
+        </div>
+
+        <div class="mb-2 row align-items-center">
+          <label class="col-4 col-form-label col-form-label-sm">Χειριστής</label>
+          <div class="col-8">
+            <input class="form-control form-control-sm" disabled value="{{ procurement.handler_display or '' }}">
+          </div>
+        </div>
+
+      </div>
+
+      <div class="col-12 col-lg-4">
+        <div class="card bg-light border-0 h-100">
+          <div class="card-body py-3 small">
+
+            <div class="text-center mb-2">
+              <div class="fw-bold">Μειοδότης</div>
+              <div class="mt-1">{{ procurement.winner_supplier_display or '—' }}</div>
+            </div>
+
+            <hr class="my-2">
+
+            <div class="text-center mb-2">
+              <div class="fw-bold">Ποσά</div>
+            </div>
+
+            <div class="d-flex justify-content-between">
+              <span>Σύνολο</span>
+              <span class="fw-semibold">
+                {% if procurement.sum_total %}{{ "{:,.2f}".format(procurement.sum_total) }} €{% else %}—{% endif %}
+              </span>
+            </div>
+            <div class="d-flex justify-content-between">
+              <span>ΦΠΑ ({{ vat_pct }}%)</span>
+              <span class="fw-semibold">
+                {% if procurement.vat_amount %}{{ "{:,.2f}".format(procurement.vat_amount) }} €{% else %}—{% endif %}
+              </span>
+            </div>
+            <div class="d-flex justify-content-between">
+              <span class="fw-bold">Γενικό Σύνολο</span>
+              <span class="fw-bold">
+                {% if procurement.grand_total %}{{ "{:,.2f}".format(procurement.grand_total) }} €{% else %}—{% endif %}
+              </span>
+            </div>
+
+            <hr class="my-2">
+
+            <div class="fw-bold mb-2">ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ</div>
+
+            <div class="d-flex justify-content-between mb-1">
+              <span>Σύνολο</span>
+              <span class="fw-semibold">{{ "{:,.2f}".format(analysis["sum_total"]) }} €</span>
+            </div>
+
+            {% set pw = analysis["public_withholdings"] %}
+            {% if pw["total_amount"] and pw["total_amount"] != 0 %}
+              <div class="mt-2">
+                <div class="d-flex justify-content-between fw-semibold">
+                  <span>Κρατήσεις υπέρ δημοσίου ({{ pw["total_percent"] }}%)</span>
+                  <span>{{ "{:,.2f}".format(pw["total_amount"]) }} €</span>
+                </div>
+
+                <div class="mt-2">
+                  {% for item in pw["items"] %}
+                    <div class="d-flex justify-content-between">
+                      <span>{{ item["label"] }} ({{ item["percent"] }}%)</span>
+                      <span>{{ "{:,.2f}".format(item["amount"]) }} €</span>
+                    </div>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+
+            {% set it = analysis["income_tax"] %}
+            {% if it["amount"] and it["amount"] != 0 %}
+              <div class="mt-2">
+                <div class="d-flex justify-content-between fw-semibold">
+                  <span>Φόρος Εισοδήματος ({{ it["rate_percent"] }}%)</span>
+                  <span>{{ "{:,.2f}".format(it["amount"]) }} €</span>
+                </div>
+              </div>
+            {% endif %}
+
+            {% if analysis["vat_amount"] and analysis["vat_amount"] != 0 %}
+              <div class="mt-2">
+                <div class="d-flex justify-content-between fw-semibold">
+                  <span>ΦΠΑ ({{ vat_pct }}%)</span>
+                  <span>{{ "{:,.2f}".format(analysis["vat_amount"]) }} €</span>
+                </div>
+              </div>
+            {% endif %}
+
+            <div class="mt-2 pt-2 border-top d-flex justify-content-between fw-bold">
+              <span>Τελικό Πληρωτέο Ποσό</span>
+              <span>{{ "{:,.2f}".format(analysis["payable_total"]) }} €</span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <hr class="my-3">
+
+    <h2 class="h6 fw-bold mb-3">Πεδία υλοποίησης (μόνο αυτά αλλάζουν)</h2>
+
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="row g-3">
+        <div class="col-12 col-lg-8">
+
+          <!-- Επιτροπή (μόνο εδώ) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Επιτροπή Προμηθειών</label>
+            <div class="col-8">
+              <select name="committee_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for c in committees %}
+                  <option value="{{ c.id }}" {% if procurement.committee_id == c.id %}selected{% endif %}>
+                    {{ c.description }}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Εμφανίζονται μόνο οι ενεργές επιτροπές της υπηρεσίας.</div>
+            </div>
+          </div>
+
+          <!-- Τύπος Προμήθειας (editable εδώ) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Τύπος Προμήθειας</label>
+            <div class="col-8">
+              <select name="income_tax_rule_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for r in income_tax_rules %}
+                  <option value="{{ r.id }}" {% if procurement.income_tax_rule_id == r.id %}selected{% endif %}>
+                    {{ r.description }} ({{ r.rate_percent }}% > {{ r.threshold_amount }}€)
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Η επιλογή χρησιμοποιείται στον υπολογισμό ΦΕ.</div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προέγκρισης</label>
+            <div class="col-8">
+              <input name="hop_preapproval" class="form-control form-control-sm"
+                     value="{{ procurement.hop_preapproval or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Έγκρισης</label>
+            <div class="col-8">
+              <input name="hop_approval" class="form-control form-control-sm"
+                     value="{{ procurement.hop_approval or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΑΥ</label>
+            <div class="col-8">
+              <input name="aay" class="form-control form-control-sm"
+                     value="{{ procurement.aay or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <!-- NEW: κάτω από ΑΑΥ και πριν από μεταφορά -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΑΑΥ</label>
+            <div class="col-8">
+              <input name="adam_aay" class="form-control form-control-sm"
+                     value="{{ procurement.adam_aay or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑ ΑΑΥ</label>
+            <div class="col-8">
+              <input name="ada_aay" class="form-control form-control-sm"
+                     value="{{ procurement.ada_aay or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΠΡΟΣΚΛΗΣΗΣ</label>
+            <div class="col-8">
+              <input name="adam_prosklisis" class="form-control form-control-sm"
+                     value="{{ procurement.adam_prosklisis or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Μεταφορά σε Εκκρεμείς Δαπάνες</label>
+            <div class="col-8">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="send_to_expenses" id="send_to_expenses"
+                       {% if procurement.send_to_expenses %}checked{% endif %}
+                       {% if not can_edit %}disabled{% endif %}>
+                <label class="form-check-label" for="send_to_expenses">
+                  Ναι (λειτουργεί μόνο αν υπάρχει ΗΩΠ Έγκρισης)
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Κρατήσεις (Περιγραφή)</label>
+            <div class="col-8">
+              <select name="withholding_profile_id" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for p in withholding_profiles %}
+                  <option value="{{ p.id }}" {% if procurement.withholding_profile_id == p.id %}selected{% endif %}>
+                    {{ p.description }}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Η επιλογή επηρεάζει την Ανάλυση Δαπάνης.</div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΦΠΑ</label>
+            <div class="col-8">
+              <input name="vat_rate" class="form-control form-control-sm" placeholder="24 ή 0.24"
+                     value="{{ procurement.vat_rate if procurement.vat_rate is not none else '' }}"
+                     {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <hr class="my-3">
+          <h3 class="h6 fw-bold mb-3">Στοιχεία Υλοποίησης (νέα)</h3>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΑΠΟΦΑΣΗΣ ΑΝΑΘΕΣΗΣ</label>
+            <div class="col-8">
+              <input name="adam_apofasis_anathesis" class="form-control form-control-sm"
+                     value="{{ procurement.adam_apofasis_anathesis or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΡΙΘΜΟΣ ΣΥΜΒΑΣΗΣ</label>
+            <div class="col-8">
+              <input name="contract_number" class="form-control form-control-sm"
+                     value="{{ procurement.contract_number or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΣΥΜΒΑΣΗΣ</label>
+            <div class="col-8">
+              <input name="adam_contract" class="form-control form-control-sm"
+                     value="{{ procurement.adam_contract or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΑΡΙΘΜΟΣ ΠΡΩΤΟΚΟΛΛΟΥ</label>
+            <div class="col-8">
+              <input name="protocol_number" class="form-control form-control-sm"
+                     value="{{ procurement.protocol_number or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
+          {% if can_edit %}
+            <div class="mt-3">
+              <button class="btn btn-primary">Αποθήκευση</button>
+            </div>
+          {% endif %}
+
+        </div>
+
+        <div class="col-12 col-lg-4">
+          <div class="card bg-light border-0 h-100">
+            <div class="card-body py-3 small">
+              <div class="fw-bold mb-2">Παρατηρήσεις Προμήθειας</div>
+              <textarea
+                name="procurement_notes"
+                class="form-control"
+                rows="14"
+                {% if not can_edit %}disabled{% endif %}
+                placeholder="Παρατηρήσεις χειριστή για την προμήθεια (εσωτερικές σημειώσεις)."
+              >{{ procurement.procurement_notes or '' }}</textarea>
+              <div class="form-text mt-2">
+                Εσωτερικό πεδίο. Δεν επηρεάζει τα ποσά/υπολογισμούς.
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </form>
+
+  </div>
+</div>
+
+<!-- SUPPLIERS (read-only) -->
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <h2 class="h6 fw-bold mb-3">Προμηθευτές (ως έχουν)</h2>
+
+    {% if procurement.supplies_links %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Προμηθευτής</th>
+              <th>Προσφορά</th>
+              <th>Μειοδότης</th>
+              <th>Παρατηρήσεις</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for link in procurement.supplies_links %}
+              <tr>
+                <td class="small">{{ link.supplier.afm }} - {{ link.supplier.name }}</td>
+                <td class="small">
+                  {% if link.offered_amount is not none %}
+                    {{ "{:,.2f}".format(link.offered_amount) }} €
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="small">
+                  {% if link.is_winner %}
+                    <span class="badge bg-success">ΝΑΙ</span>
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td class="small text-break" style="max-width: 420px;">{{ link.notes or '—' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="small text-muted">Δεν υπάρχουν καταχωρημένοι προμηθευτές.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- MATERIALS (read-only) -->
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    <h2 class="h6 fw-bold mb-3">Υλικά / Υπηρεσίες (ως έχουν)</h2>
+
+    {% if procurement.materials %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Περιγραφή</th>
+              <th>CPV</th>
+              <th>NSN</th>
+              <th>Μονάδα</th>
+              <th class="text-end">Ποσότητα</th>
+              <th class="text-end">Τιμή</th>
+              <th class="text-end">Σύνολο</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for line in procurement.materials %}
+              <tr>
+                <td class="small">{{ line.description }}</td>
+                <td class="small">{{ line.cpv or '—' }}</td>
+                <td class="small">{{ line.nsn or '—' }}</td>
+                <td class="small">{{ line.unit or '—' }}</td>
+                <td class="small text-end">{{ line.quantity }}</td>
+                <td class="small text-end">{{ line.unit_price }}</td>
+                <td class="small text-end">{{ "{:,.2f}".format(line.total_pre_vat) }} €</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="small text-muted">Δεν υπάρχουν γραμμές υλικών/υπηρεσιών.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

@@ -222,6 +222,19 @@ def feedback_admin():
         "closed": "Κλειστό",
     }
 
+    # Category labels used by template (must be passed)
+    category_labels: Dict[Optional[str], str] = {
+        "complaint": "Παράπονο",
+        "suggestion": "Πρόταση",
+        "bug": "Σφάλμα",
+        "other": "Άλλο",
+        None: "—",
+    }
+
+    # Filters (GET)
+    status_filter = (request.args.get("status") or "").strip() or None
+    category_filter = (request.args.get("category") or "").strip() or None
+
     if request.method == "POST":
         fb_id_raw = (request.form.get("feedback_id") or "").strip()
         new_status = (request.form.get("status") or "").strip()
@@ -241,13 +254,24 @@ def feedback_admin():
         flash("Η κατάσταση ενημερώθηκε.", "success")
         return redirect(url_for("settings.feedback_admin"))
 
-    feedback_items = Feedback.query.order_by(Feedback.created_at.desc()).all()
+    q = Feedback.query
+
+    if status_filter and status_filter in status_choices:
+        q = q.filter(Feedback.status == status_filter)
+
+    if category_filter and category_filter in {"complaint", "suggestion", "bug", "other"}:
+        q = q.filter(Feedback.category == category_filter)
+
+    feedback_items = q.order_by(Feedback.created_at.desc()).all()
+
     return render_template(
         "settings/feedback_admin.html",
         feedback_items=feedback_items,
         status_choices=status_choices,
+        category_labels=category_labels,
+        status_filter=status_filter,
+        category_filter=category_filter,
     )
-
 
 # ----------------------------------------------------------------------
 # SERVICE UNITS CRUD (admin only) - REQUIRED endpoints for templates

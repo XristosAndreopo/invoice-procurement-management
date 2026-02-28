@@ -3,19 +3,25 @@ app/blueprints/procurements/routes.py
 
 Procurement routes – Enterprise Secured Version (V4)
 
-Guarantees:
-- Exposes `procurements_bp` at module import time (prevents ImportError).
-- Uses decorator factories correctly (no Flask endpoint collisions).
-- Server-side permission checks (UI never trusted).
-- Supports:
+Supports:
   - Inbox / Pending Expenses / All lists
   - Create + Edit procurement
   - Supplier participation add/delete
   - Material lines add/delete
   - AA2 selection via IncomeTaxRule
   - Withholding selection via WithholdingProfile
-  - Committee selection via ProcurementCommittee (service-unit scoped)
   - Payment analysis display via Procurement.compute_payment_analysis()
+
+NEW (V4.1):
+- Implementation phase view for "Pending Expenses" procurements.
+  When send_to_expenses=True and hop_approval exists, open a special page.
+
+POLISH (V4.2):
+- Committee selection appears ONLY in implementation phase (Pending Expenses).
+- Procurement notes become editable in implementation phase.
+
+POLISH (V4.3):
+- Implementation phase allows editing IncomeTaxRule (Τύπος Προμήθειας) server-side validated.
 """
 
 from __future__ import annotations
@@ -44,21 +50,14 @@ from ...models import (
 from ...security import procurement_access_required, procurement_edit_required
 from ...audit import log_action, serialize_model
 
-# IMPORTANT: this name MUST exist at import time
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
 
-# ---------------------------------------------------------------------
-# Decorator loader (CRITICAL)
-# ---------------------------------------------------------------------
 def _load_procurement(procurement_id: int, **_: object) -> Procurement:
     """Loader for decorator factories."""
     return Procurement.query.get_or_404(procurement_id)
 
 
-# ---------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------
 def _parse_decimal(value: str | None) -> Decimal | None:
     """Parse decimal from user input (accepts comma or dot)."""
     if value is None:
@@ -120,6 +119,7 @@ def _order_by_serial_no(q):
 
 
 def _handler_candidates(service_unit_id: int | None):
+    """Active personnel candidates for handler selection (service-unit scoped)."""
     if not service_unit_id:
         return []
     return (
@@ -130,6 +130,7 @@ def _handler_candidates(service_unit_id: int | None):
 
 
 def _committees_for_service_unit(service_unit_id: int | None):
+    """Active committees for a service unit (service-unit scoped)."""
     if not service_unit_id:
         return []
     return (
@@ -140,11 +141,22 @@ def _committees_for_service_unit(service_unit_id: int | None):
 
 
 def _active_income_tax_rules():
+    """Active IncomeTaxRule list (admin-managed master data)."""
     return IncomeTaxRule.query.filter_by(is_active=True).order_by(IncomeTaxRule.description.asc()).all()
 
 
 def _active_withholding_profiles():
+    """Active WithholdingProfile list (admin-managed master data)."""
     return WithholdingProfile.query.filter_by(is_active=True).order_by(WithholdingProfile.description.asc()).all()
+
+
+def _is_in_implementation_phase(procurement: Procurement) -> bool:
+    """
+    Implementation phase condition (server-side truth):
+    - Must be sent to expenses
+    - Must have hop_approval (ΗΩΠ Έγκρισης)
+    """
+    return bool(procurement.send_to_expenses and procurement.hop_approval)
 
 
 # ---------------------------------------------------------------------
@@ -163,6 +175,7 @@ def inbox_procurements():
         page_title="Λίστα Προμηθειών (μη εγκεκριμένες)",
         page_subtitle="Εδώ δημιουργούνται νέες προμήθειες. Ακυρωμένες εμφανίζονται μόνο στις “Όλες”.",
         allow_create=(current_user.is_admin or current_user.can_manage()),
+        open_mode="edit",
     )
 
 
@@ -180,6 +193,7 @@ def pending_expenses():
         page_title="Εκκρεμείς Δαπάνες",
         page_subtitle="Εγκεκριμένες προμήθειες που μεταφέρθηκαν στις δαπάνες.",
         allow_create=False,
+        open_mode="implementation",
     )
 
 
@@ -194,6 +208,7 @@ def all_procurements():
         page_title="Όλες οι Προμήθειες",
         page_subtitle="Περιλαμβάνει και τις ακυρωμένες.",
         allow_create=False,
+        open_mode="edit",
     )
 
 
@@ -223,10 +238,8 @@ def create_procurement():
     withholding_profiles = _active_withholding_profiles()
 
     handler_candidates = []
-    committees = []
     if not current_user.is_admin and current_user.service_unit_id:
         handler_candidates = _handler_candidates(current_user.service_unit_id)
-        committees = _committees_for_service_unit(current_user.service_unit_id)
 
     if request.method == "POST":
         if current_user.is_admin:
@@ -240,7 +253,6 @@ def create_procurement():
             return redirect(url_for("procurements.create_procurement"))
 
         handler_candidates = _handler_candidates(service_unit_id)
-        committees = _committees_for_service_unit(service_unit_id)
 
         handler_pid = _parse_optional_int(request.form.get("handler_personnel_id"))
         if handler_pid:
@@ -267,15 +279,6 @@ def create_procurement():
         else:
             wp = None
 
-        committee_id = _parse_optional_int(request.form.get("committee_id"))
-        if committee_id:
-            c = ProcurementCommittee.query.get(committee_id)
-            if not c or not c.is_active or c.service_unit_id != service_unit_id:
-                flash("Μη έγκυρη επιτροπή για την υπηρεσία.", "danger")
-                return redirect(url_for("procurements.create_procurement"))
-        else:
-            c = None
-
         procurement = Procurement(
             service_unit_id=service_unit_id,
             serial_no=(request.form.get("serial_no") or "").strip() or None,
@@ -299,7 +302,8 @@ def create_procurement():
             handler_personnel_id=handler_pid,
             income_tax_rule_id=rule.id if rule else None,
             withholding_profile_id=wp.id if wp else None,
-            committee_id=c.id if c else None,
+            # Committee is selected ONLY in implementation phase (Pending Expenses)
+            committee_id=None,
         )
 
         send_to_expenses = bool(request.form.get("send_to_expenses"))
@@ -328,7 +332,7 @@ def create_procurement():
         handler_candidates=handler_candidates,
         income_tax_rules=income_tax_rules,
         withholding_profiles=withholding_profiles,
-        committees=committees,
+        committees=[],
     )
 
 
@@ -350,7 +354,6 @@ def edit_procurement(procurement_id: int):
     withholding_profiles = _active_withholding_profiles()
 
     handler_candidates = _handler_candidates(procurement.service_unit_id)
-    committees = _committees_for_service_unit(procurement.service_unit_id)
 
     if request.method == "POST":
         if not (current_user.is_admin or current_user.can_manage()):
@@ -382,7 +385,6 @@ def edit_procurement(procurement_id: int):
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
 
         handler_candidates = _handler_candidates(procurement.service_unit_id)
-        committees = _committees_for_service_unit(procurement.service_unit_id)
 
         handler_pid = _parse_optional_int(request.form.get("handler_personnel_id"))
         if handler_pid:
@@ -414,15 +416,8 @@ def edit_procurement(procurement_id: int):
         else:
             procurement.withholding_profile_id = None
 
-        committee_id = _parse_optional_int(request.form.get("committee_id"))
-        if committee_id:
-            c = ProcurementCommittee.query.get(committee_id)
-            if not c or not c.is_active or c.service_unit_id != procurement.service_unit_id:
-                flash("Μη έγκυρη επιτροπή για την υπηρεσία.", "danger")
-                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
-            procurement.committee_id = c.id
-        else:
-            procurement.committee_id = None
+        # Committee is selected ONLY in implementation phase. Do not change here.
+        # procurement.committee_id remains as-is.
 
         send_to_expenses = bool(request.form.get("send_to_expenses"))
         if send_to_expenses and not procurement.hop_approval:
@@ -453,8 +448,121 @@ def edit_procurement(procurement_id: int):
         handler_candidates=handler_candidates,
         income_tax_rules=income_tax_rules,
         withholding_profiles=withholding_profiles,
+        committees=[],
+        analysis=analysis,
+    )
+
+
+# ---------------------------------------------------------------------
+# Implementation phase (final phase page)
+# ---------------------------------------------------------------------
+@procurements_bp.route("/<int:procurement_id>/implementation", methods=["GET", "POST"])
+@login_required
+@procurement_access_required(_load_procurement)
+def implementation_procurement(procurement_id: int):
+    """
+    Final implementation phase page.
+
+    Visible when:
+      - send_to_expenses=True AND hop_approval exists.
+
+    Behavior:
+      - GET: controlled view of data + materials/suppliers (read-only as data rows).
+      - POST: only admin/manager/deputy can update allowed implementation fields.
+      - UI never trusted: server-side enforcement of which fields can change.
+      - Full audit logging for UPDATE.
+    """
+    procurement = Procurement.query.get_or_404(procurement_id)
+
+    if not _is_in_implementation_phase(procurement):
+        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+
+    # Needed for dropdowns in implementation page
+    income_tax_rules = _active_income_tax_rules()
+    withholding_profiles = _active_withholding_profiles()
+    committees = _committees_for_service_unit(procurement.service_unit_id)
+
+    if request.method == "POST":
+        if not (current_user.is_admin or current_user.can_manage()):
+            abort(403)
+
+        before_snapshot = serialize_model(procurement)
+
+        procurement.hop_preapproval = (request.form.get("hop_preapproval") or "").strip() or None
+        procurement.hop_approval = (request.form.get("hop_approval") or "").strip() or None
+        procurement.aay = (request.form.get("aay") or "").strip() or None
+
+        # Notes must be editable here
+        procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
+
+        # Committee (must be active + same service unit)
+        committee_id = _parse_optional_int(request.form.get("committee_id"))
+        if committee_id:
+            c = ProcurementCommittee.query.get(committee_id)
+            if not c or not c.is_active or c.service_unit_id != procurement.service_unit_id:
+                flash("Μη έγκυρη επιτροπή για την υπηρεσία.", "danger")
+                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+            procurement.committee_id = c.id
+        else:
+            procurement.committee_id = None
+
+        # Income tax rule (Τύπος Προμήθειας) – must be active if provided
+        income_tax_rule_id = _parse_optional_int(request.form.get("income_tax_rule_id"))
+        if income_tax_rule_id:
+            rule = IncomeTaxRule.query.get(income_tax_rule_id)
+            if not rule or not rule.is_active:
+                flash("Μη έγκυρος κανόνας Φόρου Εισοδήματος.", "danger")
+                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+            procurement.income_tax_rule_id = rule.id
+        else:
+            procurement.income_tax_rule_id = None
+
+        procurement.adam_aay = (request.form.get("adam_aay") or "").strip() or None
+        procurement.ada_aay = (request.form.get("ada_aay") or "").strip() or None
+        procurement.adam_prosklisis = (request.form.get("adam_prosklisis") or "").strip() or None
+        procurement.adam_apofasis_anathesis = (request.form.get("adam_apofasis_anathesis") or "").strip() or None
+        procurement.contract_number = (request.form.get("contract_number") or "").strip() or None
+        procurement.adam_contract = (request.form.get("adam_contract") or "").strip() or None
+        procurement.protocol_number = (request.form.get("protocol_number") or "").strip() or None
+
+        wp_id = _parse_optional_int(request.form.get("withholding_profile_id"))
+        if wp_id:
+            wp = WithholdingProfile.query.get(wp_id)
+            if not wp or not wp.is_active:
+                flash("Μη έγκυρο προφίλ κρατήσεων.", "danger")
+                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+            procurement.withholding_profile_id = wp.id
+        else:
+            procurement.withholding_profile_id = None
+
+        procurement.vat_rate = _parse_decimal(request.form.get("vat_rate"))
+
+        send_to_expenses = bool(request.form.get("send_to_expenses"))
+        if send_to_expenses and not procurement.hop_approval:
+            flash("Για μεταφορά σε Εκκρεμείς Δαπάνες απαιτείται ΗΩΠ Έγκρισης.", "warning")
+            procurement.send_to_expenses = False
+        else:
+            procurement.send_to_expenses = bool(send_to_expenses and procurement.hop_approval)
+
+        procurement.recalc_totals()
+
+        db.session.flush()
+        log_action(procurement, "UPDATE", before=before_snapshot, after=serialize_model(procurement))
+        db.session.commit()
+
+        flash("Η προμήθεια (φάση υλοποίησης) ενημερώθηκε.", "success")
+        return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+
+    analysis = procurement.compute_payment_analysis()
+
+    return render_template(
+        "procurements/implementation.html",
+        procurement=procurement,
+        income_tax_rules=income_tax_rules,
+        withholding_profiles=withholding_profiles,
         committees=committees,
         analysis=analysis,
+        can_edit=(current_user.is_admin or current_user.can_manage()),
     )
 
 

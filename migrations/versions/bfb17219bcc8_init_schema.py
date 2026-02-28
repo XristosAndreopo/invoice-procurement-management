@@ -1,8 +1,8 @@
-"""initial schema
+"""init schema
 
-Revision ID: 46a6ada13c23
+Revision ID: bfb17219bcc8
 Revises: 
-Create Date: 2026-02-27 23:33:23.777571
+Create Date: 2026-02-28 20:33:09.669460
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '46a6ada13c23'
+revision = 'bfb17219bcc8'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -232,6 +232,13 @@ def upgrade():
     sa.Column('hop_forward2_preapproval', sa.String(length=50), nullable=True),
     sa.Column('hop_approval', sa.String(length=50), nullable=True),
     sa.Column('aay', sa.String(length=50), nullable=True),
+    sa.Column('adam_aay', sa.String(length=100), nullable=True),
+    sa.Column('ada_aay', sa.String(length=100), nullable=True),
+    sa.Column('adam_prosklisis', sa.String(length=100), nullable=True),
+    sa.Column('adam_apofasis_anathesis', sa.String(length=100), nullable=True),
+    sa.Column('contract_number', sa.String(length=100), nullable=True),
+    sa.Column('adam_contract', sa.String(length=100), nullable=True),
+    sa.Column('protocol_number', sa.String(length=100), nullable=True),
     sa.Column('procurement_notes', sa.Text(), nullable=True),
     sa.Column('send_to_expenses', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=True),
@@ -245,9 +252,15 @@ def upgrade():
     )
     with op.batch_alter_table('procurements', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_procurements_aay'), ['aay'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_ada_aay'), ['ada_aay'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_adam_aay'), ['adam_aay'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_adam_apofasis_anathesis'), ['adam_apofasis_anathesis'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_adam_contract'), ['adam_contract'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_adam_prosklisis'), ['adam_prosklisis'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_ale'), ['ale'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_allocation'), ['allocation'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_committee_id'), ['committee_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_contract_number'), ['contract_number'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_created_at'), ['created_at'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_fiscal_year'), ['fiscal_year'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_handler'), ['handler'], unique=False)
@@ -261,6 +274,7 @@ def upgrade():
         batch_op.create_index(batch_op.f('ix_procurements_hop_forward2_preapproval'), ['hop_forward2_preapproval'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_hop_preapproval'), ['hop_preapproval'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_income_tax_rule_id'), ['income_tax_rule_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_protocol_number'), ['protocol_number'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_quarterly'), ['quarterly'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_send_to_expenses'), ['send_to_expenses'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_service_unit_id'), ['service_unit_id'], unique=False)
@@ -351,6 +365,7 @@ def downgrade():
         batch_op.drop_index(batch_op.f('ix_procurements_service_unit_id'))
         batch_op.drop_index(batch_op.f('ix_procurements_send_to_expenses'))
         batch_op.drop_index(batch_op.f('ix_procurements_quarterly'))
+        batch_op.drop_index(batch_op.f('ix_procurements_protocol_number'))
         batch_op.drop_index(batch_op.f('ix_procurements_income_tax_rule_id'))
         batch_op.drop_index(batch_op.f('ix_procurements_hop_preapproval'))
         batch_op.drop_index(batch_op.f('ix_procurements_hop_forward2_preapproval'))
@@ -364,9 +379,15 @@ def downgrade():
         batch_op.drop_index(batch_op.f('ix_procurements_handler'))
         batch_op.drop_index(batch_op.f('ix_procurements_fiscal_year'))
         batch_op.drop_index(batch_op.f('ix_procurements_created_at'))
+        batch_op.drop_index(batch_op.f('ix_procurements_contract_number'))
         batch_op.drop_index(batch_op.f('ix_procurements_committee_id'))
         batch_op.drop_index(batch_op.f('ix_procurements_allocation'))
         batch_op.drop_index(batch_op.f('ix_procurements_ale'))
+        batch_op.drop_index(batch_op.f('ix_procurements_adam_prosklisis'))
+        batch_op.drop_index(batch_op.f('ix_procurements_adam_contract'))
+        batch_op.drop_index(batch_op.f('ix_procurements_adam_apofasis_anathesis'))
+        batch_op.drop_index(batch_op.f('ix_procurements_adam_aay'))
+        batch_op.drop_index(batch_op.f('ix_procurements_ada_aay'))
         batch_op.drop_index(batch_op.f('ix_procurements_aay'))
 
     op.drop_table('procurements')

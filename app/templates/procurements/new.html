@@ -57,19 +57,7 @@
             </div>
           </div>
 
-          <!-- NEW: Committee (per service unit) -->
-          <div class="mb-2 row align-items-center">
-            <label class="col-4 col-form-label col-form-label-sm">Επιτροπή Προμηθειών</label>
-            <div class="col-8">
-              <select name="committee_id" class="form-select form-select-sm">
-                <option value="">(—)</option>
-                {% for c in committees %}
-                  <option value="{{ c.id }}">{{ c.description }}</option>
-                {% endfor %}
-              </select>
-              <div class="form-text">Εμφανίζονται μόνο οι ενεργές επιτροπές της υπηρεσίας.</div>
-            </div>
-          </div>
+          {# Επιτροπή Προμηθειών: εμφανίζεται μόνο στην τελική φάση (Εκκρεμείς Δαπάνες) #}
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Σύντομη Περιγραφή *</label>
@@ -181,12 +169,12 @@
             <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προωθητικού Δέσμευσης 2</label>
             <div class="col-8"><input name="hop_forward2_commitment" class="form-control form-control-sm"></div>
           </div>
-          
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Έγκρισης Δέσμευσης</label>
             <div class="col-8"><input name="hop_approval_commitment" class="form-control form-control-sm"></div>
           </div>
-          
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΗΩΠ Προέγκρισης</label>
             <div class="col-8"><input name="hop_preapproval" class="form-control form-control-sm"></div>
@@ -224,7 +212,6 @@
             </div>
           </div>
 
-          <!-- NEW: Withholding profile selection (above VAT as requested) -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Κρατήσεις (Περιγραφή)</label>
             <div class="col-8">
