@@ -27,8 +27,8 @@ IMPORTANT: block "content" is defined only once at the bottom.
     rel="stylesheet"
   >
 
-  <!-- Custom app styles -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <!-- Custom app styles (cache-busted) -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='2026-03-02') }}">
 </head>
 <body class="bg-app {% if current_user.is_authenticated %}theme-{{ current_user.theme or 'default' }}{% else %}theme-default{% endif %} d-flex flex-column min-vh-100">
 
@@ -73,11 +73,8 @@ IMPORTANT: block "content" is defined only once at the bottom.
         <div class="card sidebar-card shadow-sm border-0">
           <div class="list-group list-group-flush sidebar-nav">
             {% for section in nav_sections %}
-              {# Unique ID for each collapsible section #}
               {% set section_id = 'nav-section-' ~ loop.index %}
 
-              {# Determine if this section is active based on current endpoint.
-                 Use a namespace so the flag survives the loop. #}
               {% set ns = namespace(active=false) %}
               {% for item in section["items"] %}
                 {% if request.endpoint == item["endpoint"] %}
@@ -124,15 +121,12 @@ IMPORTANT: block "content" is defined only once at the bottom.
         </div>
       </aside>
 
-      {# MAIN CONTENT COLUMN (for logged-in users) #}
       {% set content_col_classes = "col-12 col-md-9 col-lg-10" %}
     {% else %}
-      {# If not logged in, main content takes full width #}
       {% set content_col_classes = "col-12" %}
     {% endif %}
 
     <section class="{{ content_col_classes }}">
-      {# Flash messages (always shown above content) #}
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
           <div class="mb-3">
@@ -146,7 +140,6 @@ IMPORTANT: block "content" is defined only once at the bottom.
         {% endif %}
       {% endwith %}
 
-      {# SINGLE content block used by child templates #}
       {% block content %}{% endblock %}
     </section>
   </div>
@@ -158,10 +151,8 @@ IMPORTANT: block "content" is defined only once at the bottom.
       Εσωτερικό εργαλείο • Flask
     </div>
     <div class="d-flex align-items-center gap-3">
-      {# TODO: replace the email and links with your real ones #}
       <a href="mailto:you@example.com" class="footer-link d-inline-flex align-items-center">
         <span class="footer-icon">
-          <!-- Envelope icon (inline SVG) -->
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16">
             <path d="M0 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v.217l-8 4.8-8-4.8V4z"/>
             <path d="M0 5.383v6.617A2 2 0 0 0 2 14h12a2 2 0 0 0 2-2V5.383l-7.555 4.533a1 1 0 0 1-1.022 0L0 5.383z"/>
@@ -172,7 +163,6 @@ IMPORTANT: block "content" is defined only once at the bottom.
 
       <a href="https://github.com/yourusername" target="_blank" class="footer-link d-inline-flex align-items-center">
         <span class="footer-icon">
-          <!-- GitHub icon (inline SVG) -->
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16">
             <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38
                      0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
@@ -192,7 +182,6 @@ IMPORTANT: block "content" is defined only once at the bottom.
 
       <a href="https://www.linkedin.com/in/yourprofile" target="_blank" class="footer-link d-inline-flex align-items-center">
         <span class="footer-icon">
-          <!-- LinkedIn icon (inline SVG) -->
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16">
             <path d="M1.146 1.146C1.54.752 2.074.5 2.667.5c.593 0 1.127.252 1.52.646.394.394.647.928.647 1.52
                      0 .593-.253 1.127-.647 1.52A2.144 2.144 0 0 1 2.667 4.833

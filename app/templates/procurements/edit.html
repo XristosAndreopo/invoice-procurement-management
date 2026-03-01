@@ -3,6 +3,7 @@
 
 {% set can_edit = current_user.is_admin or current_user.can_manage() %}
 {% set is_admin = current_user.is_admin %}
+{% set back_url = next_url if next_url is defined and next_url else url_for('procurements.inbox_procurements') %}
 
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
@@ -11,7 +12,7 @@
       Όλα τα στοιχεία παραμένουν διαθέσιμα για επεξεργασία μετά την αποθήκευση.
     </div>
   </div>
-  <a href="{{ url_for('procurements.inbox_procurements') }}" class="btn btn-outline-secondary btn-sm">
+  <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">
     &larr; Επιστροφή
   </a>
 </div>
@@ -22,6 +23,7 @@
 
     <form method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ back_url }}">
 
       <!-- ROW 1: BASIC INFO + SUMMARY + ANALYSIS -->
       <div class="row g-3">
@@ -54,7 +56,6 @@
             </div>
           </div>
 
-          <!-- Φόρος Εισοδήματος επιλογή -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τύπος Προμήθειας</label>
             <div class="col-8">
@@ -159,7 +160,6 @@
           <div class="card bg-light border-0 h-100">
             <div class="card-body py-3 small">
 
-              <!-- Centered Winner -->
               <div class="text-center mb-2">
                 <div class="fw-bold">Μειοδότης</div>
                 <div class="mt-1">{{ procurement.winner_supplier_display or '—' }}</div>
@@ -167,12 +167,10 @@
 
               <hr class="my-2">
 
-              <!-- Centered "Ποσά Προέγκρισης" -->
               <div class="text-center mb-2">
                 <div class="fw-bold">Ποσά Προέγκρισης</div>
               </div>
 
-              <!-- Amounts aligned: label left / value right -->
               <div class="d-flex justify-content-between">
                 <span>Σύνολο</span>
                 <span class="fw-semibold">
@@ -194,7 +192,6 @@
 
               <hr class="my-2">
 
-              <!-- ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ -->
               <div class="fw-bold mb-2">ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ</div>
 
               <div class="d-flex justify-content-between mb-1">
@@ -331,7 +328,6 @@
             </div>
           </div>
 
-          <!-- NEW: κάτω από ΑΑΥ και πριν από μεταφορά -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΑΑΥ</label>
             <div class="col-8">
@@ -370,7 +366,6 @@
             </div>
           </div>
 
-          <!-- Κρατήσεις επιλογή (πάνω από ΦΠΑ) -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Κρατήσεις (Περιγραφή)</label>
             <div class="col-8">
@@ -432,8 +427,9 @@
 
     {% if can_edit %}
       <form class="row g-2 mb-3" method="post"
-            action="{{ url_for('procurements.add_procurement_supplier', procurement_id=procurement.id) }}">
+            action="{{ url_for('procurements.add_procurement_supplier', procurement_id=procurement.id, next=back_url) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ back_url }}">
 
         <div class="col-12 col-md-4">
           <select name="supplier_id" class="form-select" required>
@@ -501,8 +497,9 @@
                   {% if can_edit %}
                     <form method="post"
                           action="{{ url_for('procurements.delete_procurement_supplier',
-                            procurement_id=procurement.id, link_id=link.id) }}">
+                            procurement_id=procurement.id, link_id=link.id, next=back_url) }}">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="next" value="{{ back_url }}">
                       <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
                     </form>
                   {% endif %}
@@ -525,8 +522,9 @@
 
     {% if can_edit %}
       <form class="row g-2 mb-3" method="post"
-            action="{{ url_for('procurements.add_material_line', procurement_id=procurement.id) }}">
+            action="{{ url_for('procurements.add_material_line', procurement_id=procurement.id, next=back_url) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ back_url }}">
 
         <div class="col-12 col-md-4">
           <input name="description" class="form-control" placeholder="Περιγραφή γραμμής" required>
@@ -582,8 +580,9 @@
                   {% if can_edit %}
                     <form method="post"
                           action="{{ url_for('procurements.delete_material_line',
-                            procurement_id=procurement.id, line_id=line.id) }}">
+                            procurement_id=procurement.id, line_id=line.id, next=back_url) }}">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="next" value="{{ back_url }}">
                       <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
                     </form>
                   {% endif %}

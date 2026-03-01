@@ -3,35 +3,25 @@ app/blueprints/procurements/routes.py
 
 Procurement routes – Enterprise Secured Version (V4)
 
-Supports:
-  - Inbox / Pending Expenses / All lists
-  - Create + Edit procurement
-  - Supplier participation add/delete
-  - Material lines add/delete
-  - AA2 selection via IncomeTaxRule
-  - Withholding selection via WithholdingProfile
-  - Payment analysis display via Procurement.compute_payment_analysis()
+Includes:
+- Inbox / Pending Expenses / All lists
+- Per-column server-side filtering
+- next= return chain so navigation returns to the list that opened the record
 
-NEW (V4.1):
-- Implementation phase view for "Pending Expenses" procurements.
-  When send_to_expenses=True and hop_approval exists, open a special page.
-
-POLISH (V4.2):
-- Committee selection appears ONLY in implementation phase (Pending Expenses).
-- Procurement notes become editable in implementation phase.
-
-POLISH (V4.3):
-- Implementation phase allows editing IncomeTaxRule (Τύπος Προμήθειας) server-side validated.
+IMPORTANT:
+- UI is never trusted. Access control and validations are server-side.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlparse
 
 from flask import Blueprint, render_template, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
-from sqlalchemy import func, case, Integer
+from sqlalchemy import func, case, Integer, and_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 
 from ...extensions import db
 from ...models import (
@@ -53,6 +43,9 @@ from ...audit import log_action, serialize_model
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
 
+# ---------------------------------------------------------------------
+# Parsing helpers
+# ---------------------------------------------------------------------
 def _load_procurement(procurement_id: int, **_: object) -> Procurement:
     """Loader for decorator factories."""
     return Procurement.query.get_or_404(procurement_id)
@@ -72,7 +65,7 @@ def _parse_decimal(value: str | None) -> Decimal | None:
 
 
 def _parse_optional_int(value: str | None) -> int | None:
-    """Parse optional int from form."""
+    """Parse optional int from form/query."""
     if value is None:
         return None
     raw = str(value).strip()
@@ -84,6 +77,49 @@ def _parse_optional_int(value: str | None) -> int | None:
         return None
 
 
+def _normalize_digits(value: str | None) -> str:
+    """Keep only digits (used for VAT/AFM filters)."""
+    if not value:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def _safe_next_url(raw_next: str | None, fallback_endpoint: str) -> str:
+    """
+    Return a safe local next URL.
+
+    Rules:
+    - Only allow relative URLs (no scheme/netloc).
+    - Fall back to an internal endpoint if invalid/empty.
+    """
+    if not raw_next:
+        return url_for(fallback_endpoint)
+
+    try:
+        parsed = urlparse(raw_next)
+    except Exception:
+        return url_for(fallback_endpoint)
+
+    # Disallow external redirects
+    if parsed.scheme or parsed.netloc:
+        return url_for(fallback_endpoint)
+
+    # Must start with /
+    if not raw_next.startswith("/"):
+        return url_for(fallback_endpoint)
+
+    return raw_next
+
+
+def _get_next_from_request(fallback_endpoint: str) -> str:
+    """Read next from args/form and return safe local URL."""
+    raw = request.args.get("next") or request.form.get("next")
+    return _safe_next_url(raw, fallback_endpoint=fallback_endpoint)
+
+
+# ---------------------------------------------------------------------
+# Option helpers
+# ---------------------------------------------------------------------
 def _get_active_option_values(category_key: str) -> list[str]:
     """Return active OptionValue.value list for an OptionCategory key."""
     category = OptionCategory.query.filter_by(key=category_key).first()
@@ -97,6 +133,9 @@ def _get_active_option_values(category_key: str) -> list[str]:
     return [v.value for v in values]
 
 
+# ---------------------------------------------------------------------
+# Query helpers (security + sorting + eager loading)
+# ---------------------------------------------------------------------
 def _base_procurements_query():
     """Service isolation: non-admin sees only their service unit."""
     if current_user.is_admin:
@@ -118,6 +157,94 @@ def _order_by_serial_no(q):
     )
 
 
+def _with_list_eagerloads(q):
+    """Prevent N+1 in list pages."""
+    return q.options(
+        joinedload(Procurement.service_unit),
+        joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+    )
+
+
+# ---------------------------------------------------------------------
+# List filtering (server-side, no persistence)
+# ---------------------------------------------------------------------
+def _service_units_for_filter() -> list[ServiceUnit]:
+    """Service units visible in list filters."""
+    if current_user.is_admin:
+        return ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
+
+    if not current_user.service_unit_id:
+        return []
+
+    unit = ServiceUnit.query.get(current_user.service_unit_id)
+    return [unit] if unit else []
+
+
+def _apply_list_filters(q):
+    """Apply per-column filters from query string."""
+    service_unit_id = _parse_optional_int(request.args.get("service_unit_id"))
+    if service_unit_id and current_user.is_admin:
+        q = q.filter(Procurement.service_unit_id == service_unit_id)
+
+    serial_no = (request.args.get("serial_no") or "").strip()
+    if serial_no:
+        q = q.filter(func.coalesce(Procurement.serial_no, "").ilike(f"%{serial_no}%"))
+
+    desc = (request.args.get("description") or "").strip()
+    if desc:
+        q = q.filter(func.coalesce(Procurement.description, "").ilike(f"%{desc}%"))
+
+    ale = (request.args.get("ale") or "").strip()
+    if ale:
+        q = q.filter(func.coalesce(Procurement.ale, "").ilike(f"%{ale}%"))
+
+    hop_preapproval = (request.args.get("hop_preapproval") or "").strip()
+    if hop_preapproval:
+        q = q.filter(func.coalesce(Procurement.hop_preapproval, "").ilike(f"%{hop_preapproval}%"))
+
+    hop_approval = (request.args.get("hop_approval") or "").strip()
+    if hop_approval:
+        q = q.filter(func.coalesce(Procurement.hop_approval, "").ilike(f"%{hop_approval}%"))
+
+    aay = (request.args.get("aay") or "").strip()
+    if aay:
+        q = q.filter(func.coalesce(Procurement.aay, "").ilike(f"%{aay}%"))
+
+    status = (request.args.get("status") or "").strip()
+    if status:
+        q = q.filter(Procurement.status == status)
+
+    stage = (request.args.get("stage") or "").strip()
+    if stage:
+        q = q.filter(Procurement.stage == stage)
+
+    supplier_afm_raw = (request.args.get("supplier_afm") or "").strip()
+    supplier_name = (request.args.get("supplier_name") or "").strip()
+    supplier_afm = _normalize_digits(supplier_afm_raw)
+
+    if supplier_afm or supplier_name:
+        q = q.outerjoin(
+            ProcurementSupplier,
+            and_(
+                ProcurementSupplier.procurement_id == Procurement.id,
+                ProcurementSupplier.is_winner.is_(True),
+            ),
+        ).outerjoin(Supplier, Supplier.id == ProcurementSupplier.supplier_id)
+
+        if supplier_afm:
+            q = q.filter(func.coalesce(Supplier.afm, "").ilike(f"%{supplier_afm}%"))
+
+        if supplier_name:
+            q = q.filter(func.coalesce(Supplier.name, "").ilike(f"%{supplier_name}%"))
+
+        q = q.distinct()
+
+    return q
+
+
+# ---------------------------------------------------------------------
+# Handler/committees/master-data lists
+# ---------------------------------------------------------------------
 def _handler_candidates(service_unit_id: int | None):
     """Active personnel candidates for handler selection (service-unit scoped)."""
     if not service_unit_id:
@@ -151,11 +278,7 @@ def _active_withholding_profiles():
 
 
 def _is_in_implementation_phase(procurement: Procurement) -> bool:
-    """
-    Implementation phase condition (server-side truth):
-    - Must be sent to expenses
-    - Must have hop_approval (ΗΩΠ Έγκρισης)
-    """
+    """Implementation phase condition (server-side truth)."""
     return bool(procurement.send_to_expenses and procurement.hop_approval)
 
 
@@ -168,7 +291,10 @@ def inbox_procurements():
     q = _base_procurements_query()
     q = q.filter((Procurement.status.is_(None)) | (Procurement.status != "Ακυρωμένη"))
     q = q.filter((Procurement.send_to_expenses.is_(False)) | (Procurement.send_to_expenses.is_(None)))
-    procurements = _order_by_serial_no(q).all()
+
+    q = _apply_list_filters(q)
+    procurements = _order_by_serial_no(_with_list_eagerloads(q)).all()
+
     return render_template(
         "procurements/list.html",
         procurements=procurements,
@@ -176,6 +302,11 @@ def inbox_procurements():
         page_subtitle="Εδώ δημιουργούνται νέες προμήθειες. Ακυρωμένες εμφανίζονται μόνο στις “Όλες”.",
         allow_create=(current_user.is_admin or current_user.can_manage()),
         open_mode="edit",
+        show_open_button=True,
+        enable_row_colors=True,
+        service_units=_service_units_for_filter(),
+        status_options=_get_active_option_values("KATASTASH"),
+        stage_options=_get_active_option_values("STADIO"),
     )
 
 
@@ -183,10 +314,13 @@ def inbox_procurements():
 @login_required
 def pending_expenses():
     q = _base_procurements_query()
-    q = q.filter((Procurement.status.is_(None)) | (Procurement.status != "Ακυρωμένη"))
+    q = q.filter(Procurement.status == "Εν Εξελίξει")
     q = q.filter(Procurement.hop_approval.isnot(None))
     q = q.filter(Procurement.send_to_expenses.is_(True))
-    procurements = _order_by_serial_no(q).all()
+
+    q = _apply_list_filters(q)
+    procurements = _order_by_serial_no(_with_list_eagerloads(q)).all()
+
     return render_template(
         "procurements/list.html",
         procurements=procurements,
@@ -194,6 +328,11 @@ def pending_expenses():
         page_subtitle="Εγκεκριμένες προμήθειες που μεταφέρθηκαν στις δαπάνες.",
         allow_create=False,
         open_mode="implementation",
+        show_open_button=True,
+        enable_row_colors=True,
+        service_units=_service_units_for_filter(),
+        status_options=_get_active_option_values("KATASTASH"),
+        stage_options=_get_active_option_values("STADIO"),
     )
 
 
@@ -201,7 +340,9 @@ def pending_expenses():
 @login_required
 def all_procurements():
     q = _base_procurements_query()
-    procurements = _order_by_serial_no(q).all()
+    q = _apply_list_filters(q)
+    procurements = _order_by_serial_no(_with_list_eagerloads(q)).all()
+
     return render_template(
         "procurements/list.html",
         procurements=procurements,
@@ -209,6 +350,11 @@ def all_procurements():
         page_subtitle="Περιλαμβάνει και τις ακυρωμένες.",
         allow_create=False,
         open_mode="edit",
+        show_open_button=True,
+        enable_row_colors=True,
+        service_units=_service_units_for_filter(),
+        status_options=_get_active_option_values("KATASTASH"),
+        stage_options=_get_active_option_values("STADIO"),
     )
 
 
@@ -302,7 +448,6 @@ def create_procurement():
             handler_personnel_id=handler_pid,
             income_tax_rule_id=rule.id if rule else None,
             withholding_profile_id=wp.id if wp else None,
-            # Committee is selected ONLY in implementation phase (Pending Expenses)
             committee_id=None,
         )
 
@@ -344,6 +489,8 @@ def create_procurement():
 @procurement_access_required(_load_procurement)
 def edit_procurement(procurement_id: int):
     procurement = Procurement.query.get_or_404(procurement_id)
+
+    next_url = _get_next_from_request("procurements.inbox_procurements")
 
     allocation_options = _get_active_option_values("KATANOMH")
     quarterly_options = _get_active_option_values("TRIMHNIAIA")
@@ -391,7 +538,7 @@ def edit_procurement(procurement_id: int):
             allowed = {p.id for p in handler_candidates}
             if handler_pid not in allowed:
                 flash("Μη έγκυρος Χειριστής για την υπηρεσία.", "danger")
-                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
             procurement.handler_personnel_id = handler_pid
         else:
             procurement.handler_personnel_id = None
@@ -401,7 +548,7 @@ def edit_procurement(procurement_id: int):
             rule = IncomeTaxRule.query.get(income_tax_rule_id)
             if not rule or not rule.is_active:
                 flash("Μη έγκυρος κανόνας Φόρου Εισοδήματος.", "danger")
-                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
             procurement.income_tax_rule_id = rule.id
         else:
             procurement.income_tax_rule_id = None
@@ -411,13 +558,10 @@ def edit_procurement(procurement_id: int):
             wp = WithholdingProfile.query.get(wp_id)
             if not wp or not wp.is_active:
                 flash("Μη έγκυρο προφίλ κρατήσεων.", "danger")
-                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+                return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
             procurement.withholding_profile_id = wp.id
         else:
             procurement.withholding_profile_id = None
-
-        # Committee is selected ONLY in implementation phase. Do not change here.
-        # procurement.committee_id remains as-is.
 
         send_to_expenses = bool(request.form.get("send_to_expenses"))
         if send_to_expenses and not procurement.hop_approval:
@@ -432,7 +576,7 @@ def edit_procurement(procurement_id: int):
         db.session.commit()
 
         flash("Η προμήθεια ενημερώθηκε.", "success")
-        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
 
     analysis = procurement.compute_payment_analysis()
 
@@ -450,6 +594,7 @@ def edit_procurement(procurement_id: int):
         withholding_profiles=withholding_profiles,
         committees=[],
         analysis=analysis,
+        next_url=next_url,
     )
 
 
@@ -460,27 +605,19 @@ def edit_procurement(procurement_id: int):
 @login_required
 @procurement_access_required(_load_procurement)
 def implementation_procurement(procurement_id: int):
-    """
-    Final implementation phase page.
-
-    Visible when:
-      - send_to_expenses=True AND hop_approval exists.
-
-    Behavior:
-      - GET: controlled view of data + materials/suppliers (read-only as data rows).
-      - POST: only admin/manager/deputy can update allowed implementation fields.
-      - UI never trusted: server-side enforcement of which fields can change.
-      - Full audit logging for UPDATE.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
 
     if not _is_in_implementation_phase(procurement):
         return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
 
-    # Needed for dropdowns in implementation page
+    next_url = _get_next_from_request("procurements.pending_expenses")
+
     income_tax_rules = _active_income_tax_rules()
     withholding_profiles = _active_withholding_profiles()
     committees = _committees_for_service_unit(procurement.service_unit_id)
+
+    status_options = _get_active_option_values("KATASTASH")
+    stage_options = _get_active_option_values("STADIO")
 
     if request.method == "POST":
         if not (current_user.is_admin or current_user.can_manage()):
@@ -488,31 +625,39 @@ def implementation_procurement(procurement_id: int):
 
         before_snapshot = serialize_model(procurement)
 
+        new_status = (request.form.get("status") or "").strip() or None
+        if new_status and new_status not in status_options:
+            flash("Μη έγκυρη Κατάσταση.", "danger")
+            return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.status = new_status
+
+        new_stage = (request.form.get("stage") or "").strip() or None
+        if new_stage and new_stage not in stage_options:
+            flash("Μη έγκυρο Στάδιο.", "danger")
+            return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.stage = new_stage
+
         procurement.hop_preapproval = (request.form.get("hop_preapproval") or "").strip() or None
         procurement.hop_approval = (request.form.get("hop_approval") or "").strip() or None
         procurement.aay = (request.form.get("aay") or "").strip() or None
-
-        # Notes must be editable here
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
 
-        # Committee (must be active + same service unit)
         committee_id = _parse_optional_int(request.form.get("committee_id"))
         if committee_id:
             c = ProcurementCommittee.query.get(committee_id)
             if not c or not c.is_active or c.service_unit_id != procurement.service_unit_id:
                 flash("Μη έγκυρη επιτροπή για την υπηρεσία.", "danger")
-                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
             procurement.committee_id = c.id
         else:
             procurement.committee_id = None
 
-        # Income tax rule (Τύπος Προμήθειας) – must be active if provided
         income_tax_rule_id = _parse_optional_int(request.form.get("income_tax_rule_id"))
         if income_tax_rule_id:
             rule = IncomeTaxRule.query.get(income_tax_rule_id)
             if not rule or not rule.is_active:
                 flash("Μη έγκυρος κανόνας Φόρου Εισοδήματος.", "danger")
-                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
             procurement.income_tax_rule_id = rule.id
         else:
             procurement.income_tax_rule_id = None
@@ -530,7 +675,7 @@ def implementation_procurement(procurement_id: int):
             wp = WithholdingProfile.query.get(wp_id)
             if not wp or not wp.is_active:
                 flash("Μη έγκυρο προφίλ κρατήσεων.", "danger")
-                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+                return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
             procurement.withholding_profile_id = wp.id
         else:
             procurement.withholding_profile_id = None
@@ -551,7 +696,7 @@ def implementation_procurement(procurement_id: int):
         db.session.commit()
 
         flash("Η προμήθεια (φάση υλοποίησης) ενημερώθηκε.", "success")
-        return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id))
+        return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
 
     analysis = procurement.compute_payment_analysis()
 
@@ -563,6 +708,9 @@ def implementation_procurement(procurement_id: int):
         committees=committees,
         analysis=analysis,
         can_edit=(current_user.is_admin or current_user.can_manage()),
+        status_options=status_options,
+        stage_options=stage_options,
+        next_url=next_url,
     )
 
 
@@ -574,16 +722,17 @@ def implementation_procurement(procurement_id: int):
 @procurement_edit_required(_load_procurement)
 def add_procurement_supplier(procurement_id: int):
     procurement = Procurement.query.get_or_404(procurement_id)
+    next_url = _get_next_from_request("procurements.inbox_procurements")
 
     supplier_id = _parse_optional_int(request.form.get("supplier_id"))
     if not supplier_id:
         flash("Μη έγκυρος προμηθευτής.", "danger")
-        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
 
     exists = ProcurementSupplier.query.filter_by(procurement_id=procurement.id, supplier_id=supplier_id).first()
     if exists:
         flash("Ο συγκεκριμένος προμηθευτής έχει ήδη προστεθεί σε αυτή την προμήθεια.", "warning")
-        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
 
     offered_amount = _parse_decimal(request.form.get("offered_amount"))
     is_winner = bool(request.form.get("is_winner"))
@@ -607,19 +756,21 @@ def add_procurement_supplier(procurement_id: int):
     except IntegrityError:
         db.session.rollback()
         flash("Ο συγκεκριμένος προμηθευτής έχει ήδη προστεθεί σε αυτή την προμήθεια.", "warning")
-        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
 
     log_action(link, "CREATE", before=None, after=serialize_model(link))
     db.session.commit()
 
     flash("Ο προμηθευτής προστέθηκε.", "success")
-    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
 
 
 @procurements_bp.route("/<int:procurement_id>/suppliers/<int:link_id>/delete", methods=["POST"])
 @login_required
 @procurement_edit_required(_load_procurement)
 def delete_procurement_supplier(procurement_id: int, link_id: int):
+    next_url = _get_next_from_request("procurements.inbox_procurements")
+
     link = ProcurementSupplier.query.get_or_404(link_id)
     before_snapshot = serialize_model(link)
 
@@ -629,7 +780,7 @@ def delete_procurement_supplier(procurement_id: int, link_id: int):
     db.session.commit()
 
     flash("Ο προμηθευτής διαγράφηκε.", "success")
-    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement_id))
+    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement_id, next=next_url))
 
 
 # ---------------------------------------------------------------------
@@ -640,11 +791,12 @@ def delete_procurement_supplier(procurement_id: int, link_id: int):
 @procurement_edit_required(_load_procurement)
 def add_material_line(procurement_id: int):
     procurement = Procurement.query.get_or_404(procurement_id)
+    next_url = _get_next_from_request("procurements.inbox_procurements")
 
     description = (request.form.get("description") or "").strip()
     if not description:
         flash("Η περιγραφή γραμμής είναι υποχρεωτική.", "danger")
-        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
 
     quantity = _parse_decimal(request.form.get("quantity")) or Decimal("0")
     unit_price = _parse_decimal(request.form.get("unit_price")) or Decimal("0")
@@ -666,13 +818,15 @@ def add_material_line(procurement_id: int):
     db.session.commit()
 
     flash("Η γραμμή προστέθηκε.", "success")
-    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
 
 
 @procurements_bp.route("/<int:procurement_id>/materials/<int:line_id>/delete", methods=["POST"])
 @login_required
 @procurement_edit_required(_load_procurement)
 def delete_material_line(procurement_id: int, line_id: int):
+    next_url = _get_next_from_request("procurements.inbox_procurements")
+
     line = MaterialLine.query.get_or_404(line_id)
     before_snapshot = serialize_model(line)
 
@@ -684,4 +838,4 @@ def delete_material_line(procurement_id: int, line_id: int):
     db.session.commit()
 
     flash("Η γραμμή διαγράφηκε.", "success")
-    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id))
+    return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))

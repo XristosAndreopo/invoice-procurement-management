@@ -9,7 +9,6 @@
     {% endif %}
   </div>
 
-  {# Νέα Προμήθεια ΜΟΝΟ από τη μη-εγκεκριμένες (inbox) #}
   {% if allow_create %}
     <a href="{{ url_for('procurements.create_procurement') }}" class="btn btn-primary btn-sm">
       Νέα Προμήθεια
@@ -19,79 +18,231 @@
 
 <div class="card glass-card shadow-sm border-0">
   <div class="card-body">
-    {% if procurements %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle mb-0">
+    <div class="table-responsive">
+      <form id="filters-form" method="get" action="{{ request.path }}" class="mb-0">
+        <table class="table table-sm align-middle mb-0 procurements-table">
           <thead>
-            <tr>
+            <tr class="text-center">
               <th>Υπηρεσία</th>
               <th>Α/Α</th>
               <th>Σύντομη Περιγραφή</th>
               <th>ΑΛΕ</th>
-              <th>Κατανομή</th>
-              <th>Τριμηνιαία</th>
+              <th>ΑΦΜ</th>
               <th>Μειοδότης</th>
+              <th>ΗΩΠ Προέγκρισης</th>
+              <th>ΗΩΠ Έγκρισης</th>
+              <th>ΑΑΥ</th>
               <th>Κατάσταση</th>
               <th>Στάδιο</th>
-              <th>Χειριστής</th>
-              <th class="text-end">Γενικό Σύνολο</th>
-              <th></th>
+              {% if show_open_button %}
+                <th></th>
+              {% endif %}
+            </tr>
+
+            <tr class="table-light text-center">
+              <th style="min-width:190px;">
+                <select name="service_unit_id" class="form-select form-select-sm js-filter text-center">
+                  <option value="">Όλες</option>
+                  {% for su in (service_units or []) %}
+                    {% set su_id = su.id|string %}
+                    <option value="{{ su_id }}" {% if request.args.get('service_unit_id') == su_id %}selected{% endif %}>
+                      {{ su.short_name or su.description }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </th>
+
+              <th style="min-width:90px;">
+                <input name="serial_no"
+                       value="{{ request.args.get('serial_no','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:240px;">
+                <input name="description"
+                       value="{{ request.args.get('description','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:90px;">
+                <input name="ale"
+                       value="{{ request.args.get('ale','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:110px;">
+                <input name="supplier_afm"
+                       value="{{ request.args.get('supplier_afm','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:200px;">
+                <input name="supplier_name"
+                       value="{{ request.args.get('supplier_name','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:150px;">
+                <input name="hop_preapproval"
+                       value="{{ request.args.get('hop_preapproval','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:150px;">
+                <input name="hop_approval"
+                       value="{{ request.args.get('hop_approval','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:110px;">
+                <input name="aay"
+                       value="{{ request.args.get('aay','') }}"
+                       class="form-control form-control-sm js-filter js-filter-text text-center"
+                       placeholder="..."
+                       autocomplete="off">
+              </th>
+
+              <th style="min-width:160px;">
+                <select name="status" class="form-select form-select-sm js-filter text-center">
+                  <option value="">Όλες</option>
+                  {% for s in (status_options or []) %}
+                    <option value="{{ s }}" {% if request.args.get('status') == s %}selected{% endif %}>
+                      {{ s }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </th>
+
+              <th style="min-width:180px;">
+                <select name="stage" class="form-select form-select-sm js-filter text-center">
+                  <option value="">Όλα</option>
+                  {% for st in (stage_options or []) %}
+                    <option value="{{ st }}" {% if request.args.get('stage') == st %}selected{% endif %}>
+                      {{ st }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </th>
+
+              <th class="text-end" style="min-width:170px;">
+                <a href="{{ request.path }}" class="btn btn-sm btn-outline-secondary">
+                  Καθαρισμός
+                </a>
+              </th>
             </tr>
           </thead>
-          <tbody>
-            {% for p in procurements %}
-              {% set row_style = "" %}
-              {% if p.status == 'Ακυρωμένη' %}
-                {% set row_style = "background-color:#f8d7da;" %}
-              {% elif p.status == 'Πέρας' %}
-                {% set row_style = "background-color:#d4edda;" %}
-              {% elif p.stage == 'Αποστολή Δαπάνης' %}
-                {% set row_style = "background-color:#ffe5b4;" %}
-              {% elif p.stage == 'Έγκριση' %}
-                {% set row_style = "background-color:#fff3cd;" %}
-              {% endif %}
 
-              <tr style="{{ row_style }}">
-                <td class="small">
-                  {{ p.service_unit.short_name or p.service_unit.description if p.service_unit else '—' }}
-                </td>
-                <td class="small">{{ p.serial_no or '—' }}</td>
-                <td class="small text-truncate" style="max-width: 260px;">{{ p.description or '—' }}</td>
-                <td class="small">{{ p.ale or '—' }}</td>
-                <td class="small">{{ p.allocation or '—' }}</td>
-                <td class="small">{{ p.quarterly or '—' }}</td>
-                <td class="small">{{ p.winner_supplier_display or '—' }}</td>
-                <td class="small">{{ p.status or '—' }}</td>
-                <td class="small">{{ p.stage or '—' }}</td>
-                <td class="small">{{ p.handler_display or '—' }}</td>
-                <td class="small text-end">
-                  {% if p.grand_total is not none %}
-                    {{ "{:,.2f}".format(p.grand_total) }} €
-                  {% else %}
-                    —
+          <tbody>
+            {% if procurements %}
+              {% for p in procurements %}
+                {% set row_class = "" %}
+
+                {% if enable_row_colors %}
+                  {% if p.status == 'Ακυρωμένη' %}
+                    {% set row_class = "row-cancelled" %}
+                  {% elif p.status == 'Πέρας' %}
+                    {% set row_class = "row-complete" %}
+                  {% elif p.status == 'Εν Εξελίξει' and p.stage == 'Αποστολή Δαπάνης' %}
+                    {% set row_class = "row-expense-purple" %}
+                  {% elif p.status == 'Εν Εξελίξει' and p.hop_approval %}
+                    {% set row_class = "row-approval" %}
                   {% endif %}
-                </td>
-                <td class="text-end">
-                  {% if open_mode == "implementation" %}
-                    <a href="{{ url_for('procurements.implementation_procurement', procurement_id=p.id) }}"
-                       class="btn btn-sm btn-outline-secondary">
-                      Άνοιγμα
-                    </a>
-                  {% else %}
-                    <a href="{{ url_for('procurements.edit_procurement', procurement_id=p.id) }}"
-                       class="btn btn-sm btn-outline-secondary">
-                      Άνοιγμα
-                    </a>
+                {% endif %}
+
+                <tr class="{{ row_class }} text-center">
+                  <td>
+                    {{ p.service_unit.short_name or p.service_unit.description if p.service_unit else '—' }}
+                  </td>
+                  <td>{{ p.serial_no or '—' }}</td>
+                  <td>{{ p.description or '—' }}</td>
+                  <td>{{ p.ale or '—' }}</td>
+
+                  <td>{{ p.winner_supplier_afm or '—' }}</td>
+                  <td>{{ p.winner_supplier_name or '—' }}</td>
+
+                  <td>{{ p.hop_preapproval or '—' }}</td>
+                  <td>{{ p.hop_approval or '—' }}</td>
+                  <td>{{ p.aay or '—' }}</td>
+
+                  <td>{{ p.status or '—' }}</td>
+                  <td>{{ p.stage or '—' }}</td>
+
+                  {% if show_open_button %}
+                    <td class="text-end open-cell">
+                      {% if open_mode == "implementation" %}
+                        <a href="{{ url_for('procurements.implementation_procurement', procurement_id=p.id, next=request.full_path) }}"
+                           class="btn btn-sm btn-outline-secondary">
+                          Άνοιγμα
+                        </a>
+                      {% else %}
+                        <a href="{{ url_for('procurements.edit_procurement', procurement_id=p.id, next=request.full_path) }}"
+                           class="btn btn-sm btn-outline-secondary">
+                          Άνοιγμα
+                        </a>
+                      {% endif %}
+                    </td>
                   {% endif %}
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td colspan="{{ 12 if show_open_button else 11 }}" class="text-center text-muted py-3">
+                  Δεν υπάρχουν εγγραφές.
                 </td>
               </tr>
-            {% endfor %}
+            {% endif %}
           </tbody>
         </table>
-      </div>
-    {% else %}
-      <div class="small text-muted">Δεν υπάρχουν εγγραφές.</div>
-    {% endif %}
+      </form>
+    </div>
   </div>
 </div>
+
+<script>
+(function() {
+  const form = document.getElementById("filters-form");
+  if (!form) return;
+
+  let t = null;
+  const debounceMs = 450;
+
+  function submitNow() {
+    try { form.requestSubmit(); }
+    catch (e) { form.submit(); }
+  }
+
+  function debounceSubmit() {
+    if (t) window.clearTimeout(t);
+    t = window.setTimeout(submitNow, debounceMs);
+  }
+
+  form.querySelectorAll(".js-filter:not(.js-filter-text)").forEach(el => {
+    el.addEventListener("change", () => submitNow());
+  });
+
+  form.querySelectorAll(".js-filter-text").forEach(el => {
+    el.addEventListener("input", () => debounceSubmit());
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        submitNow();
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}

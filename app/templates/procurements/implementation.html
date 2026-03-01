@@ -1,3 +1,4 @@
+<!-- C:\Users\xrist\vs code projects\Invoice Management System\app\templates\procurements\implementation.html -->
 {% extends "base.html" %}
 {% block content %}
 
@@ -65,17 +66,24 @@
           </div>
         </div>
 
+        {# Κατάσταση/Στάδιο εμφανίζονται εδώ, αλλά πλέον editable ΜΟΝΟ στην implementation phase όπως ζήτησες #}
         <div class="mb-2 row align-items-center">
           <label class="col-4 col-form-label col-form-label-sm">Κατάσταση</label>
           <div class="col-8">
-            <input class="form-control form-control-sm" disabled value="{{ procurement.status or '' }}">
+            <select name="status_display" class="form-select form-select-sm" disabled>
+              <option value="">{{ procurement.status or '' }}</option>
+            </select>
+            <div class="form-text">Η επεξεργασία γίνεται στα "Πεδία Υλοποίησης" παρακάτω.</div>
           </div>
         </div>
 
         <div class="mb-2 row align-items-center">
           <label class="col-4 col-form-label col-form-label-sm">Στάδιο</label>
           <div class="col-8">
-            <input class="form-control form-control-sm" disabled value="{{ procurement.stage or '' }}">
+            <select name="stage_display" class="form-select form-select-sm" disabled>
+              <option value="">{{ procurement.stage or '' }}</option>
+            </select>
+            <div class="form-text">Η επεξεργασία γίνεται στα "Πεδία Υλοποίησης" παρακάτω.</div>
           </div>
         </div>
 
@@ -188,6 +196,33 @@
 
       <div class="row g-3">
         <div class="col-12 col-lg-8">
+
+          {# ✅ NEW: Editable Status/Stage in implementation phase #}
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Κατάσταση</label>
+            <div class="col-8">
+              <select name="status" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for s in (status_options or []) %}
+                  <option value="{{ s }}" {% if procurement.status == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Επιτρεπτές τιμές από τις επιλογές (seed-options).</div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Στάδιο</label>
+            <div class="col-8">
+              <select name="stage" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for st in (stage_options or []) %}
+                  <option value="{{ st }}" {% if procurement.stage == st %}selected{% endif %}>{{ st }}</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Επιτρεπτές τιμές από τις επιλογές (seed-options).</div>
+            </div>
+          </div>
 
           <!-- Επιτροπή (μόνο εδώ) -->
           <div class="mb-2 row align-items-center">

@@ -1,3 +1,4 @@
+# C:\Users\xrist\vs code projects\Invoice Management System\app\models.py
 """
 Invoice Management System – Enterprise Domain Models (V4)
 
@@ -568,6 +569,15 @@ class Procurement(db.Model):
 
     @property
     def winner_supplier_display(self):
+        """
+        Legacy display: "AFM - Name" for winner supplier (if any).
+
+        NOTE:
+        - Keep for backward compatibility.
+        - For list columns requiring separate AFM and Name, use:
+            - winner_supplier_afm
+            - winner_supplier_name
+        """
         winner_link = None
         for link in self.supplies_links or []:
             if link.is_winner:
@@ -576,6 +586,32 @@ class Procurement(db.Model):
         if not winner_link or not winner_link.supplier:
             return None
         return f"{winner_link.supplier.afm} - {winner_link.supplier.name}"
+
+    @property
+    def winner_supplier_afm(self) -> str | None:
+        """
+        Winner supplier AFM (separate column use).
+
+        IMPORTANT:
+        - UI requires AFM as its own field in procurement lists.
+        """
+        for link in self.supplies_links or []:
+            if link.is_winner and link.supplier:
+                return link.supplier.afm
+        return None
+
+    @property
+    def winner_supplier_name(self) -> str | None:
+        """
+        Winner supplier Name (separate column use).
+
+        IMPORTANT:
+        - UI requires only the supplier's name in "Μειοδότης" column.
+        """
+        for link in self.supplies_links or []:
+            if link.is_winner and link.supplier:
+                return link.supplier.name
+        return None
 
     @property
     def handler_display(self):

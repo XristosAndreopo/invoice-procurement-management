@@ -5,23 +5,19 @@ We keep colors soft and use "glass" cards and row highlights,
 with support for simple themes: default, dark, ocean.
 */
 
-/* Default CSS variable - will be overridden by body.theme-* if needed */
 :root{
   --bg-soft: #f6f7fb;
 }
 
-/* Background using the variable */
 .bg-app{
   background: var(--bg-soft);
 }
 
-/* THEME: DEFAULT (light) */
 body.theme-default{
   --bg-soft: #f6f7fb;
   color: #212529;
 }
 
-/* THEME: DARK */
 body.theme-dark{
   --bg-soft: #111827;
   color: #e5e7eb;
@@ -47,7 +43,6 @@ body.theme-dark .table{
   color: #e5e7eb;
 }
 
-/* THEME: OCEAN (soft blue) */
 body.theme-ocean{
   --bg-soft: #e6f4ff;
   color: #0f172a;
@@ -59,32 +54,27 @@ body.theme-ocean .navbar{
 
 /* Shared components */
 
-/* Soft “glass” card effect */
 .glass-card{
   background: rgba(255,255,255,0.96);
   backdrop-filter: blur(6px);
   border-radius: 14px;
 }
 
-/* Sidebar card: sticky on the left for logged-in users */
 .sidebar-card{
   background: rgba(255,255,255,0.94);
   backdrop-filter: blur(4px);
   border-radius: 16px;
   position: sticky;
-  top: 1rem; /* distance from top under navbar */
+  top: 1rem;
 
-  /* Make it a flex column so logout can sit at bottom */
   display: flex;
   flex-direction: column;
 }
 
-/* The nav part of the sidebar should grow to fill space */
 .sidebar-nav{
   flex: 1 1 auto;
 }
 
-/* Section header in sidebar (e.g. Προμήθειες, Ρυθμίσεις) */
 .sidebar-section-header{
   font-weight: 600;
   font-size: 0.95rem;
@@ -97,18 +87,15 @@ body.theme-ocean .navbar{
   background-color: #f1f3f5;
 }
 
-/* When the section is open, we just make the text a bit darker/bolder */
 .sidebar-section-header.section-open{
   color: #111827;
 }
 
-/* Small caret on the right side of section header */
 .sidebar-caret{
   font-size: 0.7rem;
   opacity: 0.8;
 }
 
-/* Links inside each section */
 .sidebar-link{
   font-size: 0.9rem;
   border-left: 3px solid transparent;
@@ -119,7 +106,6 @@ body.theme-ocean .navbar{
   background-color: #f1f3f5;
 }
 
-/* Active link: clearly visible and ONLY the active page */
 .sidebar-link.active{
   background-color: #0d6efd;
   color: #fff;
@@ -131,7 +117,6 @@ body.theme-ocean .navbar{
   background-color: #0b5ed7;
 }
 
-/* Sidebar footer with logout link at the bottom */
 .sidebar-footer{
   padding: 0.6rem 0.9rem;
 }
@@ -139,14 +124,13 @@ body.theme-ocean .navbar{
 .sidebar-logout-link{
   font-size: 0.9rem;
   text-decoration: none;
-  color: #dc3545; /* red-ish for logout */
+  color: #dc3545;
 }
 
 .sidebar-logout-link:hover{
   color: #b02a37;
 }
 
-/* Theme option cards on the theme page */
 .theme-option-card{
   cursor: pointer;
 }
@@ -155,32 +139,68 @@ body.theme-ocean .navbar{
   background-color: #f8fafc;
 }
 
-/* Row color rules based on your status/stage priority */
-.row-approval{
-  background: #fff7cc !important; /* light yellow */
-}
-.row-complete{
-  background: #e8f6c2 !important; /* green-yellow */
-}
-.row-cancelled{
-  background: #ffd6d6 !important; /* soft red */
-}
-.row-expense{
-  background: #ffe1b3 !important; /* soft orange */
+/* ------------------------------------------------------------------
+   Procurement lists (wrap + centered)
+   ------------------------------------------------------------------ */
+
+.procurements-table th,
+.procurements-table td{
+  vertical-align: middle;
+  text-align: center;
+  white-space: normal;
+  word-break: break-word;
 }
 
-/* Table polish */
+.procurements-table thead .form-control,
+.procurements-table thead .form-select{
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------
+   Row color rules (Bootstrap-safe)
+   IMPORTANT:
+   - Bootstrap tables apply background on cells (td/th).
+   - Therefore color the cells via `> *`.
+   ------------------------------------------------------------------ */
+
+.row-approval > *{
+  background-color: #fff7cc !important;
+}
+
+.row-complete > *{
+  background-color: #cfe8a9 !important;
+}
+
+.row-cancelled > *{
+  background-color: #ffd6d6 !important;
+}
+
+.row-expense > *{
+  background-color: #ffe1b3 !important;
+}
+
+.row-expense-purple > *{
+  background-color: #efe3ff !important;
+}
+
+/* ✅ Do NOT color the Open button cell */
+.row-approval > td.open-cell,
+.row-complete > td.open-cell,
+.row-cancelled > td.open-cell,
+.row-expense > td.open-cell,
+.row-expense-purple > td.open-cell{
+  background-color: transparent !important;
+}
+
 .table thead th{
   font-size: 0.85rem;
   letter-spacing: 0.2px;
 }
 
-/* Card rounding for consistency */
 .card{
   border-radius: 14px;
 }
 
-/* Footer links with small icons */
 .footer-link{
   color: inherit;
   text-decoration: none;
@@ -196,18 +216,15 @@ body.theme-ocean .navbar{
   justify-content: center;
 }
 
-/* === Φόρμες: labels & inputs στοίχιση, μικρότερα paddings === */
-
-/* Ετικέτες αριστερά σε φόρμες (π.χ. Υπηρεσία, Α/Α, κτλ.) */
+/* === Forms === */
 .col-form-label-sm {
   font-size: 0.85rem;
-  color: #6c757d; /* secondary tone */
+  color: #6c757d;
   padding-top: 0.25rem;
   padding-bottom: 0.25rem;
   margin-bottom: 0;
 }
 
-/* Μικρά inputs / selects πιο “μαζεμένα” */
 .form-control-sm,
 .form-select-sm {
   font-size: 0.85rem;
@@ -215,54 +232,40 @@ body.theme-ocean .navbar{
   padding-bottom: 0.2rem;
 }
 
-/* Λίγο μικρό κενό ανάμεσα στις γραμμές (label + input) */
 .row.align-items-center + .row.align-items-center {
   margin-top: 0.15rem;
 }
 
-/* Μικρά βοηθητικά κείμενα (π.χ. κάτω από ΦΠΑ) */
 .form-text {
   font-size: 0.75rem;
   color: #6c757d;
 }
 
-/* === Πίνακες & κάρτες σύνοψης === */
-
-/* Λίγο πιο “μαλακές” κεφαλίδες σε μικρούς πίνακες */
 .table-sm thead th {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 
-/* Μικρότερο κείμενο στα cells για πίνακες δεδομένων */
 .table-sm tbody td {
   font-size: 0.8rem;
 }
 
-/* Κάρτες σύνοψης (π.χ. σύνολα στο κάτω μέρος) */
 .card.bg-light {
   border-radius: 0.75rem;
 }
 
-/* === Κουμπιά === */
 .btn.btn-sm {
   font-size: 0.8rem;
   padding: 0.15rem 0.4rem;
 }
 
-/* Λίγο πιο “στρογγυλά” κουμπιά */
 .btn-primary,
 .btn-outline-primary,
 .btn-outline-danger,
 .btn-outline-secondary {
   border-radius: 999px;
 }
-
-/* === Layout για footer στο κάτω μέρος === */
-
-/* Για να μπορεί το footer να κάθεται στον πάτο της σελίδας
-   όταν έχουμε λίγο περιεχόμενο: */
 
 html,
 body {
