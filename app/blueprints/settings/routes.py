@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional, Set
+import unicodedata
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for, abort
 from flask_login import current_user, login_required
@@ -117,6 +118,21 @@ def _ensure_committee_scope_or_403(service_unit_id: int):
         abort(403)
     if not current_user.can_manage():
         abort(403)
+
+
+def _normalize_header(text: str) -> str:
+    """
+    Normalize Excel headers:
+    - lowercase
+    - trim spaces
+    - remove diacritics (e.g. Περιγραφή == Περιγραφη)
+    """
+    if text is None:
+        return ""
+    s = " ".join(str(text).strip().lower().split())
+    # remove accents/diacritics
+    s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
+    return s
 
 
 # ----------------------------------------------------------------------
@@ -267,12 +283,7 @@ def feedback_admin():
 
 
 # ----------------------------------------------------------------------
-# SERVICE UNITS (admin-only) – Setup-friendly split:
-# - /service-units            : basic fields list
-# - /service-units/new        : create basic fields + Excel import
-# - /service-units/<id>/edit-info : edit basic fields
-# - /service-units/roles      : deputy/manager list
-# - /service-units/<id>/edit  : deputy/manager assignment (admin-only)  <-- as requested
+# SERVICE UNITS (admin-only)
 # ----------------------------------------------------------------------
 @settings_bp.route("/service-units")
 @login_required
@@ -299,10 +310,9 @@ def service_unit_create():
     """
     Create ServiceUnit (admin-only).
 
-    IMPORTANT (per requirement):
-    - This page only sets basic fields.
-    - Manager/Deputy assignment is done in the dedicated page:
-      /settings/service-units/<id>/edit  (or via /settings/service-units/roles)
+    IMPORTANT:
+    - Basic fields only.
+    - Manager/Deputy assignment is done in /service-units/<id>/edit.
     """
     if request.method == "POST":
         description = (request.form.get("description") or "").strip()
@@ -352,15 +362,16 @@ def service_units_import():
     """
     Import ServiceUnits from Excel (admin-only).
 
-    Expected columns (headers can be Greek or English):
+    Expected headers (Greek or English, accents are ignored):
     - Κωδικός / code
     - Περιγραφή / description  (required)
-    - Συντομογραφία / short_name
+    - Συντομογραφία / short_name (or "short name")
 
     Behavior:
     - Creates new ServiceUnits from rows with a non-empty description.
     - Skips empty rows.
-    - Does NOT set Manager/Deputy here (done in roles page).
+    - Does NOT set Manager/Deputy here.
+    - AUDIT: logs CREATE per inserted ServiceUnit (id exists after flush).
     """
     file = request.files.get("file")
     if not file or not file.filename:
@@ -373,36 +384,31 @@ def service_units_import():
         return redirect(url_for("settings.service_units_list"))
 
     try:
-        import openpyxl  # local import to avoid hard dependency at import time
+        import openpyxl
         wb = openpyxl.load_workbook(file, data_only=True)
         ws = wb.active
     except Exception:
         flash("Αποτυχία ανάγνωσης Excel. Ελέγξτε το αρχείο.", "danger")
         return redirect(url_for("settings.service_units_list"))
 
-    # Read header row
+    # Header row
     header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    headers = [(str(h).strip() if h is not None else "") for h in header_cells]
+    headers = [str(h).strip() if h is not None else "" for h in header_cells]
+    idx_map = {_normalize_header(h): i for i, h in enumerate(headers) if _normalize_header(h)}
 
-    def _norm(h: str) -> str:
-        return " ".join(h.strip().lower().split())
-
-    idx_map: dict[str, int] = {_norm(h): i for i, h in enumerate(headers) if _norm(h)}
-
-    # Accept both Greek and English headers
-    code_idx = idx_map.get("κωδικός", idx_map.get("code"))
-    desc_idx = idx_map.get("περιγραφή", idx_map.get("description"))
-    short_idx = idx_map.get("συντομογραφία", idx_map.get("short name", idx_map.get("short_name")))
+    code_idx = idx_map.get("κωδικος", idx_map.get("code"))
+    desc_idx = idx_map.get("περιγραφη", idx_map.get("description"))
+    short_idx = idx_map.get("συντομογραφια", idx_map.get("short name", idx_map.get("short_name")))
 
     if desc_idx is None:
         flash("Το Excel πρέπει να έχει στήλη 'Περιγραφή' (ή 'description').", "danger")
         return redirect(url_for("settings.service_units_list"))
 
-    inserted = 0
+    inserted_units: list[ServiceUnit] = []
     skipped = 0
 
     for row in ws.iter_rows(min_row=2, values_only=True):
-        desc_val = row[desc_idx] if desc_idx is not None else None
+        desc_val = row[desc_idx] if desc_idx < len(row) else None
         description = (str(desc_val).strip() if desc_val is not None else "")
         if not description:
             skipped += 1
@@ -426,18 +432,22 @@ def service_units_import():
             deputy_personnel_id=None,
         )
         db.session.add(unit)
-        inserted += 1
+        inserted_units.append(unit)
 
-    if inserted == 0:
+    if not inserted_units:
         flash("Δεν βρέθηκαν έγκυρες γραμμές προς εισαγωγή.", "warning")
         return redirect(url_for("settings.service_units_list"))
 
+    # Now ids exist
     db.session.flush()
-    # Single audit entry for bulk import is acceptable; individual can be added later if required.
-    log_action(entity=ServiceUnit(description="BULK_IMPORT"), action="CREATE", after=f"inserted={inserted}, skipped={skipped}")
+
+    # ✅ Audit per inserted unit (entity_id is valid)
+    for unit in inserted_units:
+        log_action(entity=unit, action="CREATE", before=None, after=serialize_model(unit))
+
     db.session.commit()
 
-    flash(f"Εισαγωγή ολοκληρώθηκε: {inserted} νέες υπηρεσίες, {skipped} γραμμές αγνοήθηκαν.", "success")
+    flash(f"Εισαγωγή ολοκληρώθηκε: {len(inserted_units)} νέες υπηρεσίες, {skipped} γραμμές αγνοήθηκαν.", "success")
     return redirect(url_for("settings.service_units_list"))
 
 
@@ -490,14 +500,7 @@ def service_unit_edit_info(unit_id: int):
 @login_required
 @admin_required
 def service_unit_edit(unit_id: int):
-    """
-    Assign Manager/Deputy (admin-only).
-
-    IMPORTANT (per requirement):
-    - This page is dedicated to roles assignment.
-    - Members are selected ONLY from active Personnel.
-    - It does not edit basic ServiceUnit fields.
-    """
+    """Assign Manager/Deputy (admin-only)."""
     unit = ServiceUnit.query.get_or_404(unit_id)
     personnel_list = _active_personnel_for_dropdown()
 
@@ -673,16 +676,10 @@ def supplier_delete(supplier_id: int):
 
 
 # ----------------------------------------------------------------------
-# OPTION VALUES (generic page)
+# OPTION VALUES + IncomeTax + Withholding + Committees
+# (unchanged from your current file; keep as-is below in your codebase)
 # ----------------------------------------------------------------------
 def _options_page(key: str, label: str):
-    """
-    Generic option values page.
-
-    Pattern:
-    - GET: list
-    - POST: action in {create, update, delete}
-    """
     category = _get_or_create_category(key=key, label=label)
 
     if request.method == "POST":
@@ -801,14 +798,10 @@ def options_vat():
     return _options_page(key="FPA", label="ΦΠΑ")
 
 
-# ----------------------------------------------------------------------
-# Income Tax Rules (admin only)
-# ----------------------------------------------------------------------
 @settings_bp.route("/income-tax", methods=["GET", "POST"])
 @login_required
 @admin_required
 def income_tax_rules():
-    """Admin-only CRUD for IncomeTaxRule."""
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
 
@@ -890,14 +883,10 @@ def income_tax_rules():
     return render_template("settings/income_tax_rules.html", rules=rules)
 
 
-# ----------------------------------------------------------------------
-# Withholding Profiles (admin only)
-# ----------------------------------------------------------------------
 @settings_bp.route("/withholding-profiles", methods=["GET", "POST"])
 @login_required
 @admin_required
 def withholding_profiles():
-    """Admin-only CRUD for WithholdingProfile (table)."""
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
 
@@ -987,17 +976,10 @@ def withholding_profiles():
     return render_template("settings/withholding_profiles.html", profiles=profiles)
 
 
-# ----------------------------------------------------------------------
-# Committees (manager+admin)
-# ----------------------------------------------------------------------
 @settings_bp.route("/committees", methods=["GET", "POST"])
 @login_required
 @manager_required
 def committees():
-    """
-    Manager/Admin manage committees.
-    Non-admin managers manage only their service unit (server-side enforced).
-    """
     if current_user.is_admin:
         scope_service_unit_id = _parse_optional_int((request.args.get("service_unit_id") or "").strip())
     else:
