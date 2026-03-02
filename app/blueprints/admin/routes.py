@@ -12,6 +12,15 @@ Enterprise requirements implemented here:
 - Personnel can be assigned to a ServiceUnit (needed for handler filtering)
 - Audit logging for CREATE / UPDATE
 
+NEW:
+- Excel import for Personnel (admin-only).
+  Headers (Greek preferred):
+    - ΑΓΜ (required)
+    - ΟΝΟΜΑ (required)
+    - ΕΠΩΝΥΜΟ (required)
+    - ΑΕΜ, ΒΑΘΜΟΣ, ΕΙΔΙΚΟΤΗΤΑ (optional)
+    - ΥΠΗΡΕΣΙΑ (optional): matches ServiceUnit by code OR short_name OR description
+
 NOTES:
 - UI is never trusted. All validations happen server-side.
 - Audit must be recorded in the same transaction as the data change.
@@ -22,6 +31,7 @@ from __future__ import annotations
 
 from functools import wraps
 from typing import Optional
+import unicodedata
 
 from flask import (
     Blueprint,
@@ -91,6 +101,60 @@ def _validate_service_unit_id(service_unit_id: Optional[int]) -> bool:
     return ServiceUnit.query.get(service_unit_id) is not None
 
 
+def _normalize_header(text: str) -> str:
+    """
+    Normalize Excel headers:
+    - lowercase
+    - trim spaces
+    - remove diacritics (e.g. Περιγραφή == Περιγραφη)
+    """
+    if text is None:
+        return ""
+    s = " ".join(str(text).strip().lower().split())
+    s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
+    return s
+
+
+def _safe_str(v) -> str:
+    """Convert excel cell to trimmed string."""
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _match_service_unit(service_value: str) -> Optional[ServiceUnit]:
+    """
+    Match service unit from a text value.
+
+    Tries (case-insensitive):
+    - code
+    - short_name
+    - description
+    """
+    sv = service_value.strip()
+    if not sv:
+        return None
+
+    # try exact-ish matches in order
+    q = ServiceUnit.query
+    # code match
+    su = q.filter(ServiceUnit.code.isnot(None)).filter(ServiceUnit.code.ilike(sv)).first()
+    if su:
+        return su
+
+    # short_name match
+    su = q.filter(ServiceUnit.short_name.isnot(None)).filter(ServiceUnit.short_name.ilike(sv)).first()
+    if su:
+        return su
+
+    # description match
+    su = q.filter(ServiceUnit.description.ilike(sv)).first()
+    if su:
+        return su
+
+    return None
+
+
 # -------------------------------------------------------
 # PERSONNEL LIST
 # -------------------------------------------------------
@@ -108,6 +172,153 @@ def personnel_list():
     )
 
     return render_template("admin/personnel_list.html", personnel=personnel)
+
+
+# -------------------------------------------------------
+# IMPORT PERSONNEL (EXCEL) - ADMIN ONLY
+# -------------------------------------------------------
+@admin_bp.route("/personnel/import", methods=["POST"])
+@login_required
+@admin_required
+def import_personnel():
+    """
+    Import Personnel from Excel (admin-only).
+
+    Required columns:
+    - ΑΓΜ
+    - ΟΝΟΜΑ
+    - ΕΠΩΝΥΜΟ
+
+    Optional columns:
+    - ΑΕΜ
+    - ΒΑΘΜΟΣ
+    - ΕΙΔΙΚΟΤΗΤΑ
+    - ΥΠΗΡΕΣΙΑ (matches ServiceUnit by code OR short_name OR description)
+
+    Rules:
+    - Skip rows missing required fields
+    - Skip rows with AGM already existing in DB
+    - All imported personnel are is_active=True by default
+    - Audit CREATE per inserted Personnel
+    """
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Δεν επιλέχθηκε αρχείο.", "danger")
+        return redirect(url_for("admin.personnel_list"))
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        flash("Επιτρέπεται μόνο αρχείο .xlsx", "danger")
+        return redirect(url_for("admin.personnel_list"))
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(file, data_only=True)
+        ws = wb.active
+    except Exception:
+        flash("Αποτυχία ανάγνωσης Excel. Ελέγξτε το αρχείο.", "danger")
+        return redirect(url_for("admin.personnel_list"))
+
+    # Header row
+    try:
+        header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    except StopIteration:
+        flash("Το Excel είναι κενό.", "danger")
+        return redirect(url_for("admin.personnel_list"))
+
+    headers = [str(h).strip() if h is not None else "" for h in header_cells]
+    idx_map = {_normalize_header(h): i for i, h in enumerate(headers) if _normalize_header(h)}
+
+    # Greek + fallback english
+    agm_idx = idx_map.get("αγμ", idx_map.get("agm"))
+    first_idx = idx_map.get("ονομα", idx_map.get("first name", idx_map.get("first_name")))
+    last_idx = idx_map.get("επωνυμο", idx_map.get("last name", idx_map.get("last_name")))
+
+    aem_idx = idx_map.get("αεμ", idx_map.get("aem"))
+    rank_idx = idx_map.get("βαθμος", idx_map.get("rank"))
+    spec_idx = idx_map.get("ειδικοτητα", idx_map.get("specialty"))
+    service_idx = idx_map.get("υπηρεσια", idx_map.get("service"))
+
+    if agm_idx is None or first_idx is None or last_idx is None:
+        flash("Το Excel πρέπει να έχει στήλες: ΑΓΜ, ΟΝΟΜΑ, ΕΠΩΝΥΜΟ (1η γραμμή).", "danger")
+        return redirect(url_for("admin.personnel_list"))
+
+    inserted_people: list[Personnel] = []
+    skipped_missing = 0
+    skipped_duplicate = 0
+    skipped_bad_service = 0
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        # Safe indexing
+        def _cell(i: Optional[int]):
+            if i is None:
+                return None
+            if i >= len(row):
+                return None
+            return row[i]
+
+        agm = _safe_str(_cell(agm_idx))
+        first_name = _safe_str(_cell(first_idx))
+        last_name = _safe_str(_cell(last_idx))
+
+        if not agm or not first_name or not last_name:
+            skipped_missing += 1
+            continue
+
+        # Unique AGM
+        if Personnel.query.filter_by(agm=agm).first():
+            skipped_duplicate += 1
+            continue
+
+        aem = _safe_str(_cell(aem_idx)) or None
+        rank = _safe_str(_cell(rank_idx)) or None
+        specialty = _safe_str(_cell(spec_idx)) or None
+
+        service_unit_id = None
+        if service_idx is not None:
+            service_val = _safe_str(_cell(service_idx))
+            if service_val:
+                su = _match_service_unit(service_val)
+                if not su:
+                    skipped_bad_service += 1
+                    continue
+                service_unit_id = su.id
+
+        person = Personnel(
+            agm=agm,
+            aem=aem,
+            rank=rank,
+            specialty=specialty,
+            first_name=first_name,
+            last_name=last_name,
+            is_active=True,
+            service_unit_id=service_unit_id,
+        )
+        db.session.add(person)
+        inserted_people.append(person)
+
+    if not inserted_people:
+        flash(
+            "Δεν εισήχθησαν εγγραφές. "
+            "Ελέγξτε required πεδία/διπλότυπα/Υπηρεσία.",
+            "warning",
+        )
+        return redirect(url_for("admin.personnel_list"))
+
+    db.session.flush()
+
+    for person in inserted_people:
+        log_action(person, "CREATE", before=None, after=serialize_model(person))
+
+    db.session.commit()
+
+    flash(
+        f"Εισαγωγή ολοκληρώθηκε: {len(inserted_people)} νέες εγγραφές. "
+        f"Παραλείφθηκαν: {skipped_missing} (ελλιπή), {skipped_duplicate} (διπλότυπα ΑΓΜ), "
+        f"{skipped_bad_service} (μη έγκυρη Υπηρεσία).",
+        "success",
+    )
+    return redirect(url_for("admin.personnel_list"))
 
 
 # -------------------------------------------------------
@@ -154,7 +365,6 @@ def create_personnel():
             service_unit_id=service_unit_id,
         )
 
-        # Transaction: add -> flush (id exists) -> audit -> commit (once)
         db.session.add(person)
         db.session.flush()
 
@@ -211,7 +421,6 @@ def edit_personnel(personnel_id: int):
             flash("ΑΓΜ, Όνομα και Επώνυμο είναι υποχρεωτικά.", "danger")
             return redirect(url_for("admin.edit_personnel", personnel_id=person.id))
 
-        # AGM unique check excluding self
         existing = Personnel.query.filter(Personnel.agm == agm, Personnel.id != person.id).first()
         if existing:
             flash("Υπάρχει ήδη προσωπικό με αυτό το ΑΓΜ.", "danger")
@@ -221,7 +430,6 @@ def edit_personnel(personnel_id: int):
             flash("Μη έγκυρη υπηρεσία.", "danger")
             return redirect(url_for("admin.edit_personnel", personnel_id=person.id))
 
-        # Apply updates
         person.agm = agm
         person.aem = aem or None
         person.rank = rank or None
@@ -231,7 +439,6 @@ def edit_personnel(personnel_id: int):
         person.service_unit_id = service_unit_id
         person.is_active = is_active
 
-        # Transaction: flush -> audit -> commit (once)
         db.session.flush()
         log_action(person, "UPDATE", before=before_snapshot, after=serialize_model(person))
         db.session.commit()

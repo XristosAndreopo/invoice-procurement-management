@@ -1,14 +1,36 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="d-flex justify-content-between mb-3">
+<div class="d-flex justify-content-between align-items-start align-items-md-center mb-3 flex-column flex-md-row gap-2">
   <div>
     <h1 class="h4 fw-bold mb-1">Προσωπικό Οργανισμού</h1>
     <div class="text-muted small">Διαχείριση προσωπικού και ανάθεση υπηρεσίας.</div>
   </div>
-  <a href="{{ url_for('admin.create_personnel') }}" class="btn btn-primary btn-sm">
-    Νέο Προσωπικό
-  </a>
+
+  <div class="d-flex gap-2 align-items-center flex-wrap">
+    <a href="{{ url_for('admin.create_personnel') }}" class="btn btn-primary btn-sm">
+      Νέο Προσωπικό
+    </a>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-column flex-md-row align-items-start align-items-md-end justify-content-between gap-2">
+      <div class="small text-muted">
+        Excel import: στήλες <span class="fw-semibold">ΑΓΜ</span>, <span class="fw-semibold">ΟΝΟΜΑ</span>, <span class="fw-semibold">ΕΠΩΝΥΜΟ</span>
+        (προαιρετικά: ΑΕΜ, ΒΑΘΜΟΣ, ΕΙΔΙΚΟΤΗΤΑ, ΥΠΗΡΕΣΙΑ).
+      </div>
+
+      <form method="post" action="{{ url_for('admin.import_personnel') }}" enctype="multipart/form-data" class="d-flex gap-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="file" name="file" accept=".xlsx" class="form-control form-control-sm" required>
+        <button class="btn btn-outline-primary btn-sm">
+          Εισαγωγή Excel
+        </button>
+      </form>
+    </div>
+  </div>
 </div>
 
 <div class="card glass-card shadow-sm border-0">
