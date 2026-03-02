@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">CPV</h1>
+    <div class="text-muted small">Admin-only λίστα CPV με δυνατότητα εισαγωγής Excel.</div>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-column flex-md-row align-items-start align-items-md-end justify-content-between gap-2">
+      <div class="small text-muted">
+        Excel headers: <span class="fw-semibold">CPV</span>, ΠΕΡΙΓΡΑΦΗ
+      </div>
+      <form method="post" action="{{ url_for('settings.cpv_import') }}" enctype="multipart/form-data" class="d-flex gap-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="file" name="file" accept=".xlsx" class="form-control form-control-sm" required>
+        <button class="btn btn-outline-primary btn-sm">Εισαγωγή Excel</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <h2 class="h6 fw-bold mb-3">Νέα Εγγραφή</h2>
+
+    <form method="post" action="{{ url_for('settings.cpv') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="create">
+
+      <div class="row g-2">
+        <div class="col-12 col-md-3">
+          <label class="form-label small">CPV *</label>
+          <input name="cpv" class="form-control form-control-sm" required>
+        </div>
+
+        <div class="col-12 col-md-9">
+          <label class="form-label small">ΠΕΡΙΓΡΑΦΗ</label>
+          <input name="description" class="form-control form-control-sm">
+        </div>
+
+        <div class="col-12">
+          <button class="btn btn-primary btn-sm">Προσθήκη</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card glass-card shadow-sm border-0">
+  <div class="card-body">
+    <h2 class="h6 fw-bold mb-3">Υπάρχουσες Εγγραφές</h2>
+
+    {% if rows %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>CPV</th>
+              <th>ΠΕΡΙΓΡΑΦΗ</th>
+              <th class="text-end"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+              <tr>
+                <td style="min-width:220px;">
+                  <form method="post" action="{{ url_for('settings.cpv') }}" class="d-flex gap-2">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="action" value="update">
+                    <input type="hidden" name="id" value="{{ r.id }}">
+                    <input name="cpv" class="form-control form-control-sm" value="{{ r.cpv }}" required>
+                </td>
+                <td style="min-width:520px;">
+                    <input name="description" class="form-control form-control-sm" value="{{ r.description or '' }}">
+                </td>
+                <td class="text-end" style="white-space:nowrap;">
+                    <button class="btn btn-sm btn-outline-primary me-1">Αποθήκευση</button>
+                  </form>
+
+                  <form method="post" action="{{ url_for('settings.cpv') }}" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="id" value="{{ r.id }}">
+                    <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Διαγραφή;');">Διαγραφή</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="small text-muted">Δεν υπάρχουν εγγραφές.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -14,8 +14,13 @@ Enterprise scope:
 - Withholding Profiles (admin-only)
 - Procurement Committees (manager+admin)
 
+NEW:
+- ALE–KAE master list (admin-only) + Excel import
+- CPV master list (admin-only) + Excel import
+
 SECURITY:
 - UI is never trusted. All permissions are enforced server-side.
+- Viewer read-only guard exists globally, but routes still enforce explicit decorators.
 """
 
 from __future__ import annotations
@@ -39,6 +44,8 @@ from ...models import (
     IncomeTaxRule,
     WithholdingProfile,
     ProcurementCommittee,
+    AleKae,
+    Cpv,
 )
 from ...security import admin_required, manager_required
 
@@ -130,9 +137,15 @@ def _normalize_header(text: str) -> str:
     if text is None:
         return ""
     s = " ".join(str(text).strip().lower().split())
-    # remove accents/diacritics
     s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
     return s
+
+
+def _safe_str(v) -> str:
+    """Convert an excel cell to trimmed string (safe)."""
+    if v is None:
+        return ""
+    return str(v).strip()
 
 
 # ----------------------------------------------------------------------
@@ -391,7 +404,6 @@ def service_units_import():
         flash("Αποτυχία ανάγνωσης Excel. Ελέγξτε το αρχείο.", "danger")
         return redirect(url_for("settings.service_units_list"))
 
-    # Header row
     header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
     headers = [str(h).strip() if h is not None else "" for h in header_cells]
     idx_map = {_normalize_header(h): i for i, h in enumerate(headers) if _normalize_header(h)}
@@ -438,10 +450,8 @@ def service_units_import():
         flash("Δεν βρέθηκαν έγκυρες γραμμές προς εισαγωγή.", "warning")
         return redirect(url_for("settings.service_units_list"))
 
-    # Now ids exist
     db.session.flush()
 
-    # ✅ Audit per inserted unit (entity_id is valid)
     for unit in inserted_units:
         log_action(entity=unit, action="CREATE", before=None, after=serialize_model(unit))
 
@@ -676,8 +686,384 @@ def supplier_delete(supplier_id: int):
 
 
 # ----------------------------------------------------------------------
-# OPTION VALUES + IncomeTax + Withholding + Committees
-# (unchanged from your current file; keep as-is below in your codebase)
+# NEW: ALE–KAE (admin-only) + Excel import
+# ----------------------------------------------------------------------
+@settings_bp.route("/ale-kae", methods=["GET", "POST"])
+@login_required
+@admin_required
+def ale_kae():
+    """
+    Admin-only CRUD page for ALE–KAE.
+
+    POST action:
+    - create, update, delete
+    """
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+
+        if action == "create":
+            ale = (request.form.get("ale") or "").strip()
+            old_kae = (request.form.get("old_kae") or "").strip() or None
+            description = (request.form.get("description") or "").strip() or None
+            responsibility = (request.form.get("responsibility") or "").strip() or None
+
+            if not ale:
+                flash("Το ΑΛΕ είναι υποχρεωτικό.", "danger")
+                return redirect(url_for("settings.ale_kae"))
+
+            if AleKae.query.filter_by(ale=ale).first():
+                flash("Υπάρχει ήδη εγγραφή με αυτό το ΑΛΕ.", "danger")
+                return redirect(url_for("settings.ale_kae"))
+
+            row = AleKae(
+                ale=ale,
+                old_kae=old_kae,
+                description=description,
+                responsibility=responsibility,
+            )
+            db.session.add(row)
+            db.session.flush()
+            log_action(entity=row, action="CREATE", before=None, after=serialize_model(row))
+            db.session.commit()
+
+            flash("Η εγγραφή ΑΛΕ-ΚΑΕ προστέθηκε.", "success")
+            return redirect(url_for("settings.ale_kae"))
+
+        if action == "update":
+            rid = _parse_optional_int((request.form.get("id") or "").strip())
+            if rid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(url_for("settings.ale_kae"))
+
+            row = AleKae.query.get_or_404(rid)
+            before = serialize_model(row)
+
+            ale = (request.form.get("ale") or "").strip()
+            old_kae = (request.form.get("old_kae") or "").strip() or None
+            description = (request.form.get("description") or "").strip() or None
+            responsibility = (request.form.get("responsibility") or "").strip() or None
+
+            if not ale:
+                flash("Το ΑΛΕ είναι υποχρεωτικό.", "danger")
+                return redirect(url_for("settings.ale_kae"))
+
+            exists = AleKae.query.filter(AleKae.ale == ale, AleKae.id != row.id).first()
+            if exists:
+                flash("Υπάρχει ήδη άλλη εγγραφή με αυτό το ΑΛΕ.", "danger")
+                return redirect(url_for("settings.ale_kae"))
+
+            row.ale = ale
+            row.old_kae = old_kae
+            row.description = description
+            row.responsibility = responsibility
+
+            db.session.flush()
+            log_action(entity=row, action="UPDATE", before=before, after=serialize_model(row))
+            db.session.commit()
+
+            flash("Η εγγραφή ενημερώθηκε.", "success")
+            return redirect(url_for("settings.ale_kae"))
+
+        if action == "delete":
+            rid = _parse_optional_int((request.form.get("id") or "").strip())
+            if rid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(url_for("settings.ale_kae"))
+
+            row = AleKae.query.get_or_404(rid)
+            before = serialize_model(row)
+
+            db.session.delete(row)
+            db.session.flush()
+            log_action(entity=row, action="DELETE", before=before, after=None)
+            db.session.commit()
+
+            flash("Η εγγραφή διαγράφηκε.", "success")
+            return redirect(url_for("settings.ale_kae"))
+
+        flash("Μη έγκυρη ενέργεια.", "danger")
+        return redirect(url_for("settings.ale_kae"))
+
+    rows = AleKae.query.order_by(AleKae.ale.asc()).all()
+    return render_template("settings/ale_kae.html", rows=rows)
+
+
+@settings_bp.route("/ale-kae/import", methods=["POST"])
+@login_required
+@admin_required
+def ale_kae_import():
+    """
+    Admin-only Excel import for ALE–KAE.
+
+    Headers (Greek preferred, accents ignored):
+    - ΑΛΕ (required)
+    - ΠΑΛΙΟΣ ΚΑΕ
+    - ΠΕΡΙΓΡΑΦΗ
+    - ΑΡΜΟΔΙΟΤΗΤΑΣ
+    """
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Δεν επιλέχθηκε αρχείο.", "danger")
+        return redirect(url_for("settings.ale_kae"))
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        flash("Επιτρέπεται μόνο αρχείο .xlsx", "danger")
+        return redirect(url_for("settings.ale_kae"))
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(file, data_only=True)
+        ws = wb.active
+    except Exception:
+        flash("Αποτυχία ανάγνωσης Excel. Ελέγξτε το αρχείο.", "danger")
+        return redirect(url_for("settings.ale_kae"))
+
+    try:
+        header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    except StopIteration:
+        flash("Το Excel είναι κενό.", "danger")
+        return redirect(url_for("settings.ale_kae"))
+
+    headers = [str(h).strip() if h is not None else "" for h in header_cells]
+    idx_map = {_normalize_header(h): i for i, h in enumerate(headers) if _normalize_header(h)}
+
+    ale_idx = idx_map.get("αλε", idx_map.get("ale"))
+    old_kae_idx = idx_map.get("παλιος καε", idx_map.get("old kae", idx_map.get("old_kae")))
+    desc_idx = idx_map.get("περιγραφη", idx_map.get("description"))
+    resp_idx = idx_map.get("αρμοδιοτητας", idx_map.get("responsibility"))
+
+    if ale_idx is None:
+        flash("Το Excel πρέπει να έχει στήλη 'ΑΛΕ'.", "danger")
+        return redirect(url_for("settings.ale_kae"))
+
+    inserted: list[AleKae] = []
+    skipped_missing = 0
+    skipped_duplicate = 0
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        def _cell(i: Optional[int]):
+            if i is None or i >= len(row):
+                return None
+            return row[i]
+
+        ale = _safe_str(_cell(ale_idx))
+        if not ale:
+            skipped_missing += 1
+            continue
+
+        if AleKae.query.filter_by(ale=ale).first():
+            skipped_duplicate += 1
+            continue
+
+        obj = AleKae(
+            ale=ale,
+            old_kae=_safe_str(_cell(old_kae_idx)) or None,
+            description=_safe_str(_cell(desc_idx)) or None,
+            responsibility=_safe_str(_cell(resp_idx)) or None,
+        )
+        db.session.add(obj)
+        inserted.append(obj)
+
+    if not inserted:
+        flash("Δεν εισήχθησαν εγγραφές. Ελέγξτε required πεδία/διπλότυπα.", "warning")
+        return redirect(url_for("settings.ale_kae"))
+
+    db.session.flush()
+    for obj in inserted:
+        log_action(entity=obj, action="CREATE", before=None, after=serialize_model(obj))
+    db.session.commit()
+
+    flash(
+        f"Εισαγωγή ολοκληρώθηκε: {len(inserted)} νέες εγγραφές. "
+        f"Παραλείφθηκαν: {skipped_missing} (ελλιπή), {skipped_duplicate} (διπλότυπα).",
+        "success",
+    )
+    return redirect(url_for("settings.ale_kae"))
+
+
+# ----------------------------------------------------------------------
+# NEW: CPV (admin-only) + Excel import
+# ----------------------------------------------------------------------
+@settings_bp.route("/cpv", methods=["GET", "POST"])
+@login_required
+@admin_required
+def cpv():
+    """
+    Admin-only CRUD page for CPV.
+
+    POST action:
+    - create, update, delete
+    """
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+
+        if action == "create":
+            cpv_code = (request.form.get("cpv") or "").strip()
+            description = (request.form.get("description") or "").strip() or None
+
+            if not cpv_code:
+                flash("Το CPV είναι υποχρεωτικό.", "danger")
+                return redirect(url_for("settings.cpv"))
+
+            if Cpv.query.filter_by(cpv=cpv_code).first():
+                flash("Υπάρχει ήδη εγγραφή με αυτό το CPV.", "danger")
+                return redirect(url_for("settings.cpv"))
+
+            obj = Cpv(cpv=cpv_code, description=description)
+            db.session.add(obj)
+            db.session.flush()
+            log_action(entity=obj, action="CREATE", before=None, after=serialize_model(obj))
+            db.session.commit()
+
+            flash("Η εγγραφή CPV προστέθηκε.", "success")
+            return redirect(url_for("settings.cpv"))
+
+        if action == "update":
+            rid = _parse_optional_int((request.form.get("id") or "").strip())
+            if rid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(url_for("settings.cpv"))
+
+            obj = Cpv.query.get_or_404(rid)
+            before = serialize_model(obj)
+
+            cpv_code = (request.form.get("cpv") or "").strip()
+            description = (request.form.get("description") or "").strip() or None
+
+            if not cpv_code:
+                flash("Το CPV είναι υποχρεωτικό.", "danger")
+                return redirect(url_for("settings.cpv"))
+
+            exists = Cpv.query.filter(Cpv.cpv == cpv_code, Cpv.id != obj.id).first()
+            if exists:
+                flash("Υπάρχει ήδη άλλη εγγραφή με αυτό το CPV.", "danger")
+                return redirect(url_for("settings.cpv"))
+
+            obj.cpv = cpv_code
+            obj.description = description
+
+            db.session.flush()
+            log_action(entity=obj, action="UPDATE", before=before, after=serialize_model(obj))
+            db.session.commit()
+
+            flash("Η εγγραφή ενημερώθηκε.", "success")
+            return redirect(url_for("settings.cpv"))
+
+        if action == "delete":
+            rid = _parse_optional_int((request.form.get("id") or "").strip())
+            if rid is None:
+                flash("Μη έγκυρη εγγραφή.", "danger")
+                return redirect(url_for("settings.cpv"))
+
+            obj = Cpv.query.get_or_404(rid)
+            before = serialize_model(obj)
+
+            db.session.delete(obj)
+            db.session.flush()
+            log_action(entity=obj, action="DELETE", before=before, after=None)
+            db.session.commit()
+
+            flash("Η εγγραφή διαγράφηκε.", "success")
+            return redirect(url_for("settings.cpv"))
+
+        flash("Μη έγκυρη ενέργεια.", "danger")
+        return redirect(url_for("settings.cpv"))
+
+    rows = Cpv.query.order_by(Cpv.cpv.asc()).all()
+    return render_template("settings/cpv.html", rows=rows)
+
+
+@settings_bp.route("/cpv/import", methods=["POST"])
+@login_required
+@admin_required
+def cpv_import():
+    """
+    Admin-only Excel import for CPV.
+
+    Headers (Greek preferred, accents ignored):
+    - CPV (required)
+    - ΠΕΡΙΓΡΑΦΗ
+    """
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Δεν επιλέχθηκε αρχείο.", "danger")
+        return redirect(url_for("settings.cpv"))
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        flash("Επιτρέπεται μόνο αρχείο .xlsx", "danger")
+        return redirect(url_for("settings.cpv"))
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(file, data_only=True)
+        ws = wb.active
+    except Exception:
+        flash("Αποτυχία ανάγνωσης Excel. Ελέγξτε το αρχείο.", "danger")
+        return redirect(url_for("settings.cpv"))
+
+    try:
+        header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    except StopIteration:
+        flash("Το Excel είναι κενό.", "danger")
+        return redirect(url_for("settings.cpv"))
+
+    headers = [str(h).strip() if h is not None else "" for h in header_cells]
+    idx_map = {_normalize_header(h): i for i, h in enumerate(headers) if _normalize_header(h)}
+
+    cpv_idx = idx_map.get("cpv")
+    desc_idx = idx_map.get("περιγραφη", idx_map.get("description"))
+
+    if cpv_idx is None:
+        flash("Το Excel πρέπει να έχει στήλη 'CPV'.", "danger")
+        return redirect(url_for("settings.cpv"))
+
+    inserted: list[Cpv] = []
+    skipped_missing = 0
+    skipped_duplicate = 0
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        def _cell(i: Optional[int]):
+            if i is None or i >= len(row):
+                return None
+            return row[i]
+
+        cpv_code = _safe_str(_cell(cpv_idx))
+        if not cpv_code:
+            skipped_missing += 1
+            continue
+
+        if Cpv.query.filter_by(cpv=cpv_code).first():
+            skipped_duplicate += 1
+            continue
+
+        obj = Cpv(
+            cpv=cpv_code,
+            description=_safe_str(_cell(desc_idx)) or None,
+        )
+        db.session.add(obj)
+        inserted.append(obj)
+
+    if not inserted:
+        flash("Δεν εισήχθησαν εγγραφές. Ελέγξτε required πεδία/διπλότυπα.", "warning")
+        return redirect(url_for("settings.cpv"))
+
+    db.session.flush()
+    for obj in inserted:
+        log_action(entity=obj, action="CREATE", before=None, after=serialize_model(obj))
+    db.session.commit()
+
+    flash(
+        f"Εισαγωγή ολοκληρώθηκε: {len(inserted)} νέες εγγραφές. "
+        f"Παραλείφθηκαν: {skipped_missing} (ελλιπή), {skipped_duplicate} (διπλότυπα).",
+        "success",
+    )
+    return redirect(url_for("settings.cpv"))
+
+
+# ----------------------------------------------------------------------
+# OPTION VALUES + IncomeTax + Withholding + Committees (unchanged)
 # ----------------------------------------------------------------------
 def _options_page(key: str, label: str):
     category = _get_or_create_category(key=key, label=label)

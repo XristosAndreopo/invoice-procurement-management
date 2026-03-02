@@ -1,11 +1,15 @@
 # C:\Users\xrist\vs code projects\Invoice Management System\app\models.py
 """
-Invoice Management System – Enterprise Domain Models (V4)
+Invoice Management System – Enterprise Domain Models (V4.2)
 
 Includes existing V3+ models and adds enterprise master-data for:
 - Income Tax Rules (Φόρος Εισοδήματος / Α/Α 2 description source)
 - Withholding Profiles (Κρατήσεις υπέρ δημοσίου multi-column)
 - Procurement Committees (ανά ServiceUnit, managed by Manager/Admin)
+
+NEW (V4.2):
+- ALE–KAE directory (Admin-only master list)
+- CPV directory (Admin-only master list)
 
 Procurement enhancements:
 - income_tax_rule_id (drives Α/Α 2 description + FE calculation)
@@ -241,7 +245,58 @@ class OptionValue(db.Model):
 
 
 # ---------------------------------------------------------------------
-# Enterprise master-data (NEW)
+# NEW: Admin-only master lists (ALE–KAE, CPV)
+# ---------------------------------------------------------------------
+class AleKae(db.Model):
+    """
+    ALE–KAE master directory (Admin-only).
+
+    Columns:
+    - ale (unique)
+    - old_kae
+    - description
+    - responsibility
+    """
+
+    __tablename__ = "ale_kae"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    ale = db.Column(db.String(80), nullable=False, unique=True, index=True)
+    old_kae = db.Column(db.String(80), nullable=True, index=True)
+    description = db.Column(db.Text, nullable=True)
+    responsibility = db.Column(db.String(255), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    def __repr__(self) -> str:
+        return f"<AleKae {self.ale}>"
+
+
+class Cpv(db.Model):
+    """
+    CPV master directory (Admin-only).
+
+    Columns:
+    - cpv (unique)
+    - description
+    """
+
+    __tablename__ = "cpv"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    cpv = db.Column(db.String(50), nullable=False, unique=True, index=True)
+    description = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    def __repr__(self) -> str:
+        return f"<Cpv {self.cpv}>"
+
+
+# ---------------------------------------------------------------------
+# Enterprise master-data (existing)
 # ---------------------------------------------------------------------
 class IncomeTaxRule(db.Model):
     """
@@ -258,13 +313,8 @@ class IncomeTaxRule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
 
     description = db.Column(db.String(255), nullable=False, unique=True, index=True)
-
-    # Stored as percent (e.g. 8.00). Normalized in calculations.
     rate_percent = db.Column(db.Numeric(6, 2), nullable=False, default=Decimal("0.00"))
-
-    # Threshold pre-VAT amount (e.g. 150.00)
     threshold_amount = db.Column(db.Numeric(12, 2), nullable=False, default=Decimal("150.00"))
-
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
@@ -274,13 +324,8 @@ class WithholdingProfile(db.Model):
     """
     Withholding profile (Κρατήσεις υπέρ δημοσίου).
 
-    Fields are stored as percent values:
-    - mt_eloa_percent (e.g. 6.00)
-    - eadhsy_percent (e.g. 0.10)
-    - withholding1_percent, withholding2_percent (reserved for future use)
-
     IMPORTANT:
-    - 0.10 means 0.10% (not 10%).
+    - stored values are percent values (0.10 means 0.10%).
     """
 
     __tablename__ = "withholding_profiles"
@@ -295,7 +340,6 @@ class WithholdingProfile(db.Model):
     withholding2_percent = db.Column(db.Numeric(6, 2), nullable=False, default=Decimal("0.00"))
 
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
-
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     @property
@@ -354,7 +398,6 @@ class ProcurementCommittee(db.Model):
     )
 
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
-
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     service_unit = db.relationship("ServiceUnit", backref=db.backref("committees", lazy=True))
@@ -477,10 +520,8 @@ class Procurement(db.Model):
     status = db.Column(db.String(80), index=True)
     stage = db.Column(db.String(80), index=True)
 
-    # legacy free text
     handler = db.Column(db.String(255), index=True)
 
-    # handler as Personnel FK (preferred)
     handler_personnel_id = db.Column(
         db.Integer,
         db.ForeignKey("personnel.id", ondelete="SET NULL"),
@@ -489,7 +530,6 @@ class Procurement(db.Model):
     )
     handler_personnel = db.relationship("Personnel", foreign_keys=[handler_personnel_id])
 
-    # AA 2 description source (Income Tax Rule)
     income_tax_rule_id = db.Column(
         db.Integer,
         db.ForeignKey("income_tax_rules.id", ondelete="SET NULL"),
@@ -498,7 +538,6 @@ class Procurement(db.Model):
     )
     income_tax_rule = db.relationship("IncomeTaxRule", foreign_keys=[income_tax_rule_id])
 
-    # Withholding selection (table profile)
     withholding_profile_id = db.Column(
         db.Integer,
         db.ForeignKey("withholding_profiles.id", ondelete="SET NULL"),
@@ -507,7 +546,6 @@ class Procurement(db.Model):
     )
     withholding_profile = db.relationship("WithholdingProfile", foreign_keys=[withholding_profile_id])
 
-    # Committee selection (service-specific) – selected in implementation phase
     committee_id = db.Column(
         db.Integer,
         db.ForeignKey("procurement_committees.id", ondelete="SET NULL"),
@@ -524,7 +562,6 @@ class Procurement(db.Model):
     vat_amount = db.Column(db.Numeric(12, 2))
     grand_total = db.Column(db.Numeric(12, 2))
 
-    # ΗΩΠ workflow fields
     hop_commitment = db.Column(db.String(50), nullable=True, index=True)
     hop_forward1_commitment = db.Column(db.String(50), nullable=True, index=True)
     hop_forward2_commitment = db.Column(db.String(50), nullable=True, index=True)
@@ -536,14 +573,13 @@ class Procurement(db.Model):
 
     aay = db.Column(db.String(50), nullable=True, index=True)
 
-    # Implementation phase fields
-    adam_aay = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΑΑΥ
-    ada_aay = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑ ΑΑΥ
-    adam_prosklisis = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΠΡΟΣΚΛΗΣΗΣ
-    adam_apofasis_anathesis = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΑΠΟΦΑΣΗΣ ΑΝΑΘΕΣΗΣ
-    contract_number = db.Column(db.String(100), nullable=True, index=True)  # ΑΡΙΘΜΟΣ ΣΥΜΒΑΣΗΣ
-    adam_contract = db.Column(db.String(100), nullable=True, index=True)  # ΑΔΑΜ ΣΥΜΒΑΣΗΣ
-    protocol_number = db.Column(db.String(100), nullable=True, index=True)  # ΑΡΙΘΜΟΣ ΠΡΩΤΟΚΟΛΛΟΥ
+    adam_aay = db.Column(db.String(100), nullable=True, index=True)
+    ada_aay = db.Column(db.String(100), nullable=True, index=True)
+    adam_prosklisis = db.Column(db.String(100), nullable=True, index=True)
+    adam_apofasis_anathesis = db.Column(db.String(100), nullable=True, index=True)
+    contract_number = db.Column(db.String(100), nullable=True, index=True)
+    adam_contract = db.Column(db.String(100), nullable=True, index=True)
+    protocol_number = db.Column(db.String(100), nullable=True, index=True)
 
     procurement_notes = db.Column(db.Text, nullable=True)
 
@@ -589,12 +625,7 @@ class Procurement(db.Model):
 
     @property
     def winner_supplier_afm(self) -> str | None:
-        """
-        Winner supplier AFM (separate column use).
-
-        IMPORTANT:
-        - UI requires AFM as its own field in procurement lists.
-        """
+        """Winner supplier AFM (separate column use)."""
         for link in self.supplies_links or []:
             if link.is_winner and link.supplier:
                 return link.supplier.afm
@@ -602,12 +633,7 @@ class Procurement(db.Model):
 
     @property
     def winner_supplier_name(self) -> str | None:
-        """
-        Winner supplier Name (separate column use).
-
-        IMPORTANT:
-        - UI requires only the supplier's name in "Μειοδότης" column.
-        """
+        """Winner supplier name (separate column use)."""
         for link in self.supplies_links or []:
             if link.is_winner and link.supplier:
                 return link.supplier.name
@@ -615,14 +641,12 @@ class Procurement(db.Model):
 
     @property
     def handler_display(self):
-        """Preferred handler display (Personnel). Falls back to legacy handler string."""
         if self.handler_personnel:
             return self.handler_personnel.full_name()
         return self.handler or None
 
     @property
     def aa2_description(self) -> str | None:
-        """Α/Α 2 description derived from selected IncomeTaxRule."""
         if self.income_tax_rule and self.income_tax_rule.description:
             return self.income_tax_rule.description
         return None
@@ -647,17 +671,7 @@ class Procurement(db.Model):
         self.vat_amount = vat
         self.grand_total = _money(self.sum_total + vat)
 
-    # -----------------------------
-    # Enterprise payment breakdown
-    # -----------------------------
     def compute_public_withholdings(self) -> dict:
-        """
-        Compute public withholdings breakdown based on selected WithholdingProfile.
-
-        IMPORTANT:
-        - WithholdingProfile percent fields are ALWAYS percents (0.10 means 0.10%).
-        - Therefore we must always convert by dividing by 100.
-        """
         base = _to_decimal(self.sum_total)
         profile = self.withholding_profile
 
@@ -694,12 +708,6 @@ class Procurement(db.Model):
         }
 
     def compute_income_tax(self) -> dict:
-        """
-        Compute income tax (ΦΕ) based on selected IncomeTaxRule and threshold.
-
-        Formula per requirement:
-          FE = (SumTotal - PublicWithholdingsTotal) * rate%
-        """
         base_total = _to_decimal(self.sum_total)
         withh = self.compute_public_withholdings()
         after_withholdings = _money(base_total - _to_decimal(withh["total_amount"]))
@@ -735,9 +743,6 @@ class Procurement(db.Model):
         }
 
     def compute_payment_analysis(self) -> dict:
-        """
-        Full payment analysis required by UX.
-        """
         sum_total = _to_decimal(self.sum_total)
         public_withh = self.compute_public_withholdings()
         income_tax = self.compute_income_tax()
@@ -757,7 +762,6 @@ class Procurement(db.Model):
             "sum_total": _money(sum_total),
             "public_withholdings": public_withh,
             "income_tax": income_tax,
-            # For UI: always show percent number (24.00) even if stored as 0.24
             "vat_percent": _display_percent(vat_pct_raw),
             "vat_amount": _money(vat_amount),
             "payable_total": _money(payable),

@@ -72,8 +72,8 @@ NAV_SECTIONS = [
             {"label": "Επιτροπές Προμηθειών", "endpoint": "settings.committees", "admin_only": False},
 
             # NEW master data (placeholders until implemented)
-            {"label": "ΑΛΕ-ΚΑΕ", "endpoint": None, "admin_only": True, "disabled": True},
-            {"label": "CPV", "endpoint": None, "admin_only": True, "disabled": True},
+            {"label": "ΑΛΕ-ΚΑΕ", "endpoint": "settings.ale_kae", "admin_only": True},
+            {"label": "CPV", "endpoint": "settings.cpv", "admin_only": True},
 
             # -------------------------
             # ΟΡΓΑΝΙΣΜΟΣ
