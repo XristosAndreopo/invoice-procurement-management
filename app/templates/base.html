@@ -27,8 +27,8 @@ IMPORTANT: block "content" is defined only once at the bottom.
     rel="stylesheet"
   >
 
-  <!-- Custom app styles (cache-busted) -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='2026-03-02') }}">
+  <!-- Custom app styles -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body class="bg-app {% if current_user.is_authenticated %}theme-{{ current_user.theme or 'default' }}{% else %}theme-default{% endif %} d-flex flex-column min-vh-100">
 
@@ -75,9 +75,10 @@ IMPORTANT: block "content" is defined only once at the bottom.
             {% for section in nav_sections %}
               {% set section_id = 'nav-section-' ~ loop.index %}
 
+              {# Determine if this section is active based on current endpoint. #}
               {% set ns = namespace(active=false) %}
               {% for item in section["items"] %}
-                {% if request.endpoint == item["endpoint"] %}
+                {% if item.get("endpoint") and request.endpoint == item["endpoint"] %}
                   {% set ns.active = true %}
                 {% endif %}
               {% endfor %}
@@ -99,12 +100,31 @@ IMPORTANT: block "content" is defined only once at the bottom.
                   class="collapse {% if ns.active %}show{% endif %}"
                 >
                   {% for item in section["items"] %}
-                    <a
-                      class="list-group-item list-group-item-action ps-4 sidebar-link {% if request.endpoint == item['endpoint'] %}active{% endif %}"
-                      href="{{ url_for(item['endpoint']) }}"
-                    >
-                      {{ item["label"] }}
-                    </a>
+                    {# Sub-header grouping inside the section #}
+                    {% if item.get("type") == "header" %}
+                      <div class="list-group-item sidebar-section-header py-2 ps-4"
+                           style="cursor: default; background: transparent; font-size: 0.82rem; opacity: 0.8; text-decoration: underline;">
+                        {{ item["label"] }}
+                      </div>
+                    {% else %}
+                      {% set has_endpoint = item.get("endpoint") %}
+                      {% set is_active_link = has_endpoint and (request.endpoint == item["endpoint"]) %}
+                      {% set is_disabled = (not has_endpoint) or item.get("disabled", False) %}
+
+                      {% if is_disabled %}
+                        <div class="list-group-item ps-4 sidebar-link"
+                             style="opacity:0.55; cursor:not-allowed;">
+                          {{ item["label"] }}
+                        </div>
+                      {% else %}
+                        <a
+                          class="list-group-item list-group-item-action ps-4 sidebar-link {% if is_active_link %}active{% endif %}"
+                          href="{{ url_for(item['endpoint']) }}"
+                        >
+                          {{ item["label"] }}
+                        </a>
+                      {% endif %}
+                    {% endif %}
                   {% endfor %}
                 </div>
               </div>
@@ -121,12 +141,15 @@ IMPORTANT: block "content" is defined only once at the bottom.
         </div>
       </aside>
 
+      {# MAIN CONTENT COLUMN (for logged-in users) #}
       {% set content_col_classes = "col-12 col-md-9 col-lg-10" %}
     {% else %}
+      {# If not logged in, main content takes full width #}
       {% set content_col_classes = "col-12" %}
     {% endif %}
 
     <section class="{{ content_col_classes }}">
+      {# Flash messages (always shown above content) #}
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
           <div class="mb-3">
@@ -140,6 +163,7 @@ IMPORTANT: block "content" is defined only once at the bottom.
         {% endif %}
       {% endwith %}
 
+      {# SINGLE content block used by child templates #}
       {% block content %}{% endblock %}
     </section>
   </div>

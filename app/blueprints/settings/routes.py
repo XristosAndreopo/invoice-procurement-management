@@ -7,21 +7,15 @@ Enterprise scope:
 - Theme selection (all logged-in users)
 - Feedback form (all logged-in users)
 - Feedback admin (admin-only)
-- ServiceUnits CRUD (admin-only)  <-- REQUIRED by existing templates
-- Suppliers CRUD (admin-only)     <-- REQUIRED by existing templates
+- ServiceUnits CRUD (admin-only)
+- Suppliers CRUD (admin-only)
 - OptionValue pages (enterprise dropdown master data)
-- NEW enterprise pages:
-  - Income Tax Rules (Φόρος Εισοδήματος) (admin-only)
-  - Withholding Profiles table (Κρατήσεις - Πίνακας) (admin-only)
-  - Procurement Committees per ServiceUnit (manager+admin)
+- Income Tax Rules (admin-only)
+- Withholding Profiles (admin-only)
+- Procurement Committees (manager+admin)
 
 SECURITY:
 - UI is never trusted. All permissions are enforced server-side.
-- Viewer read-only guard exists globally, but we still enforce explicit decorators here.
-
-AUDIT:
-- Master-data changes are audited via app/audit.py.
-  Pattern: db.session.flush() -> log_action(...) -> db.session.commit()
 """
 
 from __future__ import annotations
@@ -153,7 +147,7 @@ def theme():
 
 
 # ----------------------------------------------------------------------
-# FEEDBACK / COMPLAINT (all users)
+# FEEDBACK (all users)
 # ----------------------------------------------------------------------
 @settings_bp.route("/feedback", methods=["GET", "POST"])
 @login_required
@@ -222,7 +216,6 @@ def feedback_admin():
         "closed": "Κλειστό",
     }
 
-    # Category labels used by template (must be passed)
     category_labels: Dict[Optional[str], str] = {
         "complaint": "Παράπονο",
         "suggestion": "Πρόταση",
@@ -231,7 +224,6 @@ def feedback_admin():
         None: "—",
     }
 
-    # Filters (GET)
     status_filter = (request.args.get("status") or "").strip() or None
     category_filter = (request.args.get("category") or "").strip() or None
 
@@ -273,25 +265,45 @@ def feedback_admin():
         category_filter=category_filter,
     )
 
+
 # ----------------------------------------------------------------------
-# SERVICE UNITS CRUD (admin only) - REQUIRED endpoints for templates
+# SERVICE UNITS (admin-only) – Setup-friendly split:
+# - /service-units            : basic fields list
+# - /service-units/new        : create basic fields + Excel import
+# - /service-units/<id>/edit-info : edit basic fields
+# - /service-units/roles      : deputy/manager list
+# - /service-units/<id>/edit  : deputy/manager assignment (admin-only)  <-- as requested
 # ----------------------------------------------------------------------
 @settings_bp.route("/service-units")
 @login_required
 @admin_required
 def service_units_list():
-    """List ServiceUnits (admin-only)."""
+    """List ServiceUnits basic info (admin-only)."""
     units = ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
     return render_template("settings/service_units_list.html", units=units)
+
+
+@settings_bp.route("/service-units/roles")
+@login_required
+@admin_required
+def service_units_roles_list():
+    """List ServiceUnits with Manager/Deputy (admin-only)."""
+    units = ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
+    return render_template("settings/service_units_roles_list.html", units=units)
 
 
 @settings_bp.route("/service-units/new", methods=["GET", "POST"])
 @login_required
 @admin_required
 def service_unit_create():
-    """Create ServiceUnit (admin-only). Endpoint name required by templates."""
-    personnel_list = _active_personnel_for_dropdown()
+    """
+    Create ServiceUnit (admin-only).
 
+    IMPORTANT (per requirement):
+    - This page only sets basic fields.
+    - Manager/Deputy assignment is done in the dedicated page:
+      /settings/service-units/<id>/edit  (or via /settings/service-units/roles)
+    """
     if request.method == "POST":
         description = (request.form.get("description") or "").strip()
         code = (request.form.get("code") or "").strip()
@@ -301,23 +313,8 @@ def service_unit_create():
         curator = (request.form.get("curator") or "").strip()
         supply_officer = (request.form.get("supply_officer") or "").strip()
 
-        manager_pid = _parse_optional_int((request.form.get("manager_personnel_id") or "").strip())
-        deputy_pid = _parse_optional_int((request.form.get("deputy_personnel_id") or "").strip())
-
         if not description:
             flash("Η περιγραφή είναι υποχρεωτική.", "danger")
-            return redirect(url_for("settings.service_unit_create"))
-
-        if manager_pid and deputy_pid and manager_pid == deputy_pid:
-            flash("Ο ίδιος/η ίδια δεν μπορεί να είναι και Manager και Deputy.", "danger")
-            return redirect(url_for("settings.service_unit_create"))
-
-        active_ids: Set[int] = {p.id for p in personnel_list}
-        if manager_pid and manager_pid not in active_ids:
-            flash("Μη έγκυρος Manager. Επιτρέπεται μόνο ενεργό προσωπικό.", "danger")
-            return redirect(url_for("settings.service_unit_create"))
-        if deputy_pid and deputy_pid not in active_ids:
-            flash("Μη έγκυρος Deputy. Επιτρέπεται μόνο ενεργό προσωπικό.", "danger")
             return redirect(url_for("settings.service_unit_create"))
 
         unit = ServiceUnit(
@@ -328,8 +325,8 @@ def service_unit_create():
             commander=commander or None,
             curator=curator or None,
             supply_officer=supply_officer or None,
-            manager_personnel_id=manager_pid,
-            deputy_personnel_id=deputy_pid,
+            manager_personnel_id=None,
+            deputy_personnel_id=None,
         )
 
         db.session.add(unit)
@@ -340,16 +337,116 @@ def service_unit_create():
         flash("Η υπηρεσία δημιουργήθηκε.", "success")
         return redirect(url_for("settings.service_units_list"))
 
-    return render_template("settings/service_unit_form.html", unit=None, personnel_list=personnel_list)
+    return render_template(
+        "settings/service_unit_form.html",
+        unit=None,
+        form_title="Νέα Υπηρεσία",
+        is_create=True,
+    )
 
 
-@settings_bp.route("/service-units/<int:unit_id>/edit", methods=["GET", "POST"])
+@settings_bp.route("/service-units/import", methods=["POST"])
 @login_required
 @admin_required
-def service_unit_edit(unit_id: int):
-    """Edit ServiceUnit (admin-only)."""
+def service_units_import():
+    """
+    Import ServiceUnits from Excel (admin-only).
+
+    Expected columns (headers can be Greek or English):
+    - Κωδικός / code
+    - Περιγραφή / description  (required)
+    - Συντομογραφία / short_name
+
+    Behavior:
+    - Creates new ServiceUnits from rows with a non-empty description.
+    - Skips empty rows.
+    - Does NOT set Manager/Deputy here (done in roles page).
+    """
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Δεν επιλέχθηκε αρχείο.", "danger")
+        return redirect(url_for("settings.service_units_list"))
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        flash("Επιτρέπεται μόνο αρχείο .xlsx", "danger")
+        return redirect(url_for("settings.service_units_list"))
+
+    try:
+        import openpyxl  # local import to avoid hard dependency at import time
+        wb = openpyxl.load_workbook(file, data_only=True)
+        ws = wb.active
+    except Exception:
+        flash("Αποτυχία ανάγνωσης Excel. Ελέγξτε το αρχείο.", "danger")
+        return redirect(url_for("settings.service_units_list"))
+
+    # Read header row
+    header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    headers = [(str(h).strip() if h is not None else "") for h in header_cells]
+
+    def _norm(h: str) -> str:
+        return " ".join(h.strip().lower().split())
+
+    idx_map: dict[str, int] = {_norm(h): i for i, h in enumerate(headers) if _norm(h)}
+
+    # Accept both Greek and English headers
+    code_idx = idx_map.get("κωδικός", idx_map.get("code"))
+    desc_idx = idx_map.get("περιγραφή", idx_map.get("description"))
+    short_idx = idx_map.get("συντομογραφία", idx_map.get("short name", idx_map.get("short_name")))
+
+    if desc_idx is None:
+        flash("Το Excel πρέπει να έχει στήλη 'Περιγραφή' (ή 'description').", "danger")
+        return redirect(url_for("settings.service_units_list"))
+
+    inserted = 0
+    skipped = 0
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        desc_val = row[desc_idx] if desc_idx is not None else None
+        description = (str(desc_val).strip() if desc_val is not None else "")
+        if not description:
+            skipped += 1
+            continue
+
+        code = None
+        if code_idx is not None and code_idx < len(row):
+            v = row[code_idx]
+            code = (str(v).strip() if v is not None else "") or None
+
+        short_name = None
+        if short_idx is not None and short_idx < len(row):
+            v = row[short_idx]
+            short_name = (str(v).strip() if v is not None else "") or None
+
+        unit = ServiceUnit(
+            description=description,
+            code=code,
+            short_name=short_name,
+            manager_personnel_id=None,
+            deputy_personnel_id=None,
+        )
+        db.session.add(unit)
+        inserted += 1
+
+    if inserted == 0:
+        flash("Δεν βρέθηκαν έγκυρες γραμμές προς εισαγωγή.", "warning")
+        return redirect(url_for("settings.service_units_list"))
+
+    db.session.flush()
+    # Single audit entry for bulk import is acceptable; individual can be added later if required.
+    log_action(entity=ServiceUnit(description="BULK_IMPORT"), action="CREATE", after=f"inserted={inserted}, skipped={skipped}")
+    db.session.commit()
+
+    flash(f"Εισαγωγή ολοκληρώθηκε: {inserted} νέες υπηρεσίες, {skipped} γραμμές αγνοήθηκαν.", "success")
+    return redirect(url_for("settings.service_units_list"))
+
+
+@settings_bp.route("/service-units/<int:unit_id>/edit-info", methods=["GET", "POST"])
+@login_required
+@admin_required
+def service_unit_edit_info(unit_id: int):
+    """Edit ServiceUnit basic fields (admin-only)."""
     unit = ServiceUnit.query.get_or_404(unit_id)
-    personnel_list = _active_personnel_for_dropdown()
 
     if request.method == "POST":
         before = serialize_model(unit)
@@ -362,12 +459,53 @@ def service_unit_edit(unit_id: int):
         curator = (request.form.get("curator") or "").strip()
         supply_officer = (request.form.get("supply_officer") or "").strip()
 
-        manager_pid = _parse_optional_int((request.form.get("manager_personnel_id") or "").strip())
-        deputy_pid = _parse_optional_int((request.form.get("deputy_personnel_id") or "").strip())
-
         if not description:
             flash("Η περιγραφή είναι υποχρεωτική.", "danger")
-            return redirect(url_for("settings.service_unit_edit", unit_id=unit_id))
+            return redirect(url_for("settings.service_unit_edit_info", unit_id=unit_id))
+
+        unit.description = description
+        unit.code = code or None
+        unit.short_name = short_name or None
+        unit.aahit = aahit or None
+        unit.commander = commander or None
+        unit.curator = curator or None
+        unit.supply_officer = supply_officer or None
+
+        db.session.flush()
+        log_action(entity=unit, action="UPDATE", before=before, after=serialize_model(unit))
+        db.session.commit()
+
+        flash("Η υπηρεσία ενημερώθηκε.", "success")
+        return redirect(url_for("settings.service_units_list"))
+
+    return render_template(
+        "settings/service_unit_form.html",
+        unit=unit,
+        form_title="Επεξεργασία Υπηρεσίας",
+        is_create=False,
+    )
+
+
+@settings_bp.route("/service-units/<int:unit_id>/edit", methods=["GET", "POST"])
+@login_required
+@admin_required
+def service_unit_edit(unit_id: int):
+    """
+    Assign Manager/Deputy (admin-only).
+
+    IMPORTANT (per requirement):
+    - This page is dedicated to roles assignment.
+    - Members are selected ONLY from active Personnel.
+    - It does not edit basic ServiceUnit fields.
+    """
+    unit = ServiceUnit.query.get_or_404(unit_id)
+    personnel_list = _active_personnel_for_dropdown()
+
+    if request.method == "POST":
+        before = serialize_model(unit)
+
+        manager_pid = _parse_optional_int((request.form.get("manager_personnel_id") or "").strip())
+        deputy_pid = _parse_optional_int((request.form.get("deputy_personnel_id") or "").strip())
 
         if manager_pid and deputy_pid and manager_pid == deputy_pid:
             flash("Ο ίδιος/η ίδια δεν μπορεί να είναι και Manager και Deputy.", "danger")
@@ -381,13 +519,6 @@ def service_unit_edit(unit_id: int):
             flash("Μη έγκυρος Deputy. Επιτρέπεται μόνο ενεργό προσωπικό.", "danger")
             return redirect(url_for("settings.service_unit_edit", unit_id=unit_id))
 
-        unit.description = description
-        unit.code = code or None
-        unit.short_name = short_name or None
-        unit.aahit = aahit or None
-        unit.commander = commander or None
-        unit.curator = curator or None
-        unit.supply_officer = supply_officer or None
         unit.manager_personnel_id = manager_pid
         unit.deputy_personnel_id = deputy_pid
 
@@ -395,10 +526,15 @@ def service_unit_edit(unit_id: int):
         log_action(entity=unit, action="UPDATE", before=before, after=serialize_model(unit))
         db.session.commit()
 
-        flash("Η υπηρεσία ενημερώθηκε.", "success")
-        return redirect(url_for("settings.service_units_list"))
+        flash("Οι ρόλοι Manager/Deputy ενημερώθηκαν.", "success")
+        return redirect(url_for("settings.service_units_roles_list"))
 
-    return render_template("settings/service_unit_form.html", unit=unit, personnel_list=personnel_list)
+    return render_template(
+        "settings/service_unit_roles_form.html",
+        unit=unit,
+        personnel_list=personnel_list,
+        form_title="Ορισμός Deputy/Manager",
+    )
 
 
 @settings_bp.route("/service-units/<int:unit_id>/delete", methods=["POST"])
@@ -419,7 +555,7 @@ def service_unit_delete(unit_id: int):
 
 
 # ----------------------------------------------------------------------
-# SUPPLIERS CRUD (admin only) - REQUIRED endpoints for templates
+# SUPPLIERS CRUD (admin only)
 # ----------------------------------------------------------------------
 @settings_bp.route("/suppliers")
 @login_required
@@ -471,7 +607,7 @@ def supplier_create():
         flash("Ο προμηθευτής δημιουργήθηκε.", "success")
         return redirect(url_for("settings.suppliers_list"))
 
-    return render_template("settings/supplier_form.html", supplier=None)
+    return render_template("settings/supplier_form.html", supplier=None, form_title="Νέος Προμηθευτής")
 
 
 @settings_bp.route("/suppliers/<int:supplier_id>/edit", methods=["GET", "POST"])
@@ -516,7 +652,7 @@ def supplier_edit(supplier_id: int):
         flash("Ο προμηθευτής ενημερώθηκε.", "success")
         return redirect(url_for("settings.suppliers_list"))
 
-    return render_template("settings/supplier_form.html", supplier=supplier)
+    return render_template("settings/supplier_form.html", supplier=supplier, form_title="Επεξεργασία Προμηθευτή")
 
 
 @settings_bp.route("/suppliers/<int:supplier_id>/delete", methods=["POST"])
@@ -666,7 +802,7 @@ def options_vat():
 
 
 # ----------------------------------------------------------------------
-# NEW: Income Tax Rules (admin only)
+# Income Tax Rules (admin only)
 # ----------------------------------------------------------------------
 @settings_bp.route("/income-tax", methods=["GET", "POST"])
 @login_required
@@ -755,7 +891,7 @@ def income_tax_rules():
 
 
 # ----------------------------------------------------------------------
-# NEW: Withholding Profiles (admin only)
+# Withholding Profiles (admin only)
 # ----------------------------------------------------------------------
 @settings_bp.route("/withholding-profiles", methods=["GET", "POST"])
 @login_required
@@ -852,7 +988,7 @@ def withholding_profiles():
 
 
 # ----------------------------------------------------------------------
-# NEW: Committees per ServiceUnit (manager+admin)
+# Committees (manager+admin)
 # ----------------------------------------------------------------------
 @settings_bp.route("/committees", methods=["GET", "POST"])
 @login_required

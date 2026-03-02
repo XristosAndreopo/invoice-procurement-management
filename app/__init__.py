@@ -9,9 +9,9 @@ Enterprise requirements:
 - UI is never trusted; server-side access control is enforced.
 
 Navigation:
-- Sidebar contains exactly 2 sections:
+- Sidebar contains:
   1) Προμήθειες
-  2) Διαχείριση
+  2) Ρυθμίσεις (with grouped headings)
 Items are filtered for visibility, BUT all permissions are enforced server-side.
 """
 
@@ -53,36 +53,52 @@ NAV_SECTIONS = [
         ],
     },
     {
-        "key": "management",
-        "label": "Διαχείριση",
+        "key": "settings",
+        "label": "Ρυθμίσεις",
         "auth_required": True,
         "items": [
-            # --- Admin-only master data ---
-            {"label": "Προσωπικό", "endpoint": "admin.personnel_list", "admin_only": True},
-            {"label": "Χρήστες", "endpoint": "users.list_users", "admin_only": True},
-            {"label": "Υπηρεσίες", "endpoint": "settings.service_units_list", "admin_only": True},
+            # -------------------------
+            # ΔΕΔΟΜΕΝΑ
+            # -------------------------
+            {"type": "header", "label": "Δεδομένα"},
             {"label": "Προμηθευτές", "endpoint": "settings.suppliers_list", "admin_only": True},
-
-            # --- Option lists (Admin-only) ---
             {"label": "Κατάσταση", "endpoint": "settings.options_status", "admin_only": True},
             {"label": "Στάδιο", "endpoint": "settings.options_stage", "admin_only": True},
             {"label": "Κατανομή", "endpoint": "settings.options_allocation", "admin_only": True},
             {"label": "Τριμηνιαία", "endpoint": "settings.options_quarterly", "admin_only": True},
             {"label": "ΦΠΑ", "endpoint": "settings.options_vat", "admin_only": True},
-
-            # --- NEW Admin-only enterprise master data ---
             {"label": "Φόρος Εισοδήματος", "endpoint": "settings.income_tax_rules", "admin_only": True},
-            {"label": "Κρατήσεις (Πίνακας)", "endpoint": "settings.withholding_profiles", "admin_only": True},
-
-            # --- Committees per service unit (Manager + Admin) ---
+            {"label": "Κρατήσεις", "endpoint": "settings.withholding_profiles", "admin_only": True},
             {"label": "Επιτροπές Προμηθειών", "endpoint": "settings.committees", "admin_only": False},
 
-            # --- User utilities (All users) ---
-            {"label": "Θέμα Εμφάνισης", "endpoint": "settings.theme", "admin_only": False},
-            {"label": "Παράπονα/Αναφορά", "endpoint": "settings.feedback", "admin_only": False},
+            # NEW master data (placeholders until implemented)
+            {"label": "ΑΛΕ-ΚΑΕ", "endpoint": None, "admin_only": True, "disabled": True},
+            {"label": "CPV", "endpoint": None, "admin_only": True, "disabled": True},
 
-            # --- Feedback management (Admin-only) ---
-            {"label": "Διαχείριση Παραπόνων", "endpoint": "settings.feedback_admin", "admin_only": True},
+            # -------------------------
+            # ΟΡΓΑΝΙΣΜΟΣ
+            # -------------------------
+            {"type": "header", "label": "Οργανισμός"},
+            {"label": "Υπηρεσίες", "endpoint": "settings.service_units_list", "admin_only": True},
+            {"label": "Προσωπικό", "endpoint": "admin.personnel_list", "admin_only": True},
+
+            # ✅ Now implemented
+            {"label": "Ορισμός Deputy/Manager", "endpoint": "settings.service_units_roles_list", "admin_only": True},
+
+            {"label": "Χρήστες", "endpoint": "users.list_users", "admin_only": True},
+
+            # -------------------------
+            # ΠΑΡΑΠΟΝΑ / ΠΡΟΤΑΣΕΙΣ
+            # -------------------------
+            {"type": "header", "label": "Παράπονα/Προτάσεις"},
+            {"label": "Παράπονα/Προτάσεις", "endpoint": "settings.feedback", "admin_only": False},
+            {"label": "Διαχείριση Παραπόνων/Προτάσεων", "endpoint": "settings.feedback_admin", "admin_only": True},
+
+            # -------------------------
+            # ΛΟΙΠΕΣ ΡΥΘΜΙΣΕΙΣ
+            # -------------------------
+            {"type": "header", "label": "Λοιπές Ρυθμίσεις"},
+            {"label": "Θέμα Εμφάνισης", "endpoint": "settings.theme", "admin_only": False},
         ],
     },
 ]
@@ -153,29 +169,64 @@ def create_app() -> Flask:
         """
         visible_sections = []
 
+        def _is_item_visible(item: dict) -> bool:
+            """Visibility filtering for a single nav item."""
+            if item.get("type") == "header":
+                return True
+
+            if item.get("admin_only", False):
+                if not (current_user.is_authenticated and current_user.is_admin):
+                    return False
+
+            endpoint = item.get("endpoint")
+
+            # Committees: allowed for manager+admin (visibility only)
+            if endpoint == "settings.committees":
+                return bool(
+                    current_user.is_authenticated
+                    and (current_user.is_admin or current_user.can_manage())
+                )
+
+            return True
+
         for section in NAV_SECTIONS:
             if section.get("auth_required", False) and not current_user.is_authenticated:
                 continue
 
-            visible_items = []
-            for item in section.get("items", []):
-                if item.get("admin_only", False):
-                    if not (current_user.is_authenticated and current_user.is_admin):
-                        continue
+            section_items = section.get("items", [])
+            built_items: list[dict] = []
 
-                # Committees: allowed for manager+admin
-                if item["endpoint"] == "settings.committees":
-                    if not (
-                        current_user.is_authenticated
-                        and (current_user.is_admin or current_user.can_manage())
-                    ):
-                        continue
+            current_header: dict | None = None
+            current_group: list[dict] = []
 
-                visible_items.append(item)
+            def _flush_group():
+                nonlocal current_header, current_group, built_items
+                if current_header is None:
+                    built_items.extend(current_group)
+                else:
+                    if any(i.get("type") != "header" for i in current_group):
+                        built_items.append(current_header)
+                        built_items.extend(current_group)
+                current_header = None
+                current_group = []
 
-            if visible_items:
+            for item in section_items:
+                if item.get("type") == "header":
+                    _flush_group()
+                    current_header = item
+                    current_group = []
+                    continue
+
+                if not _is_item_visible(item):
+                    continue
+
+                current_group.append(item)
+
+            _flush_group()
+
+            if built_items:
                 visible_sections.append(
-                    {"key": section["key"], "label": section["label"], "items": visible_items}
+                    {"key": section["key"], "label": section["label"], "items": built_items}
                 )
 
         return {"config": app.config, "nav_sections": visible_sections}
