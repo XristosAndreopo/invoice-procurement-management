@@ -1,28 +1,18 @@
 # C:\Users\xrist\vs code projects\Invoice Management System\app\models.py
 """
-Invoice Management System – Enterprise Domain Models (V4.2)
+Invoice Management System – Enterprise Domain Models (V4.3)
 
-Includes existing V3+ models and adds enterprise master-data for:
-- Income Tax Rules (Φόρος Εισοδήματος / Α/Α 2 description source)
-- Withholding Profiles (Κρατήσεις υπέρ δημοσίου multi-column)
-- Procurement Committees (ανά ServiceUnit, managed by Manager/Admin)
+Includes existing V4.2 models and adds enterprise fields required by reports.
 
-NEW (V4.2):
-- ALE–KAE directory (Admin-only master list)
-- CPV directory (Admin-only master list)
-
-Procurement enhancements:
-- income_tax_rule_id (drives Α/Α 2 description + FE calculation)
-- withholding_profile_id (drives κρατήσεις selection + breakdown)
-- committee_id (service-specific committee selection)
-
-NEW (V4.1) – Procurement implementation phase fields:
-- adam_aay, ada_aay
-- adam_prosklisis, adam_apofasis_anathesis
-- contract_number, adam_contract, protocol_number
+NEW (V4.3):
+- ServiceUnit.address (Διεύθυνση) and ServiceUnit.phone (Τηλέφωνο)
+  Required for reports (e.g., Προτιμολόγιο header).
+- Supplier.email and Supplier.emba (ΕΜΠΑ)
+  Required for reports (winner supplier section).
 
 IMPORTANT:
 - UI is never trusted. Any selection must be validated server-side in routes.
+- These fields are safe nullable to avoid breaking existing data.
 """
 
 from __future__ import annotations
@@ -440,6 +430,10 @@ class ServiceUnit(db.Model):
     curator = db.Column(db.String(255))
     supply_officer = db.Column(db.String(255))
 
+    # NEW (V4.3): required for report headers (nullable for backward compatibility)
+    address = db.Column(db.String(255), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
+
     manager_personnel_id = db.Column(
         db.Integer,
         db.ForeignKey("personnel.id", ondelete="SET NULL"),
@@ -479,6 +473,10 @@ class Supplier(db.Model):
 
     afm = db.Column(db.String(9), nullable=False, unique=True, index=True)
     name = db.Column(db.String(255), nullable=False)
+
+    # NEW (V4.3): required for reports
+    email = db.Column(db.String(255), nullable=True)
+    emba = db.Column(db.String(255), nullable=True)
 
     address = db.Column(db.String(255))
     city = db.Column(db.String(100))
@@ -637,6 +635,18 @@ class Procurement(db.Model):
         for link in self.supplies_links or []:
             if link.is_winner and link.supplier:
                 return link.supplier.name
+        return None
+
+    def winner_supplier_obj(self) -> "Supplier | None":
+        """
+        Return Supplier instance for winner (if any).
+
+        SECURITY NOTE:
+        - This is a convenience for server-side rendering (reports).
+        """
+        for link in self.supplies_links or []:
+            if link.is_winner and link.supplier:
+                return link.supplier
         return None
 
     @property

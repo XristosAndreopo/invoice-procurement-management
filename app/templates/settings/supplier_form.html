@@ -21,10 +21,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <div class="row g-3">
-        <!-- Αριστερή στήλη: πεδία προμηθευτή -->
         <div class="col-12 col-lg-8">
 
-          <!-- ΑΦΜ -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Α.Φ.Μ.</label>
             <div class="col-8">
@@ -37,7 +35,6 @@
             </div>
           </div>
 
-          <!-- Επωνυμία -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Επωνυμία *</label>
             <div class="col-8">
@@ -49,7 +46,31 @@
             </div>
           </div>
 
-          <!-- Διεύθυνση -->
+          <!-- NEW: Email + EMBA (required by reports) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Email</label>
+            <div class="col-8">
+              <input type="email"
+                     name="email"
+                     class="form-control form-control-sm"
+                     placeholder="supplier@example.com"
+                     value="{{ supplier.email if supplier and supplier.email is not none else '' }}">
+              <div class="form-text">Χρησιμοποιείται στο Προτιμολόγιο (Στοιχεία Αναδόχου).</div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΕΜΠΑ</label>
+            <div class="col-8">
+              <input type="text"
+                     name="emba"
+                     class="form-control form-control-sm"
+                     placeholder="ΕΜΠΑ (text)"
+                     value="{{ supplier.emba if supplier and supplier.emba is not none else '' }}">
+              <div class="form-text">Χρησιμοποιείται στο Προτιμολόγιο (Στοιχεία Αναδόχου).</div>
+            </div>
+          </div>
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Διεύθυνση</label>
             <div class="col-8">
@@ -60,7 +81,6 @@
             </div>
           </div>
 
-          <!-- Τόπος -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τόπος</label>
             <div class="col-8">
@@ -71,7 +91,6 @@
             </div>
           </div>
 
-          <!-- Τ.Κ. -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τ.Κ.</label>
             <div class="col-8">
@@ -82,7 +101,6 @@
             </div>
           </div>
 
-          <!-- Χώρα -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Χώρα</label>
             <div class="col-8">
@@ -93,7 +111,6 @@
             </div>
           </div>
 
-          <!-- Τράπεζα -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τράπεζα</label>
             <div class="col-8">
@@ -104,7 +121,6 @@
             </div>
           </div>
 
-          <!-- IBAN -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">IBAN</label>
             <div class="col-8">
@@ -116,7 +132,6 @@
           </div>
         </div>
 
-        <!-- Δεξιά στήλη: πληροφοριακό κείμενο -->
         <div class="col-12 col-lg-4">
           <div class="card bg-light border-0 h-100">
             <div class="card-body py-3 small">
@@ -128,7 +143,7 @@
               </p>
               <p class="mb-0 text-muted">
                 Τα στοιχεία αυτά χρησιμοποιούνται στις φόρμες προμηθειών
-                και στις μελλοντικές αναφορές (π.χ. προτιμολόγια, πρωτόκολλα).
+                και στα reports (π.χ. Προτιμολόγιο).
               </p>
             </div>
           </div>

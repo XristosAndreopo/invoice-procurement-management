@@ -1,0 +1,443 @@
+"""
+app/reports/proforma_invoice.py
+
+Report generator: Προτιμολόγιο (Proforma Invoice) -> PDF bytes (ReportLab).
+
+WHY REPORTLAB:
+- Avoids WeasyPrint/GTK native dependencies on Windows.
+- Pure-Python PDF generation suitable for enterprise deployment.
+
+LAYOUT (per agreed spec):
+A) Header: 2 columns (PN + Winner Supplier) with fixed/dynamic fields
+B) Lines table (MaterialLine 1..N)
+C) Payment analysis (sum_total, withholdings, income tax, vat, payable)
+D) Justifications list (always + conditional thresholds >1500, >2500 based on sum_total pre-VAT)
+
+SECURITY:
+- This module performs no DB access.
+- Caller must enforce access control.
+
+FONTS (Greek support):
+- ReportLab standard fonts are not Unicode-complete for Greek.
+- We attempt to register a TrueType font from common Windows paths (Arial).
+- If no TTF is found, it falls back to Helvetica (Greek may not render correctly).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+
+@dataclass(frozen=True)
+class ProformaConstants:
+    """Fixed constants required by the report spec."""
+    pn_afm: str = "090153025"
+    pn_doy: str = "ΚΕΦΟΔΕ ΑΤΤΙΚΗΣ"
+    reference_goods: str = "ΒΤ-11-1"
+
+
+def _safe_str(v: Any, default: str = "—") -> str:
+    """Safe display string."""
+    s = (str(v).strip() if v is not None else "")
+    return s if s else default
+
+
+def _fmt_money(value: Any) -> str:
+    """Format money with 2 decimals and €."""
+    try:
+        d = Decimal(str(value))
+    except Exception:
+        return "0,00 €"
+    # Use comma as decimal separator in display
+    s = f"{d:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{s} €"
+
+
+def _fmt_number(value: Any) -> str:
+    """Format numeric with up to 2 decimals (for quantity/price)."""
+    try:
+        d = Decimal(str(value))
+    except Exception:
+        return "0"
+    # Keep 2 decimals for consistency
+    s = f"{d:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return s
+
+
+def _register_greek_font_if_possible() -> str:
+    """
+    Try to register a font that supports Greek.
+
+    Returns the font name to use.
+    """
+    # If already registered, reuse.
+    for candidate_name in ("AppGreek", "ArialGreek", "DejaVuGreek"):
+        if candidate_name in pdfmetrics.getRegisteredFontNames():
+            return candidate_name
+
+    candidates: list[tuple[str, Path]] = []
+
+    # Windows common fonts (Arial supports Greek)
+    win_fonts = Path(r"C:\Windows\Fonts")
+    candidates.extend(
+        [
+            ("ArialGreek", win_fonts / "arial.ttf"),
+            ("ArialGreek", win_fonts / "arialbd.ttf"),
+            ("ArialGreek", win_fonts / "arialuni.ttf"),  # may exist in some setups
+        ]
+    )
+
+    # Linux common DejaVu (useful in deployment)
+    candidates.extend(
+        [
+            ("DejaVuGreek", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")),
+            ("DejaVuGreek", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")),
+        ]
+    )
+
+    for name, path in candidates:
+        try:
+            if path.exists():
+                pdfmetrics.registerFont(TTFont(name, str(path)))
+                return name
+        except Exception:
+            continue
+
+    # Fallback (may not render Greek properly, but keeps PDF generation working)
+    return "Helvetica"
+
+
+def build_proforma_invoice_pdf(
+    *,
+    procurement: Any,
+    service_unit: Any,
+    winner: Any,
+    analysis: Dict[str, Any],
+    table_title: str,
+    constants: Optional[ProformaConstants] = None,
+) -> bytes:
+    """
+    Build 'Προτιμολόγιο' PDF.
+
+    Args:
+        procurement: Procurement instance (already loaded with materials + links)
+        service_unit: ServiceUnit instance (may be None)
+        winner: Supplier instance for winner (may be None)
+        analysis: result from procurement.compute_payment_analysis()
+        table_title: centered title above lines table
+        constants: ProformaConstants (optional)
+
+    Returns:
+        PDF bytes.
+    """
+    c = constants or ProformaConstants()
+
+    font_name = _register_greek_font_if_possible()
+
+    styles = getSampleStyleSheet()
+    base = ParagraphStyle(
+        "Base",
+        parent=styles["Normal"],
+        fontName=font_name,
+        fontSize=10,
+        leading=12,
+        textColor=colors.black,
+    )
+    base_small = ParagraphStyle(
+        "BaseSmall",
+        parent=base,
+        fontSize=9,
+        leading=11,
+        textColor=colors.black,
+    )
+    title_style = ParagraphStyle(
+        "Title",
+        parent=base,
+        fontSize=14,
+        leading=16,
+        alignment=1,  # center
+        spaceAfter=6,
+    )
+    section_style = ParagraphStyle(
+        "Section",
+        parent=base,
+        fontSize=10,
+        leading=12,
+        spaceBefore=6,
+        spaceAfter=4,
+    )
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=14 * mm,
+        rightMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title="Προτιμολόγιο",
+        author="Invoice / Procurement Management System",
+    )
+
+    story = []
+
+    story.append(Paragraph("ΠΡΟΤΙΜΟΛΟΓΙΟ", title_style))
+    story.append(Spacer(1, 6))
+
+    # -----------------------------
+    # Header: 2 boxes (PN / Winner)
+    # -----------------------------
+    pn_lines = [
+        Paragraph("<b>ΣΤΟΙΧΕΙΑ ΠΟΛΕΜΙΚΟΥ ΝΑΥΤΙΚΟΥ</b>", section_style),
+        Paragraph(
+            f"<b>ΕΠΩΝΥΜΙΑ:</b> ΠΟΛΕΜΙΚΟ ΝΑΥΤΙΚΟ - {_safe_str(getattr(service_unit, 'description', None), default='')}",
+            base,
+        ),
+        Paragraph(f"<b>ΔΙΕΥΘΥΝΣΗ:</b> {_safe_str(getattr(service_unit, 'address', None))}", base),
+        Paragraph(f"<b>ΤΗΛΕΦΩΝΟ:</b> {_safe_str(getattr(service_unit, 'phone', None))}", base),
+        Paragraph(f"<b>ΑΦΜ:</b> {c.pn_afm}", base),
+        Paragraph(f"<b>ΔΟΥ:</b> {c.pn_doy}", base),
+        Spacer(1, 6),
+        Paragraph(
+            f"<b>ΑΡΙΘΜΟΣ ΑΑΗΤ:</b> {_safe_str(getattr(service_unit, 'aahit', None))}",
+            base,
+        ),
+        Spacer(1, 6),
+        Paragraph(f"<b>ΣΤΟΙΧΕΙΟ ΑΝΑΦΟΡΑΣ ΑΓΑΘΟΥ:</b> {c.reference_goods}", base),
+    ]
+
+    winner_lines = [
+        Paragraph("<b>ΣΤΟΙΧΕΙΑ ΑΝΑΔΟΧΟΥ ΦΟΡΕΑ</b>", section_style),
+        Paragraph(f"<b>ΕΠΩΝΥΜΙΑ:</b> {_safe_str(getattr(winner, 'name', None))}", base),
+        Paragraph(f"<b>ΑΦΜ:</b> {_safe_str(getattr(winner, 'afm', None))}", base),
+        Paragraph(f"<b>EMAIL:</b> {_safe_str(getattr(winner, 'email', None))}", base),
+        Paragraph(f"<b>ΕΜΠΑ:</b> {_safe_str(getattr(winner, 'emba', None))}", base),
+        Spacer(1, 6),
+        Paragraph(f"<b>ΔΙΕΥΘΥΝΣΗ:</b> {_safe_str(getattr(winner, 'address', None))}", base),
+        Paragraph(f"<b>ΠΟΛΗ:</b> {_safe_str(getattr(winner, 'city', None))}", base),
+        Paragraph(f"<b>Τ.Κ.:</b> {_safe_str(getattr(winner, 'postal_code', None))}", base),
+        Paragraph(f"<b>ΧΩΡΑ:</b> {_safe_str(getattr(winner, 'country', None))}", base),
+    ]
+
+    header_table = Table(
+        [
+            [
+                Table([[x] for x in pn_lines], colWidths=[88 * mm]),
+                Table([[x] for x in winner_lines], colWidths=[88 * mm]),
+            ]
+        ],
+        colWidths=[92 * mm, 92 * mm],
+    )
+    header_table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BOX", (0, 0), (0, 0), 1, colors.black),
+                ("BOX", (1, 0), (1, 0), 1, colors.black),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(header_table)
+    story.append(Spacer(1, 10))
+
+    # -----------------------------
+    # Meta
+    # -----------------------------
+    meta = [
+        Paragraph(f"<b>Προμήθεια:</b> #{_safe_str(getattr(procurement, 'id', None))} &nbsp;&nbsp; "
+                  f"<b>Α/Α:</b> {_safe_str(getattr(procurement, 'serial_no', None))}", base),
+        Paragraph(f"<b>Σύντομη Περιγραφή:</b> {_safe_str(getattr(procurement, 'description', None))}", base),
+        Paragraph(f"<b>ΑΛΕ:</b> {_safe_str(getattr(procurement, 'ale', None))}", base),
+    ]
+    for m in meta:
+        story.append(m)
+    story.append(Spacer(1, 10))
+
+    story.append(Paragraph(f"<b>{_safe_str(table_title, default='')}</b>", ParagraphStyle(
+        "CenterBold",
+        parent=base,
+        alignment=1,
+        spaceAfter=6,
+    )))
+
+    # -----------------------------
+    # Lines table
+    # -----------------------------
+    line_rows = []
+    headers = ["Α/Α", "ΠΕΡΙΓΡΑΦΗ", "CPV", "Μ/Μ", "ΠΟΣΟΤΗΤΑ", "ΤΙΜ. ΜΟΝ.", "ΣΥΝΟΛΟ"]
+    line_rows.append([Paragraph(f"<b>{h}</b>", base_small) for h in headers])
+
+    materials = list(getattr(procurement, "materials", []) or [])
+    if materials:
+        for idx, line in enumerate(materials, start=1):
+            total_pre_vat = getattr(line, "total_pre_vat", None)
+            # total_pre_vat is property; safe call
+            try:
+                total_val = total_pre_vat if total_pre_vat is not None else Decimal("0.00")
+            except Exception:
+                total_val = Decimal("0.00")
+
+            line_rows.append(
+                [
+                    Paragraph(str(idx), base_small),
+                    Paragraph(_safe_str(getattr(line, "description", None), default=""), base_small),
+                    Paragraph(_safe_str(getattr(line, "cpv", None)), base_small),
+                    Paragraph(_safe_str(getattr(line, "unit", None)), base_small),
+                    Paragraph(_fmt_number(getattr(line, "quantity", None)), base_small),
+                    Paragraph(_fmt_number(getattr(line, "unit_price", None)), base_small),
+                    Paragraph(_fmt_money(total_val), base_small),
+                ]
+            )
+    else:
+        line_rows.append([Paragraph("—", base_small)] + [Paragraph("Δεν υπάρχουν γραμμές υλικών/υπηρεσιών.", base_small)] + [Paragraph("—", base_small)] * 5)
+
+    lines_table = Table(
+        line_rows,
+        colWidths=[12 * mm, 70 * mm, 18 * mm, 16 * mm, 18 * mm, 20 * mm, 22 * mm],
+        repeatRows=1,
+    )
+    lines_table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f1f1")),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (0, 1), (0, -1), "CENTER"),  # A/A
+                ("ALIGN", (2, 1), (3, -1), "CENTER"),  # cpv/unit
+                ("ALIGN", (4, 1), (6, -1), "RIGHT"),   # qty/price/total
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    story.append(lines_table)
+    story.append(Spacer(1, 12))
+
+    # -----------------------------
+    # Analysis table
+    # -----------------------------
+    story.append(Paragraph("<b>ΑΝΑΛΥΣΗ ΔΑΠΑΝΗΣ</b>", section_style))
+
+    pw = analysis.get("public_withholdings") or {}
+    it = analysis.get("income_tax") or {}
+
+    analysis_rows = []
+    analysis_rows.append([Paragraph("<b>ΠΙΣΤΩΣΗ ΧΩΡΙΣ ΦΠΑ</b>", base), Paragraph(f"<b>{_fmt_money(analysis.get('sum_total'))}</b>", base)])
+    analysis_rows.append(
+        [
+            Paragraph(f"<b>ΚΡΑΤΗΣΕΙΣ ΥΠΕΡ ΔΗΜΟΣΙΟΥ</b> ({_safe_str(pw.get('total_percent'), default='0.00')}%)", base),
+            Paragraph(f"<b>{_fmt_money(pw.get('total_amount'))}</b>", base),
+        ]
+    )
+
+    items = pw.get("items") or []
+    if items:
+        for item in items:
+            analysis_rows.append(
+                [
+                    Paragraph(f"— { _safe_str(item.get('label'), default='') } ({_safe_str(item.get('percent'), default='0.00')}%)", base_small),
+                    Paragraph(_fmt_money(item.get("amount")), base_small),
+                ]
+            )
+    else:
+        analysis_rows.append([Paragraph("— (Δεν υπάρχουν επιλεγμένες κρατήσεις)", base_small), Paragraph("0,00 €", base_small)])
+
+    analysis_rows.append(
+        [
+            Paragraph(f"<b>ΦΟΡΟΣ ΕΙΣΟΔΗΜΑΤΟΣ</b> ({_safe_str(it.get('rate_percent'), default='0.00')}%)", base),
+            Paragraph(f"<b>{_fmt_money(it.get('amount'))}</b>", base),
+        ]
+    )
+    analysis_rows.append(
+        [
+            Paragraph(f"<b>ΦΠΑ</b> ({_safe_str(analysis.get('vat_percent'), default='0.00')}%)", base),
+            Paragraph(f"<b>{_fmt_money(analysis.get('vat_amount'))}</b>", base),
+        ]
+    )
+    analysis_rows.append(
+        [
+            Paragraph("<b>ΤΕΛΙΚΟ ΠΛΗΡΩΤΕΟ ΠΟΣΟ</b>", base),
+            Paragraph(f"<b>{_fmt_money(analysis.get('payable_total'))}</b>", base),
+        ]
+    )
+
+    analysis_table = Table(
+        analysis_rows,
+        colWidths=[120 * mm, 64 * mm],
+    )
+    analysis_table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(analysis_table)
+    story.append(Spacer(1, 12))
+
+    # -----------------------------
+    # Justifications
+    # -----------------------------
+    story.append(Paragraph("<b>ΔΙΚΑΙΟΛΟΓΗΤΙΚΑ ΠΛΗΡΩΜΗΣ ΤΙΜΟΛΟΓΙΟΥ</b>", section_style))
+
+    base_amount = analysis.get("sum_total")
+    try:
+        base_amount_dec = Decimal(str(base_amount))
+    except Exception:
+        base_amount_dec = Decimal("0.00")
+
+    just_lines = []
+    just_lines.append(Paragraph("• Βεβαίωση καλής εκτέλεσης / παραλαβής — <b>ΘΑ ΦΑΙΝΕΤΑΙ ΠΑΝΤΑ</b>", base))
+    just_lines.append(Paragraph("• Τιμολόγιο / Προτιμολόγιο — <b>ΘΑ ΦΑΙΝΕΤΑΙ ΠΑΝΤΑ</b>", base))
+
+    if base_amount_dec > Decimal("1500"):
+        just_lines.append(Paragraph("• Δικαιολογητικό για ποσά > 1500€ — <b>ΘΑ ΦΑΙΝΕΤΑΙ</b>", base))
+    else:
+        just_lines.append(Paragraph("• Δικαιολογητικό για ποσά > 1500€ — (δεν απαιτείται)", ParagraphStyle(
+            "Muted",
+            parent=base,
+            textColor=colors.HexColor("#555555"),
+        )))
+
+    if base_amount_dec > Decimal("2500"):
+        just_lines.append(Paragraph("• Δικαιολογητικό για ποσά > 2500€ — <b>ΘΑ ΦΑΙΝΕΤΑΙ</b>", base))
+    else:
+        just_lines.append(Paragraph("• Δικαιολογητικό για ποσά > 2500€ — (δεν απαιτείται)", ParagraphStyle(
+            "Muted2",
+            parent=base,
+            textColor=colors.HexColor("#555555"),
+        )))
+
+    for jl in just_lines:
+        story.append(jl)
+
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("Σημείωση: Τα thresholds εφαρμόζονται στο ποσό <b>προ ΦΠΑ</b> (Σύνολο).", base_small))
+
+    doc.build(story)
+    return buf.getvalue()

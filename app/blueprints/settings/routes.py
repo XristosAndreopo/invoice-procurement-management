@@ -18,6 +18,11 @@ NEW:
 - ALE–KAE master list (admin-only) + Excel import
 - CPV master list (admin-only) + Excel import
 
+REPORT FIELDS (V4.3):
+- ServiceUnit.address, ServiceUnit.phone
+- Supplier.email, Supplier.emba
+These are required for report headers (e.g., Προτιμολόγιο).
+
 SECURITY:
 - UI is never trusted. All permissions are enforced server-side.
 - Viewer read-only guard exists globally, but routes still enforce explicit decorators.
@@ -326,6 +331,9 @@ def service_unit_create():
     IMPORTANT:
     - Basic fields only.
     - Manager/Deputy assignment is done in /service-units/<id>/edit.
+
+    REPORT FIELDS:
+    - address, phone are used by reports (e.g., Προτιμολόγιο header).
     """
     if request.method == "POST":
         description = (request.form.get("description") or "").strip()
@@ -335,6 +343,10 @@ def service_unit_create():
         commander = (request.form.get("commander") or "").strip()
         curator = (request.form.get("curator") or "").strip()
         supply_officer = (request.form.get("supply_officer") or "").strip()
+
+        # NEW: report header fields
+        address = (request.form.get("address") or "").strip()
+        phone = (request.form.get("phone") or "").strip()
 
         if not description:
             flash("Η περιγραφή είναι υποχρεωτική.", "danger")
@@ -348,6 +360,8 @@ def service_unit_create():
             commander=commander or None,
             curator=curator or None,
             supply_officer=supply_officer or None,
+            address=address or None,
+            phone=phone or None,
             manager_personnel_id=None,
             deputy_personnel_id=None,
         )
@@ -379,6 +393,10 @@ def service_units_import():
     - Κωδικός / code
     - Περιγραφή / description  (required)
     - Συντομογραφία / short_name (or "short name")
+
+    NOTE:
+    - This import currently does NOT set address/phone.
+      Those are report fields and can be edited from the form.
 
     Behavior:
     - Creates new ServiceUnits from rows with a non-empty description.
@@ -440,6 +458,8 @@ def service_units_import():
             description=description,
             code=code,
             short_name=short_name,
+            address=None,
+            phone=None,
             manager_personnel_id=None,
             deputy_personnel_id=None,
         )
@@ -465,7 +485,12 @@ def service_units_import():
 @login_required
 @admin_required
 def service_unit_edit_info(unit_id: int):
-    """Edit ServiceUnit basic fields (admin-only)."""
+    """
+    Edit ServiceUnit basic fields (admin-only).
+
+    REPORT FIELDS:
+    - address, phone used by reports (e.g., Προτιμολόγιο).
+    """
     unit = ServiceUnit.query.get_or_404(unit_id)
 
     if request.method == "POST":
@@ -479,6 +504,10 @@ def service_unit_edit_info(unit_id: int):
         curator = (request.form.get("curator") or "").strip()
         supply_officer = (request.form.get("supply_officer") or "").strip()
 
+        # NEW: report header fields
+        address = (request.form.get("address") or "").strip()
+        phone = (request.form.get("phone") or "").strip()
+
         if not description:
             flash("Η περιγραφή είναι υποχρεωτική.", "danger")
             return redirect(url_for("settings.service_unit_edit_info", unit_id=unit_id))
@@ -490,6 +519,8 @@ def service_unit_edit_info(unit_id: int):
         unit.commander = commander or None
         unit.curator = curator or None
         unit.supply_officer = supply_officer or None
+        unit.address = address or None
+        unit.phone = phone or None
 
         db.session.flush()
         log_action(entity=unit, action="UPDATE", before=before, after=serialize_model(unit))
@@ -583,10 +614,20 @@ def suppliers_list():
 @login_required
 @admin_required
 def supplier_create():
-    """Create supplier (admin-only)."""
+    """
+    Create supplier (admin-only).
+
+    REPORT FIELDS:
+    - email, emba used in reports (winner supplier section).
+    """
     if request.method == "POST":
         afm = (request.form.get("afm") or "").strip()
         name = (request.form.get("name") or "").strip()
+
+        # NEW: report fields
+        email = (request.form.get("email") or "").strip()
+        emba = (request.form.get("emba") or "").strip()
+
         address = (request.form.get("address") or "").strip()
         city = (request.form.get("city") or "").strip()
         postal_code = (request.form.get("postal_code") or "").strip()
@@ -604,6 +645,8 @@ def supplier_create():
         supplier = Supplier(
             afm=afm,
             name=name,
+            email=email or None,
+            emba=emba or None,
             address=address or None,
             city=city or None,
             postal_code=postal_code or None,
@@ -627,7 +670,12 @@ def supplier_create():
 @login_required
 @admin_required
 def supplier_edit(supplier_id: int):
-    """Edit supplier (admin-only)."""
+    """
+    Edit supplier (admin-only).
+
+    REPORT FIELDS:
+    - email, emba used in reports (winner supplier section).
+    """
     supplier = Supplier.query.get_or_404(supplier_id)
 
     if request.method == "POST":
@@ -635,6 +683,11 @@ def supplier_edit(supplier_id: int):
 
         afm = (request.form.get("afm") or "").strip()
         name = (request.form.get("name") or "").strip()
+
+        # NEW: report fields
+        email = (request.form.get("email") or "").strip()
+        emba = (request.form.get("emba") or "").strip()
+
         address = (request.form.get("address") or "").strip()
         city = (request.form.get("city") or "").strip()
         postal_code = (request.form.get("postal_code") or "").strip()
@@ -651,6 +704,8 @@ def supplier_edit(supplier_id: int):
 
         supplier.afm = afm
         supplier.name = name
+        supplier.email = email or None
+        supplier.emba = emba or None
         supplier.address = address or None
         supplier.city = city or None
         supplier.postal_code = postal_code or None

@@ -68,6 +68,31 @@
             </div>
           </div>
 
+          <!-- NEW: Address + Phone (required by reports) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Διεύθυνση</label>
+            <div class="col-8">
+              <input type="text"
+                     name="address"
+                     class="form-control form-control-sm"
+                     placeholder="π.χ. ΑΓ. ΓΕΩΡΓΙΟΣ - ΛΕΡΟΣ"
+                     value="{{ unit.address if unit and unit.address is not none else '' }}">
+              <div class="form-text">Χρησιμοποιείται στα reports (π.χ. Προτιμολόγιο).</div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Τηλέφωνο</label>
+            <div class="col-8">
+              <input type="text"
+                     name="phone"
+                     class="form-control form-control-sm"
+                     placeholder="π.χ. 22470xxxx"
+                     value="{{ unit.phone if unit and unit.phone is not none else '' }}">
+              <div class="form-text">Χρησιμοποιείται στα reports (π.χ. Προτιμολόγιο).</div>
+            </div>
+          </div>
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Διοικητής</label>
             <div class="col-8">
@@ -108,6 +133,7 @@
                 <li>Η σελίδα αυτή αφορά μόνο τα βασικά στοιχεία της Υπηρεσίας.</li>
                 <li>Ο ορισμός Manager/Deputy γίνεται στη σελίδα “Ορισμός Deputy/Manager”.</li>
                 <li>Το προσωπικό είναι master list (Admin-only).</li>
+                <li><b>Διεύθυνση/Τηλέφωνο</b> χρειάζονται για τα reports.</li>
               </ul>
             </div>
           </div>

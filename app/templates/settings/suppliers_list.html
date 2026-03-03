@@ -5,7 +5,7 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Προμηθευτές</h1>
     <div class="text-muted small">
-      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, διεύθυνση, τόπος, Τ.Κ., χώρα, τράπεζα, IBAN).
+      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, Email, ΕΜΠΑ, διεύθυνση, τόπος, Τ.Κ., χώρα, τράπεζα, IBAN).
     </div>
   </div>
   <a href="{{ url_for('settings.supplier_create') }}" class="btn btn-primary btn-sm">
@@ -22,6 +22,8 @@
             <tr>
               <th>ΑΦΜ</th>
               <th>Επωνυμία</th>
+              <th>Email</th>
+              <th>ΕΜΠΑ</th>
               <th>Διεύθυνση</th>
               <th>Τόπος</th>
               <th>Τ.Κ.</th>
@@ -36,6 +38,8 @@
               <tr>
                 <td class="small fw-semibold">{{ s.afm }}</td>
                 <td class="small">{{ s.name }}</td>
+                <td class="small">{{ s.email or '—' }}</td>
+                <td class="small">{{ s.emba or '—' }}</td>
                 <td class="small">{{ s.address or '—' }}</td>
                 <td class="small">{{ s.city or '—' }}</td>
                 <td class="small">{{ s.postal_code or '—' }}</td>

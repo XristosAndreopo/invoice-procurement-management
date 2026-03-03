@@ -1,7 +1,8 @@
+# C:\Users\xrist\vs code projects\Invoice Management System\app\blueprints\procurements\routes.py
 """
 app/blueprints/procurements/routes.py
 
-Procurement routes – Enterprise Secured Version (V4)
+Procurement routes – Enterprise Secured Version (V4.5)
 
 Includes:
 - Inbox / Pending Expenses / All lists
@@ -10,6 +11,10 @@ Includes:
 
 IMPORTANT:
 - UI is never trusted. Access control and validations are server-side.
+
+V4.5:
+- Report export: Προτιμολόγιο (PDF via ReportLab) opened in new browser tab.
+  (No WeasyPrint/GTK native dependencies.)
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, abort
+from flask import Blueprint, render_template, request, redirect, url_for, flash, abort, make_response
 from flask_login import login_required, current_user
 from sqlalchemy import func, case, Integer, and_
 from sqlalchemy.exc import IntegrityError
@@ -39,6 +44,7 @@ from ...models import (
 )
 from ...security import procurement_access_required, procurement_edit_required
 from ...audit import log_action, serialize_model
+from ...reports.proforma_invoice import build_proforma_invoice_pdf, ProformaConstants
 
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
@@ -115,6 +121,17 @@ def _get_next_from_request(fallback_endpoint: str) -> str:
     """Read next from args/form and return safe local URL."""
     raw = request.args.get("next") or request.form.get("next")
     return _safe_next_url(raw, fallback_endpoint=fallback_endpoint)
+
+
+def _opened_from_all_list(next_url: str) -> bool:
+    """
+    UI-only helper: determine if the edit page was opened from 'All procurements'.
+
+    IMPORTANT:
+    - This must NEVER influence permissions.
+    - It only toggles button visibility in the UI.
+    """
+    return bool(next_url and next_url.startswith("/procurements/all"))
 
 
 # ---------------------------------------------------------------------
@@ -365,6 +382,60 @@ def list_procurements():
 
 
 # ---------------------------------------------------------------------
+# Report: Proforma Invoice (Προτιμολόγιο) -> PDF (ReportLab)
+# ---------------------------------------------------------------------
+@procurements_bp.route("/<int:procurement_id>/reports/proforma-invoice", methods=["GET"])
+@login_required
+@procurement_access_required(_load_procurement)
+def report_proforma_invoice(procurement_id: int):
+    """
+    Export 'Προτιμολόγιο' as inline PDF (opens in a new tab).
+
+    SECURITY:
+    - Protected by procurement_access_required (service isolation).
+    - No data mutation here.
+
+    OUTPUT:
+    - Content-Disposition: inline; filename="proforma_<id>.pdf"
+    """
+    procurement = (
+        Procurement.query.options(
+            joinedload(Procurement.service_unit),
+            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+            joinedload(Procurement.materials),
+            joinedload(Procurement.withholding_profile),
+            joinedload(Procurement.income_tax_rule),
+        )
+        .get_or_404(procurement_id)
+    )
+
+    winner = procurement.winner_supplier_obj()
+    analysis = procurement.compute_payment_analysis()
+
+    lines = list(procurement.materials or [])
+    has_services = any(bool(getattr(l, "is_service", False)) for l in lines)
+    table_title = "Πίνακας Παρεχόμενων Υπηρεσιών" if has_services else "Πίνακας Προμηθευτέων Υλικών"
+
+    pdf_bytes = build_proforma_invoice_pdf(
+        procurement=procurement,
+        service_unit=procurement.service_unit,
+        winner=winner,
+        analysis=analysis,
+        table_title=table_title,
+        constants=ProformaConstants(
+            pn_afm="090153025",
+            pn_doy="ΚΕΦΟΔΕ ΑΤΤΙΚΗΣ",
+            reference_goods="ΒΤ-11-1",
+        ),
+    )
+
+    resp = make_response(pdf_bytes)
+    resp.headers["Content-Type"] = "application/pdf"
+    resp.headers["Content-Disposition"] = f'inline; filename="proforma_{procurement.id}.pdf"'
+    return resp
+
+
+# ---------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------
 @procurements_bp.route("/new", methods=["GET", "POST"])
@@ -492,6 +563,9 @@ def edit_procurement(procurement_id: int):
 
     next_url = _get_next_from_request("procurements.inbox_procurements")
 
+    # UI-only: used to decide which report buttons to show.
+    show_all_report_buttons = _opened_from_all_list(next_url)
+
     allocation_options = _get_active_option_values("KATANOMH")
     quarterly_options = _get_active_option_values("TRIMHNIAIA")
     status_options = _get_active_option_values("KATASTASH")
@@ -595,6 +669,7 @@ def edit_procurement(procurement_id: int):
         committees=[],
         analysis=analysis,
         next_url=next_url,
+        show_all_report_buttons=show_all_report_buttons,
     )
 
 
@@ -644,11 +719,11 @@ def implementation_procurement(procurement_id: int):
 
         committee_id = _parse_optional_int(request.form.get("committee_id"))
         if committee_id:
-            c = ProcurementCommittee.query.get(committee_id)
-            if not c or not c.is_active or c.service_unit_id != procurement.service_unit_id:
+            cmt = ProcurementCommittee.query.get(committee_id)
+            if not cmt or not cmt.is_active or cmt.service_unit_id != procurement.service_unit_id:
                 flash("Μη έγκυρη επιτροπή για την υπηρεσία.", "danger")
                 return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
-            procurement.committee_id = c.id
+            procurement.committee_id = cmt.id
         else:
             procurement.committee_id = None
 

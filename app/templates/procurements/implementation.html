@@ -3,6 +3,7 @@
 {% block content %}
 
 {% set vat_pct = analysis["vat_percent"] if analysis and analysis.get("vat_percent") is not none else "" %}
+{% set back_url = next_url if next_url is defined and next_url else url_for('procurements.pending_expenses') %}
 
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
@@ -11,9 +12,45 @@
       Εμφανίζονται μόνο τα απαραίτητα πεδία για υλοποίηση και δαπάνες. Τα υπόλοιπα παραμένουν ως έχουν.
     </div>
   </div>
-  <a href="{{ url_for('procurements.pending_expenses') }}" class="btn btn-outline-secondary btn-sm">
-    &larr; Επιστροφή
-  </a>
+
+  <!-- RIGHT ACTIONS: report buttons (left) + back button (right) -->
+  <div class="d-flex gap-2 flex-wrap justify-content-end">
+    {# ------------------------------------------------------------------
+       Reports (Implementation phase)
+       Always visible here (as requested):
+       - Προτιμολόγιο / Απόφαση Ανάθεσης / Σύμβαση / Πρωτόκολλο / ΚΠΔ / ΔΙΑΒΙΒΑΣΤΙΚΟ
+       ------------------------------------------------------------------ #}
+
+    <a
+      class="btn btn-sm btn-outline-primary"
+      href="{{ url_for('procurements.report_proforma_invoice', procurement_id=procurement.id) }}"
+      target="_blank"
+      rel="noopener"
+      title="Άνοιγμα Προτιμολογίου (PDF)"
+    >
+      Προτιμολόγιο
+    </a>
+
+    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      Απόφαση Ανάθεσης
+    </button>
+    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      Σύμβαση
+    </button>
+    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      Πρωτόκολλο
+    </button>
+    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      ΚΠΔ
+    </button>
+    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      ΔΙΑΒΙΒΑΣΤΙΚΟ
+    </button>
+
+    <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">
+      &larr; Επιστροφή
+    </a>
+  </div>
 </div>
 
 <div class="card glass-card shadow-sm border-0 mb-3">
@@ -66,7 +103,6 @@
           </div>
         </div>
 
-        {# Κατάσταση/Στάδιο εμφανίζονται εδώ, αλλά πλέον editable ΜΟΝΟ στην implementation phase όπως ζήτησες #}
         <div class="mb-2 row align-items-center">
           <label class="col-4 col-form-label col-form-label-sm">Κατάσταση</label>
           <div class="col-8">
@@ -197,7 +233,6 @@
       <div class="row g-3">
         <div class="col-12 col-lg-8">
 
-          {# ✅ NEW: Editable Status/Stage in implementation phase #}
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Κατάσταση</label>
             <div class="col-8">
