@@ -125,12 +125,17 @@
             </div>
           </div>
 
-          <!-- CHANGED: ALE dropdown from AleKae -->
+          <!-- ALE searchable dropdown (Select2) -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΛΕ</label>
             <div class="col-8">
-              <select name="ale" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
-                <option value="">(—)</option>
+              <select
+                name="ale"
+                class="form-select form-select-sm js-select2"
+                data-placeholder="Αναζήτηση ΑΛΕ..."
+                {% if not can_edit %}disabled{% endif %}
+              >
+                <option value=""></option>
                 {% for r in (ale_rows or []) %}
                   <option value="{{ r.ale }}" {% if procurement.ale == r.ale %}selected{% endif %}>
                     {{ r.ale }}{% if r.description %} — {{ r.description }}{% endif %}
@@ -392,7 +397,7 @@
             </div>
           </div>
 
-          <!-- NEW: Identity of invitation document -->
+          <!-- Invitation identity -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Ταυτότητα Εγγράφου Πρόσκλησης</label>
             <div class="col-8">
@@ -408,6 +413,52 @@
                      value="{{ procurement.adam_prosklisis or '' }}" {% if not can_edit %}disabled{% endif %}>
             </div>
           </div>
+
+          <!-- SHOW on "All procurements": Implementation fields must be visible -->
+          {% if show_all_reports %}
+            <hr class="my-3">
+            <h3 class="h6 fw-bold mb-3">Στοιχεία Υλοποίησης (από “Όλες”)</h3>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">Ταυτότητα Εγγράφου Απόφασης Ανάθεσης</label>
+              <div class="col-8">
+                <input name="identity_apofasis_anathesis" class="form-control form-control-sm"
+                       value="{{ procurement.identity_apofasis_anathesis or '' }}" {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΑΠΟΦΑΣΗΣ ΑΝΑΘΕΣΗΣ</label>
+              <div class="col-8">
+                <input name="adam_apofasis_anathesis" class="form-control form-control-sm"
+                       value="{{ procurement.adam_apofasis_anathesis or '' }}" {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΑΡΙΘΜΟΣ ΣΥΜΒΑΣΗΣ</label>
+              <div class="col-8">
+                <input name="contract_number" class="form-control form-control-sm"
+                       value="{{ procurement.contract_number or '' }}" {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΣΥΜΒΑΣΗΣ</label>
+              <div class="col-8">
+                <input name="adam_contract" class="form-control form-control-sm"
+                       value="{{ procurement.adam_contract or '' }}" {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΑΡΙΘΜΟΣ ΠΡΩΤΟΚΟΛΛΟΥ</label>
+              <div class="col-8">
+                <input name="protocol_number" class="form-control form-control-sm"
+                       value="{{ procurement.protocol_number or '' }}" {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+          {% endif %}
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Μεταφορά σε Εκκρεμείς Δαπάνες</label>
@@ -587,12 +638,17 @@
           <input name="description" class="form-control" placeholder="Περιγραφή γραμμής" required>
         </div>
 
-        <!-- CHANGED: CPV dropdown from master list -->
+        <!-- CPV searchable dropdown (Select2) -->
         <div class="col-6 col-md-2">
-          <select name="cpv" class="form-select" title="CPV">
-            <option value="">(CPV)</option>
+          <select
+            name="cpv"
+            class="form-select js-select2"
+            data-placeholder="Αναζήτηση CPV..."
+            title="CPV"
+          >
+            <option value=""></option>
             {% for r in (cpv_rows or []) %}
-              <option value="{{ r.cpv }}">{{ r.cpv }}</option>
+              <option value="{{ r.cpv }}">{{ r.cpv }}{% if r.description %} — {{ r.description }}{% endif %}</option>
             {% endfor %}
           </select>
         </div>

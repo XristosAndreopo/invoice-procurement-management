@@ -3,6 +3,9 @@ Minimal, professional styling on top of Bootstrap.
 
 We keep colors soft and use "glass" cards and row highlights,
 with support for simple themes: default, dark, ocean.
+
+V4.7:
+- Select2 styling tweaks (including dark theme compatibility).
 */
 
 :root{
@@ -286,4 +289,50 @@ body {
   flex-shrink: 0;
   font-size: 0.8rem;
   color: #6c757d;
+}
+
+/* ------------------------------------------------------------------
+   Select2 (Bootstrap 5 theme) - extra polish
+   ------------------------------------------------------------------ */
+
+/* Keep select2 aligned with other inputs */
+.select2-container {
+  width: 100% !important;
+}
+
+/* Default dropdown look */
+.select2-container--bootstrap-5 .select2-dropdown {
+  border-radius: 0.6rem;
+}
+
+/* Dark theme fixes */
+body.theme-dark .select2-container--bootstrap-5 .select2-selection {
+  background-color: #0b1220;
+  border-color: #243044;
+  color: #e5e7eb;
+}
+
+body.theme-dark .select2-container--bootstrap-5 .select2-selection__rendered {
+  color: #e5e7eb;
+}
+
+body.theme-dark .select2-container--bootstrap-5 .select2-dropdown {
+  background-color: #0b1220;
+  border-color: #243044;
+  color: #e5e7eb;
+}
+
+body.theme-dark .select2-container--bootstrap-5 .select2-results__option {
+  color: #e5e7eb;
+}
+
+body.theme-dark .select2-container--bootstrap-5 .select2-search__field {
+  background-color: #111827;
+  color: #e5e7eb;
+  border-color: #243044;
+}
+
+body.theme-dark .select2-container--bootstrap-5 .select2-results__option--highlighted {
+  background-color: #1f2937;
+  color: #e5e7eb;
 }
