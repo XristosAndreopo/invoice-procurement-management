@@ -125,11 +125,19 @@
             </div>
           </div>
 
+          <!-- CHANGED: ALE dropdown from AleKae -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΛΕ</label>
             <div class="col-8">
-              <input name="ale" class="form-control form-control-sm"
-                     value="{{ procurement.ale or '' }}" {% if not can_edit %}disabled{% endif %}>
+              <select name="ale" class="form-select form-select-sm" {% if not can_edit %}disabled{% endif %}>
+                <option value="">(—)</option>
+                {% for r in (ale_rows or []) %}
+                  <option value="{{ r.ale }}" {% if procurement.ale == r.ale %}selected{% endif %}>
+                    {{ r.ale }}{% if r.description %} — {{ r.description }}{% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">Πηγή: Ρυθμίσεις → ΑΛΕ-ΚΑΕ.</div>
             </div>
           </div>
 
@@ -384,6 +392,15 @@
             </div>
           </div>
 
+          <!-- NEW: Identity of invitation document -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Ταυτότητα Εγγράφου Πρόσκλησης</label>
+            <div class="col-8">
+              <input name="identity_prosklisis" class="form-control form-control-sm"
+                     value="{{ procurement.identity_prosklisis or '' }}" {% if not can_edit %}disabled{% endif %}>
+            </div>
+          </div>
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΔΑΜ ΠΡΟΣΚΛΗΣΗΣ</label>
             <div class="col-8">
@@ -569,9 +586,17 @@
         <div class="col-12 col-md-4">
           <input name="description" class="form-control" placeholder="Περιγραφή γραμμής" required>
         </div>
+
+        <!-- CHANGED: CPV dropdown from master list -->
         <div class="col-6 col-md-2">
-          <input name="cpv" class="form-control" placeholder="CPV">
+          <select name="cpv" class="form-select" title="CPV">
+            <option value="">(CPV)</option>
+            {% for r in (cpv_rows or []) %}
+              <option value="{{ r.cpv }}">{{ r.cpv }}</option>
+            {% endfor %}
+          </select>
         </div>
+
         <div class="col-6 col-md-2">
           <input name="nsn" class="form-control" placeholder="NSN">
         </div>

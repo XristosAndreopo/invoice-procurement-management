@@ -1,14 +1,14 @@
 # C:\Users\xrist\vs code projects\Invoice Management System\app\models.py
 """
-Invoice Management System – Enterprise Domain Models (V4.3)
+Invoice Management System – Enterprise Domain Models (V4.4)
 
-Includes existing V4.2 models and adds enterprise fields required by reports.
+Includes existing V4.3 models and adds enterprise fields required by workflow.
 
-NEW (V4.3):
-- ServiceUnit.address (Διεύθυνση) and ServiceUnit.phone (Τηλέφωνο)
-  Required for reports (e.g., Προτιμολόγιο header).
-- Supplier.email and Supplier.emba (ΕΜΠΑ)
-  Required for reports (winner supplier section).
+NEW (V4.4):
+- Procurement.identity_prosklisis:
+  "Ταυτότητα Εγγράφου Πρόσκλησης" (text)
+- Procurement.identity_apofasis_anathesis:
+  "Ταυτότητα Εγγράφου Απόφασης Ανάθεσης" (text)
 
 IMPORTANT:
 - UI is never trusted. Any selection must be validated server-side in routes.
@@ -430,7 +430,7 @@ class ServiceUnit(db.Model):
     curator = db.Column(db.String(255))
     supply_officer = db.Column(db.String(255))
 
-    # NEW (V4.3): required for report headers (nullable for backward compatibility)
+    # report header fields
     address = db.Column(db.String(255), nullable=True)
     phone = db.Column(db.String(50), nullable=True)
 
@@ -474,7 +474,7 @@ class Supplier(db.Model):
     afm = db.Column(db.String(9), nullable=False, unique=True, index=True)
     name = db.Column(db.String(255), nullable=False)
 
-    # NEW (V4.3): required for reports
+    # report fields
     email = db.Column(db.String(255), nullable=True)
     emba = db.Column(db.String(255), nullable=True)
 
@@ -573,8 +573,15 @@ class Procurement(db.Model):
 
     adam_aay = db.Column(db.String(100), nullable=True, index=True)
     ada_aay = db.Column(db.String(100), nullable=True, index=True)
+
+    # NEW (V4.4): identities (text)
+    identity_prosklisis = db.Column(db.String(255), nullable=True)
     adam_prosklisis = db.Column(db.String(100), nullable=True, index=True)
+
+    # NEW (V4.4): identities (text)
+    identity_apofasis_anathesis = db.Column(db.String(255), nullable=True)
     adam_apofasis_anathesis = db.Column(db.String(100), nullable=True, index=True)
+
     contract_number = db.Column(db.String(100), nullable=True, index=True)
     adam_contract = db.Column(db.String(100), nullable=True, index=True)
     protocol_number = db.Column(db.String(100), nullable=True, index=True)

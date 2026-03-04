@@ -2,19 +2,19 @@
 """
 app/blueprints/procurements/routes.py
 
-Procurement routes – Enterprise Secured Version (V4.5)
+Procurement routes – Enterprise Secured Version (V4.6)
 
-Includes:
-- Inbox / Pending Expenses / All lists
-- Per-column server-side filtering
-- next= return chain so navigation returns to the list that opened the record
+V4.6 CHANGES:
+- Added support for:
+  - Procurement.identity_prosklisis (Ταυτότητα Εγγράφου Πρόσκλησης)
+  - Procurement.identity_apofasis_anathesis (Ταυτότητα Εγγράφου Απόφασης Ανάθεσης)
+- ALE dropdown sourced from AleKae (admin-managed master list)
+- CPV dropdown for MaterialLine add sourced from Cpv (admin-managed master list)
 
-IMPORTANT:
-- UI is never trusted. Access control and validations are server-side.
-
-V4.5:
-- Report export: Προτιμολόγιο (PDF via ReportLab) opened in new browser tab.
-  (No WeasyPrint/GTK native dependencies.)
+SECURITY:
+- UI is never trusted.
+- Server validates ALE/CPV against master tables (if provided).
+- Existing procurement_access_required/procurement_edit_required remain the truth.
 """
 
 from __future__ import annotations
@@ -41,6 +41,8 @@ from ...models import (
     IncomeTaxRule,
     WithholdingProfile,
     ProcurementCommittee,
+    AleKae,
+    Cpv,
 )
 from ...security import procurement_access_required, procurement_edit_required
 from ...audit import log_action, serialize_model
@@ -148,6 +150,63 @@ def _get_active_option_values(category_key: str) -> list[str]:
         .all()
     )
     return [v.value for v in values]
+
+
+# ---------------------------------------------------------------------
+# Master-data helpers (ALE/CPV dropdowns)
+# ---------------------------------------------------------------------
+def _ale_rows_for_dropdown() -> list[AleKae]:
+    """
+    Return AleKae rows ordered by ALE code.
+    Used for Procurement ALE dropdown.
+
+    SECURITY:
+    - UI is not trusted. On POST we validate selection exists in table.
+    """
+    return AleKae.query.order_by(AleKae.ale.asc()).all()
+
+
+def _cpv_rows_for_dropdown() -> list[Cpv]:
+    """
+    Return CPV rows ordered by cpv code.
+    Used for MaterialLine CPV dropdown.
+
+    SECURITY:
+    - UI is not trusted. On POST we validate selection exists in table.
+    """
+    return Cpv.query.order_by(Cpv.cpv.asc()).all()
+
+
+def _validate_ale_or_none(ale_value: str | None) -> str | None:
+    """
+    Validate ALE string exists in AleKae master list.
+    Returns normalized ALE or None.
+
+    If value is non-empty but not found -> raises ValueError.
+    """
+    raw = (ale_value or "").strip()
+    if not raw:
+        return None
+    exists = AleKae.query.filter_by(ale=raw).first()
+    if not exists:
+        raise ValueError("Μη έγκυρο ΑΛΕ. Επιλέξτε τιμή από τη λίστα ΑΛΕ-ΚΑΕ.")
+    return raw
+
+
+def _validate_cpv_or_none(cpv_value: str | None) -> str | None:
+    """
+    Validate CPV string exists in Cpv master list.
+    Returns normalized CPV or None.
+
+    If value is non-empty but not found -> raises ValueError.
+    """
+    raw = (cpv_value or "").strip()
+    if not raw:
+        return None
+    exists = Cpv.query.filter_by(cpv=raw).first()
+    if not exists:
+        raise ValueError("Μη έγκυρο CPV. Επιλέξτε τιμή από τη λίστα CPV.")
+    return raw
 
 
 # ---------------------------------------------------------------------
@@ -454,6 +513,9 @@ def create_procurement():
     income_tax_rules = _active_income_tax_rules()
     withholding_profiles = _active_withholding_profiles()
 
+    # Dropdown sources
+    ale_rows = _ale_rows_for_dropdown()
+
     handler_candidates = []
     if not current_user.is_admin and current_user.service_unit_id:
         handler_candidates = _handler_candidates(current_user.service_unit_id)
@@ -496,11 +558,18 @@ def create_procurement():
         else:
             wp = None
 
+        # Validate ALE (dropdown -> master table)
+        try:
+            ale_value = _validate_ale_or_none(request.form.get("ale"))
+        except ValueError as e:
+            flash(str(e), "danger")
+            return redirect(url_for("procurements.create_procurement"))
+
         procurement = Procurement(
             service_unit_id=service_unit_id,
             serial_no=(request.form.get("serial_no") or "").strip() or None,
             description=description,
-            ale=(request.form.get("ale") or "").strip() or None,
+            ale=ale_value,
             allocation=(request.form.get("allocation") or "").strip() or None,
             quarterly=(request.form.get("quarterly") or "").strip() or None,
             status=(request.form.get("status") or "").strip() or None,
@@ -520,6 +589,9 @@ def create_procurement():
             income_tax_rule_id=rule.id if rule else None,
             withholding_profile_id=wp.id if wp else None,
             committee_id=None,
+            # New identity fields are not part of NEW page spec -> remain None
+            identity_prosklisis=None,
+            identity_apofasis_anathesis=None,
         )
 
         send_to_expenses = bool(request.form.get("send_to_expenses"))
@@ -549,6 +621,7 @@ def create_procurement():
         income_tax_rules=income_tax_rules,
         withholding_profiles=withholding_profiles,
         committees=[],
+        ale_rows=ale_rows,
     )
 
 
@@ -576,6 +649,10 @@ def edit_procurement(procurement_id: int):
 
     handler_candidates = _handler_candidates(procurement.service_unit_id)
 
+    # Dropdown sources
+    ale_rows = _ale_rows_for_dropdown()
+    cpv_rows = _cpv_rows_for_dropdown()
+
     if request.method == "POST":
         if not (current_user.is_admin or current_user.can_manage()):
             abort(403)
@@ -587,7 +664,14 @@ def edit_procurement(procurement_id: int):
 
         procurement.serial_no = (request.form.get("serial_no") or "").strip() or None
         procurement.description = (request.form.get("description") or "").strip() or None
-        procurement.ale = (request.form.get("ale") or "").strip() or None
+
+        # Validate ALE (dropdown -> master table)
+        try:
+            procurement.ale = _validate_ale_or_none(request.form.get("ale"))
+        except ValueError as e:
+            flash(str(e), "danger")
+            return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
+
         procurement.allocation = (request.form.get("allocation") or "").strip() or None
         procurement.quarterly = (request.form.get("quarterly") or "").strip() or None
         procurement.status = (request.form.get("status") or "").strip() or None
@@ -604,6 +688,10 @@ def edit_procurement(procurement_id: int):
         procurement.hop_approval = (request.form.get("hop_approval") or "").strip() or None
         procurement.aay = (request.form.get("aay") or "").strip() or None
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
+
+        # NEW: identity fields
+        procurement.identity_prosklisis = (request.form.get("identity_prosklisis") or "").strip() or None
+        procurement.identity_apofasis_anathesis = (request.form.get("identity_apofasis_anathesis") or "").strip() or None
 
         handler_candidates = _handler_candidates(procurement.service_unit_id)
 
@@ -636,6 +724,11 @@ def edit_procurement(procurement_id: int):
             procurement.withholding_profile_id = wp.id
         else:
             procurement.withholding_profile_id = None
+
+        # Existing
+        procurement.adam_aay = (request.form.get("adam_aay") or "").strip() or None
+        procurement.ada_aay = (request.form.get("ada_aay") or "").strip() or None
+        procurement.adam_prosklisis = (request.form.get("adam_prosklisis") or "").strip() or None
 
         send_to_expenses = bool(request.form.get("send_to_expenses"))
         if send_to_expenses and not procurement.hop_approval:
@@ -670,6 +763,8 @@ def edit_procurement(procurement_id: int):
         analysis=analysis,
         next_url=next_url,
         show_all_report_buttons=show_all_report_buttons,
+        ale_rows=ale_rows,
+        cpv_rows=cpv_rows,
     )
 
 
@@ -739,8 +834,14 @@ def implementation_procurement(procurement_id: int):
 
         procurement.adam_aay = (request.form.get("adam_aay") or "").strip() or None
         procurement.ada_aay = (request.form.get("ada_aay") or "").strip() or None
+
+        # NEW: identity fields in implementation
+        procurement.identity_prosklisis = (request.form.get("identity_prosklisis") or "").strip() or None
         procurement.adam_prosklisis = (request.form.get("adam_prosklisis") or "").strip() or None
+
+        procurement.identity_apofasis_anathesis = (request.form.get("identity_apofasis_anathesis") or "").strip() or None
         procurement.adam_apofasis_anathesis = (request.form.get("adam_apofasis_anathesis") or "").strip() or None
+
         procurement.contract_number = (request.form.get("contract_number") or "").strip() or None
         procurement.adam_contract = (request.form.get("adam_contract") or "").strip() or None
         procurement.protocol_number = (request.form.get("protocol_number") or "").strip() or None
@@ -876,12 +977,19 @@ def add_material_line(procurement_id: int):
     quantity = _parse_decimal(request.form.get("quantity")) or Decimal("0")
     unit_price = _parse_decimal(request.form.get("unit_price")) or Decimal("0")
 
+    # Validate CPV (dropdown -> master table)
+    try:
+        cpv_value = _validate_cpv_or_none(request.form.get("cpv"))
+    except ValueError as e:
+        flash(str(e), "danger")
+        return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
+
     line = MaterialLine(
         procurement_id=procurement.id,
         description=description,
         quantity=quantity,
         unit_price=unit_price,
-        cpv=(request.form.get("cpv") or "").strip() or None,
+        cpv=cpv_value,
         nsn=(request.form.get("nsn") or "").strip() or None,
         unit=(request.form.get("unit") or "").strip() or None,
     )
