@@ -32,6 +32,7 @@
               <th>ΗΩΠ Προέγκρισης</th>
               <th>ΗΩΠ Έγκρισης</th>
               <th>ΑΑΥ</th>
+              <th>ΠΟΣΟ</th>
               <th>Κατάσταση</th>
               <th>Στάδιο</th>
               {% if show_open_button %}
@@ -116,6 +117,11 @@
                        autocomplete="off">
               </th>
 
+              {# PΟΣΟ: χωρίς φίλτρο (όπως ζητήθηκε). Κρατάμε κενό header cell. #}
+              <th style="min-width:120px;">
+                <div class="text-muted small">—</div>
+              </th>
+
               <th style="min-width:160px;">
                 <select name="status" class="form-select form-select-sm js-filter text-center">
                   <option value="">Όλες</option>
@@ -178,6 +184,14 @@
                   <td>{{ p.hop_approval or '—' }}</td>
                   <td>{{ p.aay or '—' }}</td>
 
+                  <td>
+                    {% if p.grand_total is not none %}
+                      {{ "{:,.2f}".format(p.grand_total) }} €
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+
                   <td>{{ p.status or '—' }}</td>
                   <td>{{ p.stage or '—' }}</td>
 
@@ -200,7 +214,7 @@
               {% endfor %}
             {% else %}
               <tr>
-                <td colspan="{{ 12 if show_open_button else 11 }}" class="text-center text-muted py-3">
+                <td colspan="{{ 13 if show_open_button else 12 }}" class="text-center text-muted py-3">
                   Δεν υπάρχουν εγγραφές.
                 </td>
               </tr>
