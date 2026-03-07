@@ -21,7 +21,11 @@ NEW:
 REPORT FIELDS (V4.3):
 - ServiceUnit.address, ServiceUnit.phone
 - Supplier.email, Supplier.emba
-These are required for report headers (e.g., Προτιμολόγιο).
+
+REPORT FIELDS (V4.6):
+- Supplier.phone
+
+These are required for report headers and supplier contact details.
 
 SECURITY:
 - UI is never trusted. All permissions are enforced server-side.
@@ -344,7 +348,6 @@ def service_unit_create():
         curator = (request.form.get("curator") or "").strip()
         supply_officer = (request.form.get("supply_officer") or "").strip()
 
-        # NEW: report header fields
         address = (request.form.get("address") or "").strip()
         phone = (request.form.get("phone") or "").strip()
 
@@ -504,7 +507,6 @@ def service_unit_edit_info(unit_id: int):
         curator = (request.form.get("curator") or "").strip()
         supply_officer = (request.form.get("supply_officer") or "").strip()
 
-        # NEW: report header fields
         address = (request.form.get("address") or "").strip()
         phone = (request.form.get("phone") or "").strip()
 
@@ -618,13 +620,13 @@ def supplier_create():
     Create supplier (admin-only).
 
     REPORT FIELDS:
-    - email, emba used in reports (winner supplier section).
+    - phone, email, emba used in reports / supplier master data.
     """
     if request.method == "POST":
         afm = (request.form.get("afm") or "").strip()
         name = (request.form.get("name") or "").strip()
         doy = (request.form.get("doy") or "").strip()
-        # NEW: report fields
+        phone = (request.form.get("phone") or "").strip()
         email = (request.form.get("email") or "").strip()
         emba = (request.form.get("emba") or "").strip()
 
@@ -646,6 +648,7 @@ def supplier_create():
             afm=afm,
             name=name,
             doy=doy or None,
+            phone=phone or None,
             email=email or None,
             emba=emba or None,
             address=address or None,
@@ -675,7 +678,7 @@ def supplier_edit(supplier_id: int):
     Edit supplier (admin-only).
 
     REPORT FIELDS:
-    - email, emba used in reports (winner supplier section).
+    - phone, email, emba used in reports / supplier master data.
     """
     supplier = Supplier.query.get_or_404(supplier_id)
 
@@ -685,7 +688,7 @@ def supplier_edit(supplier_id: int):
         afm = (request.form.get("afm") or "").strip()
         name = (request.form.get("name") or "").strip()
         doy = (request.form.get("doy") or "").strip()
-        # NEW: report fields
+        phone = (request.form.get("phone") or "").strip()
         email = (request.form.get("email") or "").strip()
         emba = (request.form.get("emba") or "").strip()
 
@@ -706,6 +709,7 @@ def supplier_edit(supplier_id: int):
         supplier.afm = afm
         supplier.name = name
         supplier.doy = doy or None
+        supplier.phone = phone or None
         supplier.email = email or None
         supplier.emba = emba or None
         supplier.address = address or None
@@ -753,6 +757,7 @@ def suppliers_import():
     - ΑΦΜ (required) / afm
     - ΕΠΩΝΥΜΙΑ (required) / name / ονομασια
     - ΔΟΥ (optional) / doy / δ.ο.υ.
+    - ΤΗΛΕΦΩΝΟ (optional) / phone
     - EMAIL, ΕΜΠΑ, ΔΙΕΥΘΥΝΣΗ, ΤΟΠΟΣ, ΤΚ, ΧΩΡΑ, ΤΡΑΠΕΖΑ, IBAN (optional)
 
     Behavior:
@@ -782,7 +787,6 @@ def suppliers_import():
         flash("Το Excel είναι κενό.", "danger")
         return redirect(url_for("settings.suppliers_list"))
 
-    # ✅ improve header normalize to support Δ.Ο.Υ.
     def _norm(h: str) -> str:
         s = _normalize_header(h)
         return s.replace(".", "")
@@ -793,6 +797,7 @@ def suppliers_import():
     afm_idx = idx_map.get("αφμ", idx_map.get("afm"))
     name_idx = idx_map.get("επωνυμια", idx_map.get("name", idx_map.get("ονομασια")))
     doy_idx = idx_map.get("δου", idx_map.get("doy", idx_map.get("δοy", idx_map.get("δοϋ"))))
+    phone_idx = idx_map.get("τηλεφωνο", idx_map.get("phone", idx_map.get("tel")))
     email_idx = idx_map.get("email")
     emba_idx = idx_map.get("εμπα", idx_map.get("emba"))
     addr_idx = idx_map.get("διευθυνση", idx_map.get("address"))
@@ -837,6 +842,7 @@ def suppliers_import():
             afm=afm,
             name=name_raw,
             doy=_safe_str(_cell(row, doy_idx)) or None,
+            phone=_safe_str(_cell(row, phone_idx)) or None,
             email=_safe_str(_cell(row, email_idx)) or None,
             emba=_safe_str(_cell(row, emba_idx)) or None,
             address=_safe_str(_cell(row, addr_idx)) or None,
@@ -864,6 +870,7 @@ def suppliers_import():
         "success",
     )
     return redirect(url_for("settings.suppliers_list"))
+
 
 # ----------------------------------------------------------------------
 # NEW: ALE–KAE (admin-only) + Excel import

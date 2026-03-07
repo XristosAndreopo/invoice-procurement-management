@@ -1,8 +1,7 @@
-# C:\Users\xrist\vs code projects\Invoice Management System\app\models.py
 """
-Invoice Management System – Enterprise Domain Models (V4.5)
+Invoice Management System – Enterprise Domain Models (V4.6)
 
-Includes existing V4.4 models and adds enterprise fields required by workflow & master data.
+Includes existing V4.5 models and adds enterprise fields required by workflow & master data.
 
 NEW (V4.4):
 - Procurement.identity_prosklisis:
@@ -13,6 +12,10 @@ NEW (V4.4):
 NEW (V4.5):
 - Supplier.doy:
   "Δ.Ο.Υ." (text) for supplier master data and reports.
+
+NEW (V4.6):
+- Supplier.phone:
+  Supplier phone number (text) for master data and reports.
 
 IMPORTANT:
 - UI is never trusted. Any selection must be validated server-side in routes.
@@ -476,6 +479,9 @@ class Supplier(db.Model):
 
     V4.5 adds:
     - doy: "Δ.Ο.Υ." (text)
+
+    V4.6 adds:
+    - phone: supplier phone number (text)
     """
 
     __tablename__ = "suppliers"
@@ -485,8 +491,11 @@ class Supplier(db.Model):
     afm = db.Column(db.String(9), nullable=False, unique=True, index=True)
     name = db.Column(db.String(255), nullable=False)
 
-    # NEW (V4.5): supplier tax office (Δ.Ο.Υ.)
+    # Supplier tax office (Δ.Ο.Υ.)
     doy = db.Column(db.String(255), nullable=True)
+
+    # Supplier contact field for reports / master data
+    phone = db.Column(db.String(50), nullable=True)
 
     # report fields
     email = db.Column(db.String(255), nullable=True)

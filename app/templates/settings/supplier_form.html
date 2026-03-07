@@ -5,7 +5,7 @@
   <div>
     <h1 class="h4 fw-bold mb-1">{{ form_title }}</h1>
     <div class="text-muted small">
-      Διαχείριση στοιχείων προμηθευτή (ΑΦΜ, επωνυμία, διεύθυνση, IBAN κ.λπ.).
+      Διαχείριση στοιχείων προμηθευτή (ΑΦΜ, επωνυμία, τηλέφωνο, διεύθυνση, IBAN κ.λπ.).
     </div>
   </div>
   <a href="{{ url_for('settings.suppliers_list') }}" class="btn btn-outline-secondary btn-sm">
@@ -46,7 +46,18 @@
             </div>
           </div>
 
-          <!-- NEW: Email + EMBA (required by reports) -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Τηλέφωνο</label>
+            <div class="col-8">
+              <input type="text"
+                     name="phone"
+                     class="form-control form-control-sm"
+                     placeholder="π.χ. 2101234567"
+                     value="{{ supplier.phone if supplier and supplier.phone is not none else '' }}">
+              <div class="form-text">Πεδίο μη υποχρεωτικό. Χρησιμοποιείται σε στοιχεία προμηθευτή / reports.</div>
+            </div>
+          </div>
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Email</label>
             <div class="col-8">
@@ -71,7 +82,6 @@
             </div>
           </div>
 
-          <!-- NEW (V4.5): Δ.Ο.Υ. -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Δ.Ο.Υ.</label>
             <div class="col-8">
