@@ -1,3 +1,4 @@
+{# C:\Users\xrist\vs code projects\Invoice Management System\app\templates\procurements\edit.html #}
 {% extends "base.html" %}
 {% block content %}
 
@@ -39,9 +40,15 @@
         Προτιμολόγιο
       </a>
 
-      <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      {# ✅ Award Decision DOCX download #}
+      <a
+        class="btn btn-sm btn-outline-primary"
+        href="{{ url_for('procurements.report_award_decision_docx', procurement_id=procurement.id) }}"
+        title="Λήψη Απόφασης Ανάθεσης (DOCX)"
+      >
         Απόφαση Ανάθεσης
-      </button>
+      </a>
+
       <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
         Σύμβαση
       </button>

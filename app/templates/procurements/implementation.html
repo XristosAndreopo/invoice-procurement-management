@@ -26,9 +26,14 @@
       Προτιμολόγιο
     </a>
 
-    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
-      Απόφαση Ανάθεσης
-    </button>
+    {# ✅ NEW: Award Decision DOCX #}
+      <a
+        class="btn btn-sm btn-outline-primary"
+        href="{{ url_for('procurements.report_award_decision_docx', procurement_id=procurement.id) }}"
+        title="Λήψη Απόφασης Ανάθεσης (Word)"
+      >
+        Απόφαση Ανάθεσης (Word)
+      </a>
     <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
       Σύμβαση
     </button>

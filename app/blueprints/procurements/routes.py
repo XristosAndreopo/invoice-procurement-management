@@ -2,7 +2,7 @@
 """
 app/blueprints/procurements/routes.py
 
-Procurement routes – Enterprise Secured Version (V4.7)
+Procurement routes – Enterprise Secured Version (V4.8)
 
 Includes:
 - Inbox / Pending Expenses / All lists
@@ -24,14 +24,19 @@ V4.7:
 - ALE and CPV master lists are used as the source of truth for dropdowns.
 - Added server-side validation for ALE / CPV.
 - Added support for "All procurements" -> edit page showing/storing implementation fields.
+
+V4.8:
+- Added report export: Απόφαση Ανάθεσης (DOCX via python-docx) opened as download.
 """
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 from urllib.parse import urlparse
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, abort, make_response
+from flask import Blueprint, render_template, request, redirect, url_for, flash, abort, make_response, send_file
 from flask_login import login_required, current_user
 from sqlalchemy import func, case, Integer, and_
 from sqlalchemy.exc import IntegrityError
@@ -56,6 +61,7 @@ from ...models import (
 from ...security import procurement_access_required, procurement_edit_required
 from ...audit import log_action, serialize_model
 from ...reports.proforma_invoice import build_proforma_invoice_pdf, ProformaConstants
+from ...reports.award_decision_docx import build_award_decision_docx, AwardDecisionConstants
 
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
@@ -143,6 +149,41 @@ def _opened_from_all_list(next_url: str) -> bool:
     - It only toggles button visibility in the UI.
     """
     return bool(next_url and next_url.startswith("/procurements/all"))
+
+
+# ---------------------------------------------------------------------
+# Filename helpers (DOCX downloads)
+# ---------------------------------------------------------------------
+_ILLEGAL_WIN_FILENAME = r'<>:"/\\|?*\n\r\t'
+
+
+def _sanitize_filename_component(s: str) -> str:
+    """
+    Make a safe filename component for Windows.
+
+    - Remove illegal chars: <>:"/\\|?*
+    - Collapse whitespace
+    - Strip trailing dots/spaces
+    """
+    s = (s or "").strip()
+    if not s:
+        return "—"
+    s = re.sub(f"[{re.escape(_ILLEGAL_WIN_FILENAME)}]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = s.strip(" .")
+    return s or "—"
+
+
+def _money_filename(v: object) -> str:
+    """
+    Money for filename: "1700,00" (no €; dot decimal -> comma).
+    """
+    try:
+        d = Decimal(str(v or "0"))
+    except Exception:
+        d = Decimal("0")
+    d = d.quantize(Decimal("0.01"))
+    return f"{d:.2f}".replace(".", ",")
 
 
 # ---------------------------------------------------------------------
@@ -490,6 +531,86 @@ def report_proforma_invoice(procurement_id: int):
 
 
 # ---------------------------------------------------------------------
+# Report: Award Decision (ΑΠΟΦΑΣΗ ΑΝΑΘΕΣΗΣ) -> DOCX (python-docx)
+# ---------------------------------------------------------------------
+@procurements_bp.route("/<int:procurement_id>/reports/award-decision", methods=["GET"])
+@login_required
+@procurement_access_required(_load_procurement)
+def report_award_decision_docx(procurement_id: int):
+    """
+    Export 'ΑΠΟΦΑΣΗ ΑΝΑΘΕΣΗΣ' as DOCX.
+
+    SECURITY:
+    - Protected by procurement_access_required (service isolation).
+    - No data mutation here.
+
+    OUTPUT:
+    - DOCX download
+    """
+    procurement = (
+        Procurement.query.options(
+            joinedload(Procurement.service_unit),
+            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+            joinedload(Procurement.materials),
+            joinedload(Procurement.withholding_profile),
+            joinedload(Procurement.income_tax_rule),
+        )
+        .get_or_404(procurement_id)
+    )
+
+    winner = procurement.winner_supplier_obj()
+
+    other_suppliers = []
+    for link in (procurement.supplies_links or []):
+        if not getattr(link, "supplier", None):
+            continue
+        if getattr(link, "is_winner", False):
+            continue
+        other_suppliers.append(link.supplier)
+
+    analysis = procurement.compute_payment_analysis()
+    lines = list(procurement.materials or [])
+    is_services = any(bool(getattr(l, "is_service", False)) for l in lines)
+
+    docx_bytes = build_award_decision_docx(
+        procurement=procurement,
+        service_unit=procurement.service_unit,
+        winner=winner,
+        other_suppliers=other_suppliers,
+        analysis=analysis,
+        is_services=is_services,
+        constants=AwardDecisionConstants(),
+    )
+
+    # Filename as requested:
+    # "Απόφαση Ανάθεσης (Προμήθειας Υλικων/Παροχής Υπηρεσίων) (ΠΕΡΙΓΡΑΦΗ ΠΡΟΜΗΘΕΥΤΗ) (ΓΕΝΙΚΟ ΣΥΝΟΛΟ)"
+    kind_label = "Παροχής Υπηρεσιών" if is_services else "Προμήθειας Υλικών"
+    supplier_label = _sanitize_filename_component(getattr(winner, "name", None) if winner else "—")
+
+    # Prefer "Γενικό Σύνολο" from the visible totals (grand_total), else fallback to analysis
+    amount_value = getattr(procurement, "grand_total", None)
+    if amount_value is None:
+        amount_value = analysis.get("payable_total") or analysis.get("sum_total") or Decimal("0.00")
+    amount_label = _money_filename(amount_value)
+
+    filename = f"Απόφαση Ανάθεσης {kind_label} {supplier_label} {amount_label}.docx"
+    filename = _sanitize_filename_component(filename).replace(" .docx", ".docx")
+    if not filename.lower().endswith(".docx"):
+        filename = f"{filename}.docx"
+
+    buf = BytesIO(docx_bytes)
+    buf.seek(0)
+
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        max_age=0,
+    )
+
+
+# ---------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------
 @procurements_bp.route("/new", methods=["GET", "POST"])
@@ -568,7 +689,6 @@ def create_procurement():
             status=(request.form.get("status") or "").strip() or None,
             stage=(request.form.get("stage") or "").strip() or None,
             vat_rate=_parse_decimal(request.form.get("vat_rate")),
-
             hop_commitment=(request.form.get("hop_commitment") or "").strip() or None,
             hop_forward1_commitment=(request.form.get("hop_forward1_commitment") or "").strip() or None,
             hop_forward2_commitment=(request.form.get("hop_forward2_commitment") or "").strip() or None,
@@ -578,9 +698,7 @@ def create_procurement():
             hop_forward2_preapproval=(request.form.get("hop_forward2_preapproval") or "").strip() or None,
             hop_approval=(request.form.get("hop_approval") or "").strip() or None,
             aay=(request.form.get("aay") or "").strip() or None,
-
             procurement_notes=(request.form.get("procurement_notes") or "").strip() or None,
-
             handler_personnel_id=handler_pid,
             income_tax_rule_id=rule.id if rule else None,
             withholding_profile_id=wp.id if wp else None,
@@ -682,17 +800,15 @@ def edit_procurement(procurement_id: int):
         procurement.aay = (request.form.get("aay") or "").strip() or None
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
 
-        # NEW: invitation identity field
+        # invitation identity field
         procurement.identity_prosklisis = (request.form.get("identity_prosklisis") or "").strip() or None
 
-        # These are already part of the edit page:
+        # already part of the edit page
         procurement.adam_aay = (request.form.get("adam_aay") or "").strip() or None
         procurement.ada_aay = (request.form.get("ada_aay") or "").strip() or None
         procurement.adam_prosklisis = (request.form.get("adam_prosklisis") or "").strip() or None
 
-        # IMPORTANT (V4.7):
         # When opened from "All procurements", the edit page can include implementation fields.
-        # The server may accept them regardless of UI source, but permissions are already enforced above.
         procurement.identity_apofasis_anathesis = (request.form.get("identity_apofasis_anathesis") or "").strip() or None
         procurement.adam_apofasis_anathesis = (request.form.get("adam_apofasis_anathesis") or "").strip() or None
         procurement.contract_number = (request.form.get("contract_number") or "").strip() or None

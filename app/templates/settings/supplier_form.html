@@ -71,6 +71,19 @@
             </div>
           </div>
 
+          <!-- NEW (V4.5): Δ.Ο.Υ. -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Δ.Ο.Υ.</label>
+            <div class="col-8">
+              <input type="text"
+                     name="doy"
+                     class="form-control form-control-sm"
+                     placeholder="π.χ. ΚΕΦΟΔΕ ΑΤΤΙΚΗΣ"
+                     value="{{ supplier.doy if supplier and supplier.doy is not none else '' }}">
+              <div class="form-text">Πεδίο μη υποχρεωτικό. Χρησιμοποιείται σε στοιχεία προμηθευτή.</div>
+            </div>
+          </div>
+
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Διεύθυνση</label>
             <div class="col-8">

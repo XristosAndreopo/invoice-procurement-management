@@ -623,7 +623,7 @@ def supplier_create():
     if request.method == "POST":
         afm = (request.form.get("afm") or "").strip()
         name = (request.form.get("name") or "").strip()
-
+        doy = (request.form.get("doy") or "").strip()
         # NEW: report fields
         email = (request.form.get("email") or "").strip()
         emba = (request.form.get("emba") or "").strip()
@@ -645,6 +645,7 @@ def supplier_create():
         supplier = Supplier(
             afm=afm,
             name=name,
+            doy=doy or None,
             email=email or None,
             emba=emba or None,
             address=address or None,
@@ -683,7 +684,7 @@ def supplier_edit(supplier_id: int):
 
         afm = (request.form.get("afm") or "").strip()
         name = (request.form.get("name") or "").strip()
-
+        doy = (request.form.get("doy") or "").strip()
         # NEW: report fields
         email = (request.form.get("email") or "").strip()
         emba = (request.form.get("emba") or "").strip()
@@ -704,6 +705,7 @@ def supplier_edit(supplier_id: int):
 
         supplier.afm = afm
         supplier.name = name
+        supplier.doy = doy or None
         supplier.email = email or None
         supplier.emba = emba or None
         supplier.address = address or None
@@ -739,6 +741,129 @@ def supplier_delete(supplier_id: int):
     flash("Ο προμηθευτής διαγράφηκε.", "success")
     return redirect(url_for("settings.suppliers_list"))
 
+
+@settings_bp.route("/suppliers/import", methods=["POST"])
+@login_required
+@admin_required
+def suppliers_import():
+    """
+    Admin-only Excel import for Suppliers.
+
+    Headers (Greek preferred, accents ignored):
+    - ΑΦΜ (required) / afm
+    - ΕΠΩΝΥΜΙΑ (required) / name / ονομασια
+    - ΔΟΥ (optional) / doy / δ.ο.υ.
+    - EMAIL, ΕΜΠΑ, ΔΙΕΥΘΥΝΣΗ, ΤΟΠΟΣ, ΤΚ, ΧΩΡΑ, ΤΡΑΠΕΖΑ, IBAN (optional)
+
+    Behavior:
+    - Skip duplicates by AFM (no update).
+    """
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Δεν επιλέχθηκε αρχείο.", "danger")
+        return redirect(url_for("settings.suppliers_list"))
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        flash("Επιτρέπεται μόνο αρχείο .xlsx", "danger")
+        return redirect(url_for("settings.suppliers_list"))
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(file, data_only=True)
+        ws = wb.active
+    except Exception:
+        flash("Αποτυχία ανάγνωσης Excel. Ελέγξτε το αρχείο.", "danger")
+        return redirect(url_for("settings.suppliers_list"))
+
+    try:
+        header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    except StopIteration:
+        flash("Το Excel είναι κενό.", "danger")
+        return redirect(url_for("settings.suppliers_list"))
+
+    # ✅ improve header normalize to support Δ.Ο.Υ.
+    def _norm(h: str) -> str:
+        s = _normalize_header(h)
+        return s.replace(".", "")
+
+    headers = [str(h).strip() if h is not None else "" for h in header_cells]
+    idx_map = {_norm(h): i for i, h in enumerate(headers) if _norm(h)}
+
+    afm_idx = idx_map.get("αφμ", idx_map.get("afm"))
+    name_idx = idx_map.get("επωνυμια", idx_map.get("name", idx_map.get("ονομασια")))
+    doy_idx = idx_map.get("δου", idx_map.get("doy", idx_map.get("δοy", idx_map.get("δοϋ"))))
+    email_idx = idx_map.get("email")
+    emba_idx = idx_map.get("εμπα", idx_map.get("emba"))
+    addr_idx = idx_map.get("διευθυνση", idx_map.get("address"))
+    city_idx = idx_map.get("τοπος", idx_map.get("city"))
+    pc_idx = idx_map.get("τκ", idx_map.get("tk", idx_map.get("postal_code")))
+    country_idx = idx_map.get("χωρα", idx_map.get("country"))
+    bank_idx = idx_map.get("τραπεζα", idx_map.get("bank_name"))
+    iban_idx = idx_map.get("iban")
+
+    if afm_idx is None or name_idx is None:
+        flash("Το Excel πρέπει να έχει στήλες 'ΑΦΜ' και 'ΕΠΩΝΥΜΙΑ' (ή 'name').", "danger")
+        return redirect(url_for("settings.suppliers_list"))
+
+    inserted: list[Supplier] = []
+    skipped_missing = 0
+    skipped_invalid_afm = 0
+    skipped_duplicate = 0
+
+    def _cell(row_vals, i: Optional[int]):
+        if i is None or i >= len(row_vals):
+            return None
+        return row_vals[i]
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        afm_raw = _safe_str(_cell(row, afm_idx))
+        name_raw = _safe_str(_cell(row, name_idx))
+
+        if not afm_raw or not name_raw:
+            skipped_missing += 1
+            continue
+
+        afm = "".join(ch for ch in afm_raw if ch.isdigit())
+        if len(afm) != 9:
+            skipped_invalid_afm += 1
+            continue
+
+        if Supplier.query.filter_by(afm=afm).first():
+            skipped_duplicate += 1
+            continue
+
+        supplier = Supplier(
+            afm=afm,
+            name=name_raw,
+            doy=_safe_str(_cell(row, doy_idx)) or None,
+            email=_safe_str(_cell(row, email_idx)) or None,
+            emba=_safe_str(_cell(row, emba_idx)) or None,
+            address=_safe_str(_cell(row, addr_idx)) or None,
+            city=_safe_str(_cell(row, city_idx)) or None,
+            postal_code=_safe_str(_cell(row, pc_idx)) or None,
+            country=_safe_str(_cell(row, country_idx)) or None,
+            bank_name=_safe_str(_cell(row, bank_idx)) or None,
+            iban=_safe_str(_cell(row, iban_idx)) or None,
+        )
+        db.session.add(supplier)
+        inserted.append(supplier)
+
+    if not inserted:
+        flash("Δεν εισήχθησαν εγγραφές. Ελέγξτε required πεδία/διπλότυπα/ΑΦΜ.", "warning")
+        return redirect(url_for("settings.suppliers_list"))
+
+    db.session.flush()
+    for s in inserted:
+        log_action(entity=s, action="CREATE", before=None, after=serialize_model(s))
+    db.session.commit()
+
+    flash(
+        f"Εισαγωγή ολοκληρώθηκε: {len(inserted)} νέοι προμηθευτές. "
+        f"Παραλείφθηκαν: {skipped_missing} (ελλιπή), {skipped_invalid_afm} (μη έγκυρο ΑΦΜ), {skipped_duplicate} (διπλότυπα).",
+        "success",
+    )
+    return redirect(url_for("settings.suppliers_list"))
 
 # ----------------------------------------------------------------------
 # NEW: ALE–KAE (admin-only) + Excel import

@@ -5,12 +5,44 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Προμηθευτές</h1>
     <div class="text-muted small">
-      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, Email, ΕΜΠΑ, διεύθυνση, τόπος, Τ.Κ., χώρα, τράπεζα, IBAN).
+      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, Δ.Ο.Υ., Email, ΕΜΠΑ, διεύθυνση, τόπος, Τ.Κ., χώρα, τράπεζα, IBAN).
     </div>
   </div>
   <a href="{{ url_for('settings.supplier_create') }}" class="btn btn-primary btn-sm">
     Νέος Προμηθευτής
   </a>
+</div>
+
+<!-- NEW: Excel import -->
+<div class="card glass-card shadow-sm border-0 mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-column flex-md-row align-items-start align-items-md-end justify-content-between gap-2">
+      <div class="small text-muted">
+        Excel headers:
+        <span class="fw-semibold">ΑΦΜ</span>,
+        <span class="fw-semibold">ΕΠΩΝΥΜΙΑ</span> (ή ΟΝΟΜΑΣΙΑ),
+        ΔΟΥ (ή Δ.Ο.Υ.),
+        EMAIL,
+        ΕΜΠΑ,
+        ΔΙΕΥΘΥΝΣΗ,
+        ΤΟΠΟΣ,
+        ΤΚ (ή Τ.Κ.),
+        ΧΩΡΑ,
+        ΤΡΑΠΕΖΑ,
+        IBAN
+        <span class="ms-2">(Duplicates: <span class="fw-semibold">SKIP</span>)</span>
+      </div>
+
+      <form method="post"
+            action="{{ url_for('settings.suppliers_import') }}"
+            enctype="multipart/form-data"
+            class="d-flex gap-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="file" name="file" accept=".xlsx" class="form-control form-control-sm" required>
+        <button class="btn btn-outline-primary btn-sm">Εισαγωγή Excel</button>
+      </form>
+    </div>
+  </div>
 </div>
 
 <div class="card glass-card shadow-sm border-0">
@@ -22,6 +54,7 @@
             <tr>
               <th>ΑΦΜ</th>
               <th>Επωνυμία</th>
+              <th>Δ.Ο.Υ.</th>
               <th>Email</th>
               <th>ΕΜΠΑ</th>
               <th>Διεύθυνση</th>
@@ -38,6 +71,7 @@
               <tr>
                 <td class="small fw-semibold">{{ s.afm }}</td>
                 <td class="small">{{ s.name }}</td>
+                <td class="small">{{ s.doy or '—' }}</td>
                 <td class="small">{{ s.email or '—' }}</td>
                 <td class="small">{{ s.emba or '—' }}</td>
                 <td class="small">{{ s.address or '—' }}</td>
