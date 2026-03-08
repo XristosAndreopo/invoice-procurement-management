@@ -12,7 +12,12 @@ Navigation:
 - Sidebar contains:
   1) Προμήθειες
   2) Ρυθμίσεις (with grouped headings)
-Items are filtered for visibility, BUT all permissions are enforced server-side.
+- Items are filtered for visibility, BUT all permissions are enforced server-side.
+
+UPDATED NAVIGATION MODEL:
+- Organizational management is now centered around the consolidated page:
+  /admin/organization-setup
+- Legacy structure route remains only for compatibility and redirects server-side.
 """
 
 from __future__ import annotations
@@ -70,7 +75,6 @@ NAV_SECTIONS = [
             {"label": "Φόρος Εισοδήματος", "endpoint": "settings.income_tax_rules", "admin_only": True},
             {"label": "Κρατήσεις", "endpoint": "settings.withholding_profiles", "admin_only": True},
             {"label": "Επιτροπές Προμηθειών", "endpoint": "settings.committees", "admin_only": False},
-
             {"label": "ΑΛΕ-ΚΑΕ", "endpoint": "settings.ale_kae", "admin_only": True},
             {"label": "CPV", "endpoint": "settings.cpv", "admin_only": True},
 
@@ -80,17 +84,12 @@ NAV_SECTIONS = [
             {"type": "header", "label": "Οργανισμός"},
             {"label": "Υπηρεσίες", "endpoint": "settings.service_units_list", "admin_only": True},
             {"label": "Προσωπικό", "endpoint": "admin.personnel_list", "admin_only": False},
-
-            # ✅ Existing
             {"label": "Ορισμός Deputy/Manager", "endpoint": "settings.service_units_roles_list", "admin_only": True},
-
-            # ✅ NEW: Setup page (Directors / Heads)
             {
-                "label": "Ορισμός Διευθυντών/Προϊσταμένων",
+                "label": "Οργάνωση Υπηρεσίας",
                 "endpoint": "admin.organization_setup",
                 "admin_only": False,
             },
-
             {"label": "Χρήστες", "endpoint": "users.list_users", "admin_only": True},
 
             # -------------------------
@@ -126,7 +125,12 @@ def create_app() -> Flask:
 
     @login_manager.user_loader
     def load_user(user_id: str) -> User | None:
-        """Load user for Flask-Login."""
+        """
+        Load user for Flask-Login.
+
+        SECURITY:
+        - Any exception returns None instead of failing the whole request.
+        """
         try:
             return User.query.get(int(user_id))
         except Exception:
@@ -171,7 +175,8 @@ def create_app() -> Flask:
         Inject navigation filtered by user.
 
         SECURITY NOTE:
-        - This only filters visibility. Routes enforce permissions.
+        - This only filters visibility.
+        - Real authorization is always enforced in routes.
         """
         visible_sections = []
 
@@ -193,7 +198,8 @@ def create_app() -> Flask:
                     and (current_user.is_admin or current_user.can_manage())
                 )
 
-            # Setup: allowed for admin OR manager (NOT deputy)
+            # Consolidated organization page:
+            # visible to admin OR manager (not deputy).
             if endpoint == "admin.organization_setup":
                 if not current_user.is_authenticated:
                     return False
@@ -202,7 +208,7 @@ def create_app() -> Flask:
                 is_mgr = getattr(current_user, "is_manager", None)
                 return bool(callable(is_mgr) and is_mgr())
 
-            # Personnel list: allow admin OR manager (NOT deputy) visibility
+            # Personnel list: visible to admin OR manager (not deputy).
             if endpoint == "admin.personnel_list":
                 if not current_user.is_authenticated:
                     return False
@@ -224,6 +230,12 @@ def create_app() -> Flask:
             current_group: list[dict] = []
 
             def _flush_group():
+                """
+                Flush the current header-group pair into the visible items.
+
+                UX NOTE:
+                - A header is rendered only if at least one visible child item exists.
+                """
                 nonlocal current_header, current_group, built_items
                 if current_header is None:
                     built_items.extend(current_group)
@@ -271,7 +283,13 @@ def create_app() -> Flask:
     # ----------------------------------------------------------------------
     @app.route("/")
     def index():
-        """Home: redirect to inbox or login."""
+        """
+        Home route.
+
+        Behavior:
+        - Authenticated users -> inbox procurements
+        - Anonymous users -> login
+        """
         if current_user.is_authenticated:
             return redirect(url_for("procurements.inbox_procurements"))
         return redirect(url_for("auth.login"))

@@ -5,7 +5,8 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Υπηρεσίες</h1>
     <div class="text-muted small">
-      Βασικά στοιχεία υπηρεσιών (Κωδικός, Περιγραφή, Συντομογραφία) + διαχείριση Δομής και SetUp.
+      Διαχείριση βασικών στοιχείων Υπηρεσιών και πρόσβαση στις επιμέρους σελίδες:
+      Ρόλοι, Οργάνωση Υπηρεσίας και Επιτροπές.
     </div>
   </div>
   <div class="d-flex gap-2">
@@ -19,8 +20,19 @@
   <div class="card-body">
     <div class="d-flex flex-column flex-md-row align-items-start align-items-md-end justify-content-between gap-2">
       <div class="small text-muted">
-        Excel import: στήλες <span class="fw-semibold">Κωδικός</span>, <span class="fw-semibold">Περιγραφή</span>, <span class="fw-semibold">Συντομογραφία</span>.
+        Excel import: στήλες
+        <span class="fw-semibold">Κωδικός</span>,
+        <span class="fw-semibold">Περιγραφή</span>,
+        <span class="fw-semibold">Συντομογραφία</span>
+        και προαιρετικά
+        <span class="fw-semibold">ΑΑΗΤ</span>,
+        <span class="fw-semibold">Διεύθυνση</span>,
+        <span class="fw-semibold">Τηλέφωνο</span>,
+        <span class="fw-semibold">Διοικητής</span>,
+        <span class="fw-semibold">Επιμελητής</span>,
+        <span class="fw-semibold">Υπόλογος εφοδιασμού</span>.
       </div>
+
       <form method="post" action="{{ url_for('settings.service_units_import') }}" enctype="multipart/form-data" class="d-flex gap-2">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="file" name="file" accept=".xlsx" class="form-control form-control-sm" required>
@@ -42,6 +54,8 @@
               <th>Κωδικός</th>
               <th>Περιγραφή</th>
               <th>Συντομογραφία</th>
+              <th>Διεύθυνση</th>
+              <th>Τηλέφωνο</th>
               <th class="text-end"></th>
             </tr>
           </thead>
@@ -49,12 +63,15 @@
             {% for u in units %}
               <tr>
                 <td class="small"><code>{{ u.code or '—' }}</code></td>
-                <td class="small">{{ u.description }}</td>
+                <td class="small fw-semibold">{{ u.description }}</td>
                 <td class="small">{{ u.short_name or '—' }}</td>
+                <td class="small">{{ u.address or '—' }}</td>
+                <td class="small">{{ u.phone or '—' }}</td>
+
                 <td class="text-end">
                   <a href="{{ url_for('settings.service_unit_edit_info', unit_id=u.id) }}"
                      class="btn btn-sm btn-outline-secondary me-1">
-                    Επεξεργασία
+                    Βασικά Στοιχεία
                   </a>
 
                   <a href="{{ url_for('settings.service_unit_edit', unit_id=u.id) }}"
@@ -62,14 +79,14 @@
                     Ρόλοι
                   </a>
 
-                  <a href="{{ url_for('settings.service_unit_structure', unit_id=u.id) }}"
-                     class="btn btn-sm btn-outline-primary me-1">
-                    Δομή
+                  <a href="{{ url_for('admin.organization_setup', service_unit_id=u.id) }}"
+                     class="btn btn-sm btn-outline-success me-1">
+                    Οργάνωση
                   </a>
 
-                  <a href="{{ url_for('admin.organization_setup', service_unit_id=u.id) }}"
-                     class="btn btn-sm btn-outline-primary me-1">
-                    SetUp
+                  <a href="{{ url_for('settings.committees', service_unit_id=u.id) }}"
+                     class="btn btn-sm btn-outline-dark me-1">
+                    Επιτροπές
                   </a>
 
                   <form
@@ -88,6 +105,10 @@
             {% endfor %}
           </tbody>
         </table>
+      </div>
+
+      <div class="form-text mt-3">
+        Η παλιά ξεχωριστή σελίδα “Δομή” διατηρείται μόνο για συμβατότητα και ανακατευθύνει πλέον στην κεντρική σελίδα “Οργάνωση”.
       </div>
     {% else %}
       <div class="small text-muted">

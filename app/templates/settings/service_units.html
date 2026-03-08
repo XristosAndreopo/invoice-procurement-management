@@ -5,7 +5,9 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Υπηρεσίες</h1>
     <div class="text-muted small">
-      Κεντρική σελίδα διαχείρισης υπηρεσιών: λίστα, ρόλοι (Manager/Deputy), δομή (Διευθύνσεις/Τμήματα) και SetUp (ορισμός Διευθυντών/Προϊσταμένων).
+      Κεντρική σελίδα πρόσβασης για τη διαχείριση Υπηρεσιών.
+      Από εδώ μεταβαίνεις στα βασικά στοιχεία, στους ρόλους Manager/Deputy,
+      στην οργάνωση της Υπηρεσίας και στις επιτροπές προμηθειών.
     </div>
   </div>
 </div>
@@ -17,7 +19,8 @@
       <div class="card-body">
         <h2 class="h6 fw-bold mb-2">Λίστα Υπηρεσιών</h2>
         <p class="small text-muted mb-3">
-          Προβολή/επεξεργασία βασικών στοιχείων υπηρεσιών και πρόσβαση σε Δομή/SetUp ανά υπηρεσία.
+          Προβολή όλων των Υπηρεσιών και πρόσβαση σε:
+          βασικά στοιχεία, ρόλους, οργάνωση και επιτροπές ανά Υπηρεσία.
         </p>
         <a href="{{ url_for('settings.service_units_list') }}" class="btn btn-outline-primary btn-sm">
           Προβολή λίστας
@@ -31,10 +34,41 @@
       <div class="card-body">
         <h2 class="h6 fw-bold mb-2">Ορισμός Deputy/Manager</h2>
         <p class="small text-muted mb-3">
-          Ανάθεση ρόλων ανά υπηρεσία. Επιτρέπεται επιλογή μόνο από ενεργό προσωπικό.
+          Ανάθεση ρόλων Manager/Deputy ανά Υπηρεσία.
+          Επιτρέπεται μόνο επιλογή από ενεργό προσωπικό.
         </p>
         <a href="{{ url_for('settings.service_units_roles_list') }}" class="btn btn-outline-primary btn-sm">
           Μετάβαση στους ρόλους
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card glass-card shadow-sm border-0 h-100">
+      <div class="card-body">
+        <h2 class="h6 fw-bold mb-2">Οργάνωση Υπηρεσίας</h2>
+        <p class="small text-muted mb-3">
+          Κεντρική διαχείριση οργανωτικής δομής:
+          Διευθύνσεις, Τμήματα, Διευθυντές, Προϊστάμενοι και Βοηθοί.
+        </p>
+        <a href="{{ url_for('admin.organization_setup') }}" class="btn btn-outline-success btn-sm">
+          Άνοιγμα οργάνωσης
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card glass-card shadow-sm border-0 h-100">
+      <div class="card-body">
+        <h2 class="h6 fw-bold mb-2">Επιτροπές Προμηθειών</h2>
+        <p class="small text-muted mb-3">
+          Διαχείριση επιτροπών ανά Υπηρεσία.
+          Για admin υπάρχει επιλογή υπηρεσίας, ενώ οι managers/deputies βλέπουν μόνο τη δική τους.
+        </p>
+        <a href="{{ url_for('settings.committees') }}" class="btn btn-outline-dark btn-sm">
+          Άνοιγμα επιτροπών
         </a>
       </div>
     </div>
@@ -45,7 +79,9 @@
       <div class="card-body">
         <div class="fw-bold mb-1">Σημείωση</div>
         <div class="small text-muted">
-          Η “Δομή” και το “SetUp” γίνονται <b>ανά υπηρεσία</b> μέσα από τη Λίστα Υπηρεσιών (κουμπιά “Δομή” και “SetUp” στη γραμμή κάθε υπηρεσίας).
+          Η παλιά ξεχωριστή λογική “Δομή Υπηρεσίας” διατηρείται μόνο για συμβατότητα παλιών συνδέσμων.
+          Πλέον όλη η οργανωτική διαχείριση γίνεται από την ενιαία σελίδα
+          <b>“Οργάνωση Υπηρεσίας”</b>.
         </div>
       </div>
     </div>

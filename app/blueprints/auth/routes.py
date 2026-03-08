@@ -9,8 +9,27 @@ Provides:
 Enterprise Rules:
 - Every User MUST be linked to a Personnel record.
 - No orphan users allowed.
-- Admin bootstrap creates BOTH Personnel and User.
+- UI is never trusted; all auth-sensitive logic is server-side.
+
+ADMIN MODEL DECISION:
+- Admin user is linked 1-to-1 with a normal Personnel record.
+- That Personnel may be "neutral":
+  - service_unit_id = None
+  - directory_id = None
+  - department_id = None
+
+BOOTSTRAP RULES:
+- If ANY user already exists -> block reseeding
+- Seed admin creates BOTH Personnel and User
+- Seeded admin Personnel is neutral and system-generated
+
+SECURITY:
+- Only active users may log in
+- Passwords are validated via password hash
+- Bootstrap route is self-locking after first user creation
 """
+
+from __future__ import annotations
 
 from flask import (
     Blueprint,
@@ -37,23 +56,22 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 # ============================================================
 # LOGIN
 # ============================================================
-
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
     """
     Authenticate a user.
 
-    Enterprise Logic:
+    Enterprise logic:
     - Only active users may log in
     - Credentials validated via password hash
+    - Already-authenticated users are redirected away from login
     """
-
     if current_user.is_authenticated:
         return redirect(url_for("procurements.list_procurements"))
 
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
 
         user = User.query.filter_by(username=username).first()
 
@@ -77,7 +95,6 @@ def login():
 # ============================================================
 # LOGOUT
 # ============================================================
-
 @auth_bp.route("/logout")
 @login_required
 def logout():
@@ -90,33 +107,44 @@ def logout():
 # ============================================================
 # SEED FIRST ADMIN (BOOTSTRAP)
 # ============================================================
-
 @auth_bp.route("/seed-admin", methods=["GET", "POST"])
 def seed_admin():
     """
     Bootstrap the FIRST admin of the system.
 
-    Enterprise Safety Rules:
-    - If ANY user already exists → block
+    Enterprise safety rules:
+    - If ANY user already exists -> prevent re-seeding
     - Admin MUST have linked Personnel record
-    - Admin Personnel is system-generated
+    - Seeded admin Personnel is neutral (no ServiceUnit/Directory/Department)
+    - Admin User itself also starts with service_unit_id = None
     """
-
-    # If any user exists → prevent re-seeding
     if User.query.count() > 0:
         flash("Υπάρχει ήδη χρήστης στο σύστημα.", "warning")
         return redirect(url_for("auth.login"))
 
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
 
         if not username or not password:
             flash("Συμπληρώστε όνομα χρήστη και κωδικό.", "danger")
             return render_template("auth/seed_admin.html")
 
+        if User.query.filter_by(username=username).first():
+            flash("Το username υπάρχει ήδη.", "danger")
+            return render_template("auth/seed_admin.html")
+
+        existing_admin_personnel = Personnel.query.filter_by(agm="SYS-ADMIN-001").first()
+        if existing_admin_personnel:
+            flash(
+                "Υπάρχει ήδη system-generated εγγραφή Προσωπικού για bootstrap admin. "
+                "Ελέγξτε τη βάση πριν συνεχίσετε.",
+                "danger",
+            )
+            return render_template("auth/seed_admin.html")
+
         # ----------------------------------------------------
-        # 1️⃣ Create Personnel record for Admin
+        # 1) Create neutral Personnel record for Admin
         # ----------------------------------------------------
         personnel = Personnel(
             agm="SYS-ADMIN-001",
@@ -126,13 +154,16 @@ def seed_admin():
             first_name="System",
             last_name="Administrator",
             is_active=True,
+            service_unit_id=None,
+            directory_id=None,
+            department_id=None,
         )
 
         db.session.add(personnel)
-        db.session.flush()  # Get personnel.id without full commit
+        db.session.flush()  # get personnel.id without full commit
 
         # ----------------------------------------------------
-        # 2️⃣ Create User linked to Personnel
+        # 2) Create Admin User linked 1-to-1 to Personnel
         # ----------------------------------------------------
         user = User(
             username=username,
@@ -141,7 +172,6 @@ def seed_admin():
             personnel_id=personnel.id,
             service_unit_id=None,
         )
-
         user.set_password(password)
 
         db.session.add(user)

@@ -5,178 +5,60 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Δομή Υπηρεσίας</h1>
     <div class="text-muted small">
-      Διαχείριση Διευθύνσεων (Διεύθυνση) και Τμημάτων (Τμήμα) για την Υπηρεσία.
+      Η σελίδα αυτή παραμένει μόνο για συμβατότητα παλιών συνδέσμων.
+      Η οργανωτική διαχείριση γίνεται πλέον κεντρικά από τη σελίδα “Οργάνωση Υπηρεσίας”.
     </div>
   </div>
-  <a href="{{ url_for('settings.service_units_list') }}" class="btn btn-outline-secondary btn-sm">
-    &larr; Πίσω στις Υπηρεσίες
-  </a>
+
+  <div class="d-flex gap-2">
+    {% if unit %}
+      <a href="{{ url_for('admin.organization_setup', service_unit_id=unit.id) }}" class="btn btn-success btn-sm">
+        Μετάβαση στην Οργάνωση Υπηρεσίας
+      </a>
+    {% endif %}
+
+    {% if current_user.is_admin %}
+      <a href="{{ url_for('settings.service_units_list') }}" class="btn btn-outline-secondary btn-sm">
+        &larr; Πίσω στις Υπηρεσίες
+      </a>
+    {% endif %}
+  </div>
 </div>
 
-<div class="card glass-card shadow-sm border-0 mb-3">
+<div class="card glass-card shadow-sm border-0">
   <div class="card-body">
-    <div class="fw-semibold">
-      {{ unit.short_name or unit.description }}
-      {% if unit.code %}<span class="text-muted">• {{ unit.code }}</span>{% endif %}
-    </div>
-    <div class="small text-muted mt-1">
-      Σημείωση: Τα permissions enforced server-side (Admin: όλα, Manager/Deputy: μόνο τη δική τους υπηρεσία).
-    </div>
-  </div>
-</div>
-
-<div class="row g-3">
-  <!-- LEFT: Directories -->
-  <div class="col-12 col-lg-6">
-    <div class="card glass-card shadow-sm border-0 h-100">
-      <div class="card-body">
-        <h2 class="h6 fw-bold mb-3">Διευθύνσεις</h2>
-
-        <form method="post" action="{{ request.path }}" class="row g-2 mb-3">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="directory_create">
-
-          <div class="col-12 col-md-8">
-            <input name="name" class="form-control form-control-sm" placeholder="Νέα Διεύθυνση..." required>
-          </div>
-          <div class="col-12 col-md-4">
-            <button class="btn btn-sm btn-primary w-100">Προσθήκη</button>
-          </div>
-        </form>
-
-        {% if directories %}
-          <div class="table-responsive">
-            <table class="table table-sm align-middle mb-0">
-              <thead>
-                <tr>
-                  <th>Ονομασία</th>
-                  <th>Ενεργό</th>
-                  <th class="text-end">Ενέργειες</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for d in directories %}
-                  <tr>
-                    <td style="min-width: 220px;">
-                      <form method="post" action="{{ request.path }}" class="d-flex gap-2">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="action" value="directory_update">
-                        <input type="hidden" name="directory_id" value="{{ d.id }}">
-                        <input name="name" class="form-control form-control-sm" value="{{ d.name }}" required>
-                    </td>
-                    <td>
-                      <input type="checkbox" name="is_active" {% if d.is_active %}checked{% endif %}>
-                    </td>
-                    <td class="text-end">
-                        <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
-                      </form>
-
-                      <form method="post" action="{{ request.path }}" class="d-inline">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="action" value="directory_delete">
-                        <input type="hidden" name="directory_id" value="{{ d.id }}">
-                        <button class="btn btn-sm btn-outline-danger"
-                                onclick="return confirm('Διαγραφή Διεύθυνσης; Θα διαγραφούν και τα Τμήματα της.');">
-                          Διαγραφή
-                        </button>
-                      </form>
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <div class="small text-muted">Δεν υπάρχουν Διευθύνσεις.</div>
-        {% endif %}
+    {% if unit %}
+      <div class="mb-3">
+        <div class="small text-muted">Υπηρεσία</div>
+        <div class="fw-semibold">
+          {{ unit.short_name or unit.description }}
+          {% if unit.code %}
+            <span class="text-muted">• {{ unit.code }}</span>
+          {% endif %}
+        </div>
       </div>
-    </div>
-  </div>
 
-  <!-- RIGHT: Departments -->
-  <div class="col-12 col-lg-6">
-    <div class="card glass-card shadow-sm border-0 h-100">
-      <div class="card-body">
-        <h2 class="h6 fw-bold mb-3">Τμήματα</h2>
-
-        <form method="post" action="{{ request.path }}" class="row g-2 mb-3">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="department_create">
-
-          <div class="col-12 col-md-5">
-            <select name="directory_id" class="form-select form-select-sm" required>
-              <option value="">(Διεύθυνση)</option>
-              {% for d in directories %}
-                <option value="{{ d.id }}">{{ d.name }}</option>
-              {% endfor %}
-            </select>
-          </div>
-
-          <div class="col-12 col-md-5">
-            <input name="name" class="form-control form-control-sm" placeholder="Νέο Τμήμα..." required>
-          </div>
-
-          <div class="col-12 col-md-2">
-            <button class="btn btn-sm btn-primary w-100">Προσθήκη</button>
-          </div>
-        </form>
-
-        {% if departments %}
-          <div class="table-responsive">
-            <table class="table table-sm align-middle mb-0">
-              <thead>
-                <tr>
-                  <th>Διεύθυνση</th>
-                  <th>Τμήμα</th>
-                  <th>Ενεργό</th>
-                  <th class="text-end">Ενέργειες</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for dep in departments %}
-                  {% set dir_name = "—" %}
-                  {% for d in directories %}
-                    {% if d.id == dep.directory_id %}
-                      {% set dir_name = d.name %}
-                    {% endif %}
-                  {% endfor %}
-
-                  <tr>
-                    <td class="small" style="min-width: 160px;">{{ dir_name }}</td>
-                    <td style="min-width: 220px;">
-                      <form method="post" action="{{ request.path }}" class="d-flex gap-2">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="action" value="department_update">
-                        <input type="hidden" name="department_id" value="{{ dep.id }}">
-                        <input name="name" class="form-control form-control-sm" value="{{ dep.name }}" required>
-                    </td>
-                    <td>
-                      <input type="checkbox" name="is_active" {% if dep.is_active %}checked{% endif %}>
-                    </td>
-                    <td class="text-end">
-                        <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
-                      </form>
-
-                      <form method="post" action="{{ request.path }}" class="d-inline">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="action" value="department_delete">
-                        <input type="hidden" name="department_id" value="{{ dep.id }}">
-                        <button class="btn btn-sm btn-outline-danger"
-                                onclick="return confirm('Διαγραφή Τμήματος;');">
-                          Διαγραφή
-                        </button>
-                      </form>
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <div class="small text-muted">Δεν υπάρχουν Τμήματα.</div>
-        {% endif %}
+      <div class="alert alert-info mb-0">
+        Η διαχείριση
+        <strong>Διευθύνσεων</strong>,
+        <strong>Τμημάτων</strong>,
+        <strong>Διευθυντών</strong>,
+        <strong>Προϊσταμένων</strong>
+        και
+        <strong>Βοηθών</strong>
+        έχει ενοποιηθεί στην κεντρική σελίδα οργάνωσης της Υπηρεσίας.
       </div>
-    </div>
+
+      <div class="mt-3">
+        <a href="{{ url_for('admin.organization_setup', service_unit_id=unit.id) }}" class="btn btn-outline-primary btn-sm">
+          Άνοιγμα Κεντρικής Σελίδας Οργάνωσης
+        </a>
+      </div>
+    {% else %}
+      <div class="alert alert-warning mb-0">
+        Δεν βρέθηκε Υπηρεσία.
+      </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

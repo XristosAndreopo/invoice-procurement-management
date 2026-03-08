@@ -16,15 +16,26 @@ Enterprise scope:
 - ALE–KAE master list (admin-only) + Excel import
 - CPV master list (admin-only) + Excel import
 
-NEW (Organizational Structure):
+NEW / UPDATED (Organizational Structure):
 - ServiceUnit -> Directories -> Departments
-- Structure management per ServiceUnit:
-  - Admin can manage all
-  - Manager/Deputy can manage ONLY their own ServiceUnit (server-side)
+- Consolidated organization management is centered in admin.organization_setup
+- Legacy structure route remains for compatibility and redirects to the
+  consolidated page.
 
 SECURITY:
 - UI is never trusted. All permissions are enforced server-side.
 - Viewer read-only guard exists globally, but routes still enforce explicit decorators.
+
+DELETE POLICY FOR SERVICE UNITS:
+- SQLite dev mode may not always behave like PostgreSQL with ORM relationship
+  cascades, especially when SQLAlchemy tries to nullify non-nullable child FKs.
+- Therefore ServiceUnit deletion is handled defensively in routes:
+  - Committees are explicitly deleted first
+  - Personnel/User/Procurement FKs are normalized to NULL where appropriate
+  - Manager/Deputy pointers are cleared before unit deletion
+  - Audit logging is preserved for ServiceUnit and explicit committee deletions
+
+This keeps the code PostgreSQL-ready while remaining stable under SQLite dev.
 """
 
 from __future__ import annotations
@@ -52,6 +63,8 @@ from ...models import (
     Cpv,
     Directory,
     Department,
+    User,
+    Procurement,
 )
 from ...security import admin_required, manager_required
 
@@ -172,6 +185,92 @@ def _safe_str(v) -> str:
     if v is None:
         return ""
     return str(v).strip()
+
+
+def _delete_service_unit_safely(unit: ServiceUnit) -> None:
+    """
+    Delete a ServiceUnit defensively and in a SQLite-safe manner.
+
+    Why this exists:
+    - In SQLite dev, SQLAlchemy may try to set child FK values to NULL during
+      parent deletion, even when the target column is NOT NULL.
+    - Example seen in practice:
+        procurement_committees.service_unit_id -> NOT NULL constraint failed
+
+    Strategy:
+    1) Snapshot the ServiceUnit for audit
+    2) Explicitly delete ProcurementCommittee rows first
+    3) Nullify nullable references from Personnel/User/Procurement
+    4) Clear manager/deputy pointers
+    5) Delete the ServiceUnit itself
+    6) Write audit entries and commit
+
+    IMPORTANT:
+    - Directories/Departments are still deleted through their FK cascade path.
+    - This function intentionally keeps historical entities (e.g. procurements,
+      users, personnel) by nulling service_unit_id instead of deleting them.
+    """
+    before_unit = serialize_model(unit)
+
+    # ------------------------------------------------------------
+    # 1) Explicit child deletes first for non-nullable FK tables
+    # ------------------------------------------------------------
+    committees = (
+        ProcurementCommittee.query
+        .filter_by(service_unit_id=unit.id)
+        .order_by(ProcurementCommittee.id.asc())
+        .all()
+    )
+
+    committee_delete_audits: list[tuple[ProcurementCommittee, dict]] = []
+    for committee in committees:
+        committee_delete_audits.append((committee, serialize_model(committee)))
+        db.session.delete(committee)
+
+    db.session.flush()
+
+    for committee, before_committee in committee_delete_audits:
+        log_action(committee, "DELETE", before=before_committee, after=None)
+
+    # ------------------------------------------------------------
+    # 2) Defensive normalization of nullable references
+    # ------------------------------------------------------------
+    # Personnel assigned to this ServiceUnit become neutral.
+    Personnel.query.filter_by(service_unit_id=unit.id).update(
+        {
+            "service_unit_id": None,
+            "directory_id": None,
+            "department_id": None,
+        },
+        synchronize_session=False,
+    )
+
+    # Users assigned to this ServiceUnit become neutral.
+    User.query.filter_by(service_unit_id=unit.id).update(
+        {"service_unit_id": None},
+        synchronize_session=False,
+    )
+
+    # Procurements keep history but lose direct ServiceUnit assignment.
+    Procurement.query.filter_by(service_unit_id=unit.id).update(
+        {"service_unit_id": None},
+        synchronize_session=False,
+    )
+
+    # Clear manager/deputy pointers on the unit before delete for consistency.
+    unit.manager_personnel_id = None
+    unit.deputy_personnel_id = None
+
+    db.session.flush()
+
+    # ------------------------------------------------------------
+    # 3) Delete ServiceUnit itself
+    # ------------------------------------------------------------
+    db.session.delete(unit)
+    db.session.flush()
+
+    # Audit after successful flush
+    log_action(entity=unit, action="DELETE", before=before_unit, after=None)
 
 
 # ----------------------------------------------------------------------
@@ -423,37 +522,61 @@ def service_units_import():
     code_idx = idx_map.get("κωδικος", idx_map.get("code"))
     desc_idx = idx_map.get("περιγραφη", idx_map.get("description"))
     short_idx = idx_map.get("συντομογραφια", idx_map.get("short name", idx_map.get("short_name")))
+    aahit_idx = idx_map.get("ααητ", idx_map.get("aahit"))
+    address_idx = idx_map.get("διευθυνση", idx_map.get("address"))
+    phone_idx = idx_map.get("τηλεφωνο", idx_map.get("phone"))
+    commander_idx = idx_map.get("διοικητης", idx_map.get("commander"))
+    curator_idx = idx_map.get("επιμελητης", idx_map.get("curator"))
+    supply_officer_idx = idx_map.get("υπολογος εφοδιασμου", idx_map.get("supply_officer"))
 
     if desc_idx is None:
         flash("Το Excel πρέπει να έχει στήλη 'Περιγραφή' (ή 'description').", "danger")
         return redirect(url_for("settings.service_units_list"))
 
     inserted_units: list[ServiceUnit] = []
-    skipped = 0
+    skipped_missing = 0
+    skipped_duplicate = 0
 
     for row in ws.iter_rows(min_row=2, values_only=True):
-        desc_val = row[desc_idx] if desc_idx < len(row) else None
-        description = (str(desc_val).strip() if desc_val is not None else "")
+        def _cell(i: Optional[int]):
+            if i is None or i >= len(row):
+                return None
+            return row[i]
+
+        description = _safe_str(_cell(desc_idx))
         if not description:
-            skipped += 1
+            skipped_missing += 1
             continue
 
-        code = None
-        if code_idx is not None and code_idx < len(row):
-            v = row[code_idx]
-            code = (str(v).strip() if v is not None else "") or None
+        code = _safe_str(_cell(code_idx)) or None
+        short_name = _safe_str(_cell(short_idx)) or None
+        aahit = _safe_str(_cell(aahit_idx)) or None
+        address = _safe_str(_cell(address_idx)) or None
+        phone = _safe_str(_cell(phone_idx)) or None
+        commander = _safe_str(_cell(commander_idx)) or None
+        curator = _safe_str(_cell(curator_idx)) or None
+        supply_officer = _safe_str(_cell(supply_officer_idx)) or None
 
-        short_name = None
-        if short_idx is not None and short_idx < len(row):
-            v = row[short_idx]
-            short_name = (str(v).strip() if v is not None else "") or None
+        duplicate_q = ServiceUnit.query.filter(ServiceUnit.description == description)
+        if code:
+            duplicate_q = duplicate_q.union(ServiceUnit.query.filter(ServiceUnit.code == code))
+        if short_name:
+            duplicate_q = duplicate_q.union(ServiceUnit.query.filter(ServiceUnit.short_name == short_name))
+
+        if duplicate_q.first():
+            skipped_duplicate += 1
+            continue
 
         unit = ServiceUnit(
             description=description,
             code=code,
             short_name=short_name,
-            address=None,
-            phone=None,
+            aahit=aahit,
+            commander=commander,
+            curator=curator,
+            supply_officer=supply_officer,
+            address=address,
+            phone=phone,
             manager_personnel_id=None,
             deputy_personnel_id=None,
         )
@@ -461,7 +584,11 @@ def service_units_import():
         inserted_units.append(unit)
 
     if not inserted_units:
-        flash("Δεν βρέθηκαν έγκυρες γραμμές προς εισαγωγή.", "warning")
+        flash(
+            "Δεν βρέθηκαν έγκυρες γραμμές προς εισαγωγή. "
+            "Ελέγξτε υποχρεωτικά πεδία και διπλότυπα.",
+            "warning",
+        )
         return redirect(url_for("settings.service_units_list"))
 
     db.session.flush()
@@ -471,7 +598,11 @@ def service_units_import():
 
     db.session.commit()
 
-    flash(f"Εισαγωγή ολοκληρώθηκε: {len(inserted_units)} νέες υπηρεσίες, {skipped} γραμμές αγνοήθηκαν.", "success")
+    flash(
+        f"Εισαγωγή ολοκληρώθηκε: {len(inserted_units)} νέες υπηρεσίες. "
+        f"Παραλείφθηκαν: {skipped_missing} (ελλιπείς), {skipped_duplicate} (διπλότυπα).",
+        "success",
+    )
     return redirect(url_for("settings.service_units_list"))
 
 
@@ -499,6 +630,32 @@ def service_unit_edit_info(unit_id: int):
         if not description:
             flash("Η περιγραφή είναι υποχρεωτική.", "danger")
             return redirect(url_for("settings.service_unit_edit_info", unit_id=unit_id))
+
+        existing_desc = ServiceUnit.query.filter(
+            ServiceUnit.description == description,
+            ServiceUnit.id != unit.id,
+        ).first()
+        if existing_desc:
+            flash("Υπάρχει ήδη άλλη υπηρεσία με αυτή την περιγραφή.", "danger")
+            return redirect(url_for("settings.service_unit_edit_info", unit_id=unit_id))
+
+        if code:
+            existing_code = ServiceUnit.query.filter(
+                ServiceUnit.code == code,
+                ServiceUnit.id != unit.id,
+            ).first()
+            if existing_code:
+                flash("Υπάρχει ήδη άλλη υπηρεσία με αυτόν τον κωδικό.", "danger")
+                return redirect(url_for("settings.service_unit_edit_info", unit_id=unit_id))
+
+        if short_name:
+            existing_short = ServiceUnit.query.filter(
+                ServiceUnit.short_name == short_name,
+                ServiceUnit.id != unit.id,
+            ).first()
+            if existing_short:
+                flash("Υπάρχει ήδη άλλη υπηρεσία με αυτή τη συντομογραφία.", "danger")
+                return redirect(url_for("settings.service_unit_edit_info", unit_id=unit_id))
 
         unit.description = description
         unit.code = code or None
@@ -573,13 +730,17 @@ def service_unit_edit(unit_id: int):
 @login_required
 @admin_required
 def service_unit_delete(unit_id: int):
-    """Delete ServiceUnit (admin-only)."""
-    unit = ServiceUnit.query.get_or_404(unit_id)
-    before = serialize_model(unit)
+    """
+    Delete ServiceUnit (admin-only) using a defensive SQLite-safe strategy.
 
-    db.session.delete(unit)
-    db.session.flush()
-    log_action(entity=unit, action="DELETE", before=before, after=None)
+    IMPORTANT:
+    - Prevents ORM/SQLite NOT NULL failures on child rows such as committees.
+    - Keeps historical rows (users/personnel/procurements) by neutralizing the
+      foreign key instead of deleting those records.
+    """
+    unit = ServiceUnit.query.get_or_404(unit_id)
+
+    _delete_service_unit_safely(unit)
     db.session.commit()
 
     flash("Η υπηρεσία διαγράφηκε.", "success")
@@ -587,224 +748,25 @@ def service_unit_delete(unit_id: int):
 
 
 # ----------------------------------------------------------------------
-# NEW: SERVICE UNIT STRUCTURE (Directories / Departments)
+# LEGACY: SERVICE UNIT STRUCTURE (compatibility redirect)
 # ----------------------------------------------------------------------
 @settings_bp.route("/service-units/<int:unit_id>/structure", methods=["GET", "POST"])
 @login_required
 @manager_required
 def service_unit_structure(unit_id: int):
     """
-    Manage organizational structure for a ServiceUnit:
-    - Directories (Διευθύνσεις)
-    - Departments (Τμήματα)
+    Legacy route kept for backward compatibility.
 
-    Permissions:
-    - Admin: any unit
-    - Manager/Deputy: only their own unit
+    Organizational structure management has been consolidated into:
+        /admin/organization-setup?service_unit_id=<id>
 
     SECURITY:
-    - UI is never trusted.
-    - Server-side scope checks and FK ownership checks are enforced here.
+    - Scope is still enforced server-side before redirect.
     """
     unit = ServiceUnit.query.get_or_404(unit_id)
     _ensure_structure_scope_or_403(unit.id)
 
-    if request.method == "POST":
-        action = (request.form.get("action") or "").strip()
-
-        # -----------------------
-        # DIRECTORY CRUD
-        # -----------------------
-        if action == "directory_create":
-            name = (request.form.get("name") or "").strip()
-            if not name:
-                flash("Η ονομασία Διεύθυνσης είναι υποχρεωτική.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            exists = Directory.query.filter_by(service_unit_id=unit.id, name=name).first()
-            if exists:
-                flash("Υπάρχει ήδη Διεύθυνση με αυτή την ονομασία στην Υπηρεσία.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            d = Directory(service_unit_id=unit.id, name=name, is_active=True, director_personnel_id=None)
-            db.session.add(d)
-            db.session.flush()
-            log_action(entity=d, action="CREATE", before=None, after=serialize_model(d))
-            db.session.commit()
-
-            flash("Η Διεύθυνση δημιουργήθηκε.", "success")
-            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-        if action == "directory_update":
-            did = _parse_optional_int((request.form.get("directory_id") or "").strip())
-            if did is None:
-                flash("Μη έγκυρη Διεύθυνση.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            d = Directory.query.get_or_404(did)
-            if d.service_unit_id != unit.id:
-                abort(403)
-
-            before = serialize_model(d)
-
-            name = (request.form.get("name") or "").strip()
-            is_active = bool(request.form.get("is_active"))
-
-            if not name:
-                flash("Η ονομασία Διεύθυνσης είναι υποχρεωτική.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            exists = Directory.query.filter(Directory.service_unit_id == unit.id, Directory.name == name, Directory.id != d.id).first()
-            if exists:
-                flash("Υπάρχει ήδη άλλη Διεύθυνση με αυτή την ονομασία.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            d.name = name
-            d.is_active = is_active
-
-            db.session.flush()
-            log_action(entity=d, action="UPDATE", before=before, after=serialize_model(d))
-            db.session.commit()
-
-            flash("Η Διεύθυνση ενημερώθηκε.", "success")
-            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-        if action == "directory_delete":
-            did = _parse_optional_int((request.form.get("directory_id") or "").strip())
-            if did is None:
-                flash("Μη έγκυρη Διεύθυνση.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            d = Directory.query.get_or_404(did)
-            if d.service_unit_id != unit.id:
-                abort(403)
-
-            before = serialize_model(d)
-            db.session.delete(d)
-            db.session.flush()
-            log_action(entity=d, action="DELETE", before=before, after=None)
-            db.session.commit()
-
-            flash("Η Διεύθυνση διαγράφηκε.", "success")
-            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-        # -----------------------
-        # DEPARTMENT CRUD
-        # -----------------------
-        if action == "department_create":
-            directory_id = _parse_optional_int((request.form.get("directory_id") or "").strip())
-            name = (request.form.get("name") or "").strip()
-
-            if not directory_id:
-                flash("Η Διεύθυνση είναι υποχρεωτική για δημιουργία Τμήματος.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-            if not name:
-                flash("Η ονομασία Τμήματος είναι υποχρεωτική.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            d = Directory.query.get(directory_id)
-            if not d or d.service_unit_id != unit.id:
-                flash("Μη έγκυρη Διεύθυνση για την Υπηρεσία.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            exists = Department.query.filter_by(directory_id=d.id, name=name).first()
-            if exists:
-                flash("Υπάρχει ήδη Τμήμα με αυτή την ονομασία στη συγκεκριμένη Διεύθυνση.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            dep = Department(
-                service_unit_id=unit.id,
-                directory_id=d.id,
-                name=name,
-                is_active=True,
-                head_personnel_id=None,
-                assistant_personnel_id=None,
-            )
-            db.session.add(dep)
-            db.session.flush()
-            log_action(entity=dep, action="CREATE", before=None, after=serialize_model(dep))
-            db.session.commit()
-
-            flash("Το Τμήμα δημιουργήθηκε.", "success")
-            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-        if action == "department_update":
-            dep_id = _parse_optional_int((request.form.get("department_id") or "").strip())
-            if dep_id is None:
-                flash("Μη έγκυρο Τμήμα.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            dep = Department.query.get_or_404(dep_id)
-            if dep.service_unit_id != unit.id:
-                abort(403)
-
-            before = serialize_model(dep)
-
-            name = (request.form.get("name") or "").strip()
-            is_active = bool(request.form.get("is_active"))
-
-            if not name:
-                flash("Η ονομασία Τμήματος είναι υποχρεωτική.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            exists = Department.query.filter(
-                Department.directory_id == dep.directory_id,
-                Department.name == name,
-                Department.id != dep.id,
-            ).first()
-            if exists:
-                flash("Υπάρχει ήδη άλλο Τμήμα με αυτή την ονομασία στη συγκεκριμένη Διεύθυνση.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            dep.name = name
-            dep.is_active = is_active
-
-            db.session.flush()
-            log_action(entity=dep, action="UPDATE", before=before, after=serialize_model(dep))
-            db.session.commit()
-
-            flash("Το Τμήμα ενημερώθηκε.", "success")
-            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-        if action == "department_delete":
-            dep_id = _parse_optional_int((request.form.get("department_id") or "").strip())
-            if dep_id is None:
-                flash("Μη έγκυρο Τμήμα.", "danger")
-                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-            dep = Department.query.get_or_404(dep_id)
-            if dep.service_unit_id != unit.id:
-                abort(403)
-
-            before = serialize_model(dep)
-            db.session.delete(dep)
-            db.session.flush()
-            log_action(entity=dep, action="DELETE", before=before, after=None)
-            db.session.commit()
-
-            flash("Το Τμήμα διαγράφηκε.", "success")
-            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-        flash("Μη έγκυρη ενέργεια.", "danger")
-        return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
-
-    directories = (
-        Directory.query.filter_by(service_unit_id=unit.id)
-        .order_by(Directory.name.asc())
-        .all()
-    )
-    departments = (
-        Department.query.filter_by(service_unit_id=unit.id)
-        .order_by(Department.directory_id.asc(), Department.name.asc())
-        .all()
-    )
-
-    return render_template(
-        "settings/service_unit_structure.html",
-        unit=unit,
-        directories=directories,
-        departments=departments,
-    )
+    return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
 
 
 # ----------------------------------------------------------------------
@@ -1411,7 +1373,7 @@ def cpv_import():
 
 
 # ----------------------------------------------------------------------
-# OPTION VALUES + IncomeTax + Withholding + Committees (unchanged)
+# OPTION VALUES + IncomeTax + Withholding + Committees
 # ----------------------------------------------------------------------
 def _options_page(key: str, label: str):
     category = _get_or_create_category(key=key, label=label)
@@ -1714,6 +1676,19 @@ def withholding_profiles():
 @login_required
 @manager_required
 def committees():
+    """
+    Procurement committees management.
+
+    Admin:
+    - may choose any service unit by query/form parameter
+
+    Manager/Deputy:
+    - are scoped server-side to their own service unit
+
+    SECURITY:
+    - UI filtering is convenience only.
+    - Membership validation is always service-unit scoped server-side.
+    """
     if current_user.is_admin:
         scope_service_unit_id = _parse_optional_int((request.args.get("service_unit_id") or "").strip())
     else:
@@ -1763,6 +1738,11 @@ def committees():
                 flash("Η περιγραφή είναι υποχρεωτική.", "danger")
                 return redirect(url_for("settings.committees", service_unit_id=su_id))
 
+            exists = ProcurementCommittee.query.filter_by(service_unit_id=su_id, description=desc).first()
+            if exists:
+                flash("Υπάρχει ήδη επιτροπή με αυτή την περιγραφή στην Υπηρεσία.", "danger")
+                return redirect(url_for("settings.committees", service_unit_id=su_id))
+
             c = ProcurementCommittee(
                 service_unit_id=su_id,
                 description=desc,
@@ -1803,6 +1783,15 @@ def committees():
                 flash("Η περιγραφή είναι υποχρεωτική.", "danger")
                 return redirect(url_for("settings.committees", service_unit_id=su_id))
 
+            exists = ProcurementCommittee.query.filter(
+                ProcurementCommittee.service_unit_id == su_id,
+                ProcurementCommittee.description == desc,
+                ProcurementCommittee.id != c.id,
+            ).first()
+            if exists:
+                flash("Υπάρχει ήδη άλλη επιτροπή με αυτή την περιγραφή στην Υπηρεσία.", "danger")
+                return redirect(url_for("settings.committees", service_unit_id=su_id))
+
             c.description = desc
             c.identity_text = identity
             c.president_personnel_id = president_id
@@ -1830,7 +1819,7 @@ def committees():
             before = serialize_model(c)
             db.session.delete(c)
             db.session.flush()
-            log_action(c, "DELETE", before=before)
+            log_action(c, "DELETE", before=before, after=None)
             db.session.commit()
 
             flash("Η επιτροπή διαγράφηκε.", "success")

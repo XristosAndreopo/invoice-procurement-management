@@ -22,8 +22,10 @@
         <thead>
           <tr>
             <th>Username</th>
+            <th>Προσωπικό</th>
             <th>Ρόλος</th>
             <th>Υπηρεσία</th>
+            <th>Οργανική Θέση</th>
             <th>Κατάσταση</th>
             <th>Ημ/νία Δημιουργίας</th>
             <th></th>
@@ -33,6 +35,14 @@
           {% for user in users %}
           <tr>
             <td class="fw-semibold">{{ user.username }}</td>
+
+            <td class="small">
+              {% if user.personnel %}
+                {{ user.personnel.display_selected_label() }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
 
             <td>
               {% if user.is_admin %}
@@ -44,9 +54,31 @@
               {% endif %}
             </td>
 
-            <td>
-              {% if user.service_unit %}
+            <td class="small">
+              {% if user.is_admin %}
+                <span class="text-muted">—</span>
+              {% elif user.service_unit %}
                 {{ user.service_unit.short_name or user.service_unit.description }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+
+            <td class="small">
+              {% if user.personnel %}
+                {% if user.personnel.service_unit or user.personnel.directory or user.personnel.department %}
+                  {% if user.personnel.service_unit %}
+                    <div>{{ user.personnel.service_unit.short_name or user.personnel.service_unit.description }}</div>
+                  {% endif %}
+                  {% if user.personnel.directory %}
+                    <div class="text-muted">{{ user.personnel.directory.name }}</div>
+                  {% endif %}
+                  {% if user.personnel.department %}
+                    <div class="text-muted">{{ user.personnel.department.name }}</div>
+                  {% endif %}
+                {% else %}
+                  <span class="text-muted">Ουδέτερο Προσωπικό</span>
+                {% endif %}
               {% else %}
                 —
               {% endif %}
@@ -74,6 +106,12 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+
+    <div class="form-text mt-3">
+      Για Administrator ισχύει το μοντέλο:
+      σύνδεση 1-1 με κανονικό Προσωπικό, αλλά χωρίς ανάθεση υπηρεσίας στον ίδιο τον user.
+      Έτσι αποφεύγεται λανθασμένη service isolation σε admin λογαριασμούς.
     </div>
     {% else %}
       <div class="small text-muted">

@@ -17,7 +17,7 @@
   <div class="card-body">
     <div class="row g-3">
       <div class="col-12 col-lg-8">
-        <form method="post">
+        <form method="post" id="user-edit-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
           <div class="mb-2 row align-items-center">
@@ -64,7 +64,7 @@
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Υπηρεσία</label>
             <div class="col-8">
-              <select name="service_unit_id" class="form-select form-select-sm">
+              <select name="service_unit_id" id="service_unit_id" class="form-select form-select-sm">
                 <option value="">(καμία)</option>
                 {% for su in service_units %}
                   <option value="{{ su.id }}" {% if user.service_unit_id == su.id %}selected{% endif %}>
@@ -72,6 +72,9 @@
                   </option>
                 {% endfor %}
               </select>
+              <div class="form-text" id="service-unit-help">
+                Για non-admin χρήστες, η Υπηρεσία πρέπει να ταυτίζεται με την Υπηρεσία του επιλεγμένου Προσωπικού.
+              </div>
             </div>
           </div>
 
@@ -105,10 +108,11 @@
           <div class="card-body py-3 small">
             <div class="fw-bold mb-2">Σημείωση</div>
             <ul class="mb-0">
-              <li>Η υπηρεσία καθορίζει την απομόνωση δεδομένων (service isolation).</li>
-              <li>Manager/Deputy καθορίζεται από την Υπηρεσία (ServiceUnit) μέσω Προσωπικού.</li>
+              <li>Η υπηρεσία καθορίζει την απομόνωση δεδομένων για non-admin χρήστες.</li>
+              <li>Manager/Deputy καθορίζεται από την Υπηρεσία μέσω Προσωπικού.</li>
               <li>Αν απενεργοποιήσεις χρήστη, δεν μπορεί να κάνει login.</li>
               <li>Αν αλλάξεις σύνδεση Προσωπικού, κρατάς την 1-1 σχέση.</li>
+              <li>Administrator = user χωρίς ανάθεση υπηρεσίας, αλλά με κανονικό linked Personnel.</li>
             </ul>
           </div>
         </div>
@@ -119,6 +123,43 @@
 </div>
 
 <script>
+/**
+ * User form behavior.
+ *
+ * UI-only behavior:
+ * - If "Administrator" is checked, the service unit field is disabled and cleared.
+ * - Server-side remains the source of truth and will force service_unit_id = NULL for admins.
+ */
+(function() {
+  function syncAdminState() {
+    const isAdmin = document.getElementById("is_admin");
+    const serviceUnit = document.getElementById("service_unit_id");
+    const serviceUnitHelp = document.getElementById("service-unit-help");
+
+    if (!isAdmin || !serviceUnit) return;
+
+    if (isAdmin.checked) {
+      serviceUnit.value = "";
+      serviceUnit.setAttribute("disabled", "disabled");
+      if (serviceUnitHelp) {
+        serviceUnitHelp.textContent = "Για Administrator η Υπηρεσία δεν ορίζεται. Το πεδίο μηδενίζεται και αγνοείται server-side.";
+      }
+    } else {
+      serviceUnit.removeAttribute("disabled");
+      if (serviceUnitHelp) {
+        serviceUnitHelp.textContent = "Για non-admin χρήστες, η Υπηρεσία πρέπει να ταυτίζεται με την Υπηρεσία του επιλεγμένου Προσωπικού.";
+      }
+    }
+  }
+
+  const isAdmin = document.getElementById("is_admin");
+  if (isAdmin) {
+    isAdmin.addEventListener("change", syncAdminState);
+  }
+
+  syncAdminState();
+})();
+
 /**
  * Personnel Select2 rendering:
  * - Dropdown results: full option label with IDs

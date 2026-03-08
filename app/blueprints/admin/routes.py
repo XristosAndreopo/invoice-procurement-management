@@ -6,23 +6,27 @@ Admin Routes – Enterprise Administration Module
 Includes:
 - Personnel Management (organizational directory)
 - Excel import for Personnel (admin-only)
+- Consolidated Service Unit organization management
 
-UPDATED (Organizational Structure):
-- Personnel now belongs to:
-  - one ServiceUnit (required for new/updated entries)
+UPDATED ORGANIZATIONAL MODEL:
+- Personnel belongs to:
+  - one ServiceUnit (required for new/updated non-neutral entries)
   - optional Directory (Διεύθυνση) of that ServiceUnit
   - optional Department (Τμήμα) of that Directory + ServiceUnit
 
-NEW (Setup Page):
-- "Ορισμός Διευθυντών / Προϊσταμένων" per ServiceUnit
-  - Directory.director_personnel_id (Διευθυντής/Τμηματάρχης)
-  - Department.head_personnel_id (Προϊστάμενος/Αξιωματικός)
-  - Department.assistant_personnel_id (Βοηθός)
+CONSOLIDATED SETUP PAGE:
+- /admin/organization-setup
+- Per ServiceUnit, manages:
+  - Directories
+  - Departments
+  - Directory director assignments
+  - Department head / assistant assignments
+  - Excel import for structure + role assignments
 
 PERMISSIONS (server-side, UI never trusted):
 - Admin: manage all
 - Manager (ServiceUnit manager only): manage ONLY their own ServiceUnit
-- Viewers: never mutate (global guard exists, but we still enforce here)
+- Viewers / deputies: never mutate here
 
 VALIDATION (server-side):
 - Directory must belong to selected ServiceUnit
@@ -32,7 +36,9 @@ VALIDATION (server-side):
 
 IMPORTANT:
 - Any UI filtering is convenience only. All checks are server-side.
-- Audit: db.session.flush() -> log_action(...) -> db.session.commit()
+- Audit pattern:
+    db.session.flush() -> log_action(...) -> db.session.commit()
+- SQLite is used in dev, but logic remains PostgreSQL-ready.
 """
 
 from __future__ import annotations
@@ -102,7 +108,7 @@ def admin_required(func):
 # HELPERS
 # -------------------------------------------------------
 def _parse_optional_int(value: str | None) -> Optional[int]:
-    """Parse optional integer from form. Returns None if empty/invalid."""
+    """Parse optional integer from form/query. Returns None if empty/invalid."""
     if not value:
         return None
     try:
@@ -259,6 +265,32 @@ def _active_personnel_for_service_unit(service_unit_id: int):
     )
 
 
+def _get_posted_service_unit_id_or_abort() -> int:
+    """
+    Resolve target ServiceUnit for POST actions.
+
+    Admin:
+    - may post any service_unit_id
+
+    Manager:
+    - forced to their own service unit
+    """
+    if getattr(current_user, "is_admin", False):
+        posted_su_id = _parse_optional_int(request.form.get("service_unit_id"))
+    else:
+        posted_su_id = getattr(current_user, "service_unit_id", None)
+
+    if not posted_su_id:
+        flash("Η υπηρεσία είναι υποχρεωτική.", "danger")
+        raise ValueError("missing service_unit_id")
+
+    if not getattr(current_user, "is_admin", False):
+        if posted_su_id != getattr(current_user, "service_unit_id", None):
+            abort(403)
+
+    return posted_su_id
+
+
 # -------------------------------------------------------
 # PERSONNEL LIST
 # -------------------------------------------------------
@@ -311,7 +343,8 @@ def import_personnel():
     - ΥΠΗΡΕΣΙΑ (matches ServiceUnit by code OR short_name OR description)
 
     NOTE:
-    - Organizational structure (Directory/Department) is NOT imported here yet.
+    - Organizational structure (Directory/Department) is NOT imported here.
+      That is handled from the consolidated organization setup page.
     """
     file = request.files.get("file")
     if not file or not file.filename:
@@ -615,14 +648,14 @@ def edit_personnel(personnel_id: int):
 
 
 # -------------------------------------------------------
-# SETUP PAGE: Directors / Heads / Assistants
+# CONSOLIDATED ORGANIZATION PAGE
 # -------------------------------------------------------
 @admin_bp.route("/organization-setup", methods=["GET", "POST"])
 @login_required
 @admin_or_manager_required
 def organization_setup():
     """
-    Setup page: assign organizational roles per ServiceUnit.
+    Consolidated ServiceUnit organization management page.
 
     Admin:
     - can select any service unit
@@ -630,12 +663,21 @@ def organization_setup():
     Manager:
     - forced to their own service unit (server-side)
 
-    Assignments:
-    - Directory.director_personnel_id
-    - Department.head_personnel_id
-    - Department.assistant_personnel_id
+    Supported actions:
+    - create_directory
+    - update_directory
+    - delete_directory
+    - create_department
+    - update_department
+    - delete_department
+    - update_directory_director
+    - update_department_roles
+    - import
 
-    Excel import supported via POST action=import.
+    Excel import behavior:
+    - Can CREATE missing Directories / Departments
+    - Can UPDATE role assignments if AGM values match active personnel
+    - Rows that are invalid are skipped
     """
     if getattr(current_user, "is_admin", False):
         service_unit_id = _parse_optional_int(request.args.get("service_unit_id"))
@@ -650,44 +692,264 @@ def organization_setup():
     personnel_list = []
 
     if unit:
-        # Manager scope (extra-hard check)
         if not getattr(current_user, "is_admin", False):
             if unit.id != getattr(current_user, "service_unit_id", None):
                 abort(403)
 
-        directories = Directory.query.filter_by(service_unit_id=unit.id).order_by(Directory.name.asc()).all()
-        departments = Department.query.filter_by(service_unit_id=unit.id).order_by(Department.directory_id.asc(), Department.name.asc()).all()
+        directories = (
+            Directory.query.filter_by(service_unit_id=unit.id)
+            .order_by(Directory.name.asc())
+            .all()
+        )
+        departments = (
+            Department.query.filter_by(service_unit_id=unit.id)
+            .order_by(Department.directory_id.asc(), Department.name.asc())
+            .all()
+        )
         personnel_list = _active_personnel_for_service_unit(unit.id)
 
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
 
-        # Determine target unit from POST too (admin can pass; manager forced)
-        if getattr(current_user, "is_admin", False):
-            posted_su_id = _parse_optional_int(request.form.get("service_unit_id"))
-        else:
-            posted_su_id = getattr(current_user, "service_unit_id", None)
-
-        if not posted_su_id:
-            flash("Η υπηρεσία είναι υποχρεωτική.", "danger")
+        try:
+            posted_su_id = _get_posted_service_unit_id_or_abort()
+        except ValueError:
             return redirect(url_for("admin.organization_setup"))
-
-        # Scope check
-        if not getattr(current_user, "is_admin", False):
-            if posted_su_id != getattr(current_user, "service_unit_id", None):
-                abort(403)
 
         unit = ServiceUnit.query.get_or_404(posted_su_id)
         allowed_personnel_ids = _active_personnel_ids_for_service_unit(unit.id)
 
         def _validate_personnel(pid: Optional[int]) -> Optional[int]:
+            """
+            Return the personnel ID only if:
+            - it exists in the active personnel set of the same service unit
+            - otherwise return None
+            """
             if pid is None:
                 return None
             return pid if pid in allowed_personnel_ids else None
 
-        # -------------
-        # Update one Directory director
-        # -------------
+        # ---------------------------------------------------
+        # DIRECTORY CREATE
+        # ---------------------------------------------------
+        if action == "create_directory":
+            name = (request.form.get("directory_name") or "").strip()
+
+            if not name:
+                flash("Η ονομασία Διεύθυνσης είναι υποχρεωτική.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            exists = Directory.query.filter_by(service_unit_id=unit.id, name=name).first()
+            if exists:
+                flash("Υπάρχει ήδη Διεύθυνση με αυτή την ονομασία στην Υπηρεσία.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            d = Directory(
+                service_unit_id=unit.id,
+                name=name,
+                is_active=True,
+                director_personnel_id=None,
+            )
+            db.session.add(d)
+            db.session.flush()
+            log_action(entity=d, action="CREATE", before=None, after=serialize_model(d))
+            db.session.commit()
+
+            flash("Η Διεύθυνση δημιουργήθηκε.", "success")
+            return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+        # ---------------------------------------------------
+        # DIRECTORY UPDATE
+        # ---------------------------------------------------
+        if action == "update_directory":
+            directory_id = _parse_optional_int(request.form.get("directory_id"))
+            if directory_id is None:
+                flash("Μη έγκυρη Διεύθυνση.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            d = Directory.query.get_or_404(directory_id)
+            if d.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(d)
+
+            name = (request.form.get("directory_name") or "").strip()
+            is_active = bool(request.form.get("is_active"))
+
+            if not name:
+                flash("Η ονομασία Διεύθυνσης είναι υποχρεωτική.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            exists = Directory.query.filter(
+                Directory.service_unit_id == unit.id,
+                Directory.name == name,
+                Directory.id != d.id,
+            ).first()
+            if exists:
+                flash("Υπάρχει ήδη άλλη Διεύθυνση με αυτή την ονομασία.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            d.name = name
+            d.is_active = is_active
+
+            db.session.flush()
+            log_action(entity=d, action="UPDATE", before=before, after=serialize_model(d))
+            db.session.commit()
+
+            flash("Η Διεύθυνση ενημερώθηκε.", "success")
+            return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+        # ---------------------------------------------------
+        # DIRECTORY DELETE
+        # ---------------------------------------------------
+        if action == "delete_directory":
+            directory_id = _parse_optional_int(request.form.get("directory_id"))
+            if directory_id is None:
+                flash("Μη έγκυρη Διεύθυνση.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            d = Directory.query.get_or_404(directory_id)
+            if d.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(d)
+
+            # Defensive cleanup:
+            # do not rely only on FK ondelete behavior, especially in SQLite dev.
+            Personnel.query.filter_by(directory_id=d.id).update({"directory_id": None}, synchronize_session=False)
+            Personnel.query.filter_by(department_id=None, service_unit_id=unit.id)
+
+            for dep in Department.query.filter_by(directory_id=d.id).all():
+                Personnel.query.filter_by(department_id=dep.id).update({"department_id": None}, synchronize_session=False)
+
+            db.session.delete(d)
+            db.session.flush()
+            log_action(entity=d, action="DELETE", before=before, after=None)
+            db.session.commit()
+
+            flash("Η Διεύθυνση διαγράφηκε.", "success")
+            return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+        # ---------------------------------------------------
+        # DEPARTMENT CREATE
+        # ---------------------------------------------------
+        if action == "create_department":
+            directory_id = _parse_optional_int(request.form.get("directory_id"))
+            name = (request.form.get("department_name") or "").strip()
+
+            if not directory_id:
+                flash("Η Διεύθυνση είναι υποχρεωτική για δημιουργία Τμήματος.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            if not name:
+                flash("Η ονομασία Τμήματος είναι υποχρεωτική.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            d = Directory.query.get(directory_id)
+            if not d or d.service_unit_id != unit.id:
+                flash("Μη έγκυρη Διεύθυνση για την Υπηρεσία.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            exists = Department.query.filter_by(directory_id=d.id, name=name).first()
+            if exists:
+                flash("Υπάρχει ήδη Τμήμα με αυτή την ονομασία στη συγκεκριμένη Διεύθυνση.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            dep = Department(
+                service_unit_id=unit.id,
+                directory_id=d.id,
+                name=name,
+                is_active=True,
+                head_personnel_id=None,
+                assistant_personnel_id=None,
+            )
+            db.session.add(dep)
+            db.session.flush()
+            log_action(entity=dep, action="CREATE", before=None, after=serialize_model(dep))
+            db.session.commit()
+
+            flash("Το Τμήμα δημιουργήθηκε.", "success")
+            return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+        # ---------------------------------------------------
+        # DEPARTMENT UPDATE
+        # ---------------------------------------------------
+        if action == "update_department":
+            department_id = _parse_optional_int(request.form.get("department_id"))
+            new_directory_id = _parse_optional_int(request.form.get("directory_id"))
+            name = (request.form.get("department_name") or "").strip()
+
+            if department_id is None:
+                flash("Μη έγκυρο Τμήμα.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            if new_directory_id is None:
+                flash("Η Διεύθυνση είναι υποχρεωτική.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            if not name:
+                flash("Η ονομασία Τμήματος είναι υποχρεωτική.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            dep = Department.query.get_or_404(department_id)
+            if dep.service_unit_id != unit.id:
+                abort(403)
+
+            new_directory = Directory.query.get_or_404(new_directory_id)
+            if new_directory.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(dep)
+
+            exists = Department.query.filter(
+                Department.directory_id == new_directory.id,
+                Department.name == name,
+                Department.id != dep.id,
+            ).first()
+            if exists:
+                flash("Υπάρχει ήδη άλλο Τμήμα με αυτή την ονομασία στη συγκεκριμένη Διεύθυνση.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            dep.directory_id = new_directory.id
+            dep.name = name
+            dep.is_active = bool(request.form.get("is_active"))
+
+            db.session.flush()
+            log_action(entity=dep, action="UPDATE", before=before, after=serialize_model(dep))
+            db.session.commit()
+
+            flash("Το Τμήμα ενημερώθηκε.", "success")
+            return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+        # ---------------------------------------------------
+        # DEPARTMENT DELETE
+        # ---------------------------------------------------
+        if action == "delete_department":
+            department_id = _parse_optional_int(request.form.get("department_id"))
+            if department_id is None:
+                flash("Μη έγκυρο Τμήμα.", "danger")
+                return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+            dep = Department.query.get_or_404(department_id)
+            if dep.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(dep)
+
+            # Defensive cleanup for SQLite dev and UI consistency.
+            Personnel.query.filter_by(department_id=dep.id).update({"department_id": None}, synchronize_session=False)
+
+            db.session.delete(dep)
+            db.session.flush()
+            log_action(entity=dep, action="DELETE", before=before, after=None)
+            db.session.commit()
+
+            flash("Το Τμήμα διαγράφηκε.", "success")
+            return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
+
+        # ---------------------------------------------------
+        # UPDATE DIRECTORY DIRECTOR
+        # ---------------------------------------------------
         if action == "update_directory_director":
             directory_id = _parse_optional_int(request.form.get("directory_id"))
             director_pid = _validate_personnel(_parse_optional_int(request.form.get("director_personnel_id")))
@@ -710,9 +972,9 @@ def organization_setup():
             flash("Ο Διευθυντής Διεύθυνσης ενημερώθηκε.", "success")
             return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
 
-        # -------------
-        # Update one Department head/assistant
-        # -------------
+        # ---------------------------------------------------
+        # UPDATE DEPARTMENT HEAD / ASSISTANT
+        # ---------------------------------------------------
         if action == "update_department_roles":
             department_id = _parse_optional_int(request.form.get("department_id"))
             head_pid = _validate_personnel(_parse_optional_int(request.form.get("head_personnel_id")))
@@ -741,9 +1003,9 @@ def organization_setup():
             flash("Οι ρόλοι Τμήματος ενημερώθηκαν.", "success")
             return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
 
-        # -------------
-        # Excel import
-        # -------------
+        # ---------------------------------------------------
+        # EXCEL IMPORT (STRUCTURE + ROLES)
+        # ---------------------------------------------------
         if action == "import":
             file = request.files.get("file")
             if not file or not file.filename:
@@ -772,7 +1034,7 @@ def organization_setup():
             headers = [str(h).strip() if h is not None else "" for h in header_cells]
             idx_map = {_normalize_header(h): i for i, h in enumerate(headers) if _normalize_header(h)}
 
-            # Expected headers (Greek):
+            # Expected headers (Greek/English aliases):
             # ΔΙΕΥΘΥΝΣΗ, ΔΙΕΥΘΥΝΤΗΣ_ΑΓΜ
             # ΤΜΗΜΑ, ΠΡΟΙΣΤΑΜΕΝΟΣ_ΑΓΜ, ΒΟΗΘΟΣ_ΑΓΜ
             dir_name_idx = idx_map.get("διευθυνση", idx_map.get("directory"))
@@ -790,13 +1052,21 @@ def organization_setup():
                 )
                 return redirect(url_for("admin.organization_setup", service_unit_id=unit.id))
 
-            # Build lookup tables
-            directories_by_name = {d.name.strip(): d for d in Directory.query.filter_by(service_unit_id=unit.id).all()}
-            departments_by_name = {d.name.strip(): d for d in Department.query.filter_by(service_unit_id=unit.id).all()}
+            directories_by_name = {
+                d.name.strip(): d
+                for d in Directory.query.filter_by(service_unit_id=unit.id).all()
+            }
+            departments_by_key = {
+                (dep.directory_id, dep.name.strip()): dep
+                for dep in Department.query.filter_by(service_unit_id=unit.id).all()
+            }
             personnel_by_agm = {
-                p.agm.strip(): p for p in Personnel.query.filter_by(service_unit_id=unit.id, is_active=True).all()
+                p.agm.strip(): p
+                for p in Personnel.query.filter_by(service_unit_id=unit.id, is_active=True).all()
             }
 
+            created_dirs = 0
+            created_deps = 0
             updated_dirs = 0
             updated_deps = 0
             skipped = 0
@@ -808,7 +1078,6 @@ def organization_setup():
                     return None
                 return row_vals[i]
 
-            # Audit entries will be written only for actual updates.
             for row in ws.iter_rows(min_row=2, values_only=True):
                 did_something = False
 
@@ -819,37 +1088,79 @@ def organization_setup():
                 head_agm = _safe_str(_cell(row, dep_head_agm_idx)) if dep_head_agm_idx is not None else ""
                 assistant_agm = _safe_str(_cell(row, dep_assist_agm_idx)) if dep_assist_agm_idx is not None else ""
 
-                # Directory update (if present)
+                directory_obj: Directory | None = None
+
+                # Create/find Directory
                 if dir_name:
-                    d = directories_by_name.get(dir_name)
-                    if d and director_agm:
+                    directory_obj = directories_by_name.get(dir_name)
+                    if not directory_obj:
+                        directory_obj = Directory(
+                            service_unit_id=unit.id,
+                            name=dir_name,
+                            is_active=True,
+                            director_personnel_id=None,
+                        )
+                        db.session.add(directory_obj)
+                        db.session.flush()
+                        log_action(entity=directory_obj, action="CREATE", before=None, after=serialize_model(directory_obj))
+                        directories_by_name[dir_name] = directory_obj
+                        created_dirs += 1
+                        did_something = True
+
+                    # Optional director update
+                    if director_agm:
                         p = personnel_by_agm.get(director_agm)
-                        if p:
-                            before = serialize_model(d)
-                            d.director_personnel_id = p.id
+                        if p and directory_obj.director_personnel_id != p.id:
+                            before = serialize_model(directory_obj)
+                            directory_obj.director_personnel_id = p.id
                             db.session.flush()
-                            log_action(entity=d, action="UPDATE", before=before, after=serialize_model(d))
+                            log_action(entity=directory_obj, action="UPDATE", before=before, after=serialize_model(directory_obj))
                             updated_dirs += 1
                             did_something = True
 
-                # Department update (if present)
+                # Create/find Department
                 if dep_name:
-                    dep = departments_by_name.get(dep_name)
-                    if dep:
-                        head_pid = personnel_by_agm.get(head_agm).id if head_agm and head_agm in personnel_by_agm else None
-                        assistant_pid = (
-                            personnel_by_agm.get(assistant_agm).id if assistant_agm and assistant_agm in personnel_by_agm else None
-                        )
+                    # A department import row must resolve to a directory.
+                    if not directory_obj:
+                        skipped += 1
+                        continue
 
-                        if head_pid and assistant_pid and head_pid == assistant_pid:
-                            # invalid row, skip
-                            skipped += 1
-                        else:
-                            before = serialize_model(dep)
-                            dep.head_personnel_id = head_pid
-                            dep.assistant_personnel_id = assistant_pid
+                    dep_key = (directory_obj.id, dep_name)
+                    dep_obj = departments_by_key.get(dep_key)
+
+                    if not dep_obj:
+                        dep_obj = Department(
+                            service_unit_id=unit.id,
+                            directory_id=directory_obj.id,
+                            name=dep_name,
+                            is_active=True,
+                            head_personnel_id=None,
+                            assistant_personnel_id=None,
+                        )
+                        db.session.add(dep_obj)
+                        db.session.flush()
+                        log_action(entity=dep_obj, action="CREATE", before=None, after=serialize_model(dep_obj))
+                        departments_by_key[dep_key] = dep_obj
+                        created_deps += 1
+                        did_something = True
+
+                    head_pid = personnel_by_agm.get(head_agm).id if head_agm and head_agm in personnel_by_agm else None
+                    assistant_pid = (
+                        personnel_by_agm.get(assistant_agm).id if assistant_agm and assistant_agm in personnel_by_agm else None
+                    )
+
+                    if head_pid and assistant_pid and head_pid == assistant_pid:
+                        skipped += 1
+                        continue
+
+                    # Update department roles only if at least one AGM column is present.
+                    if head_agm or assistant_agm:
+                        if dep_obj.head_personnel_id != head_pid or dep_obj.assistant_personnel_id != assistant_pid:
+                            before = serialize_model(dep_obj)
+                            dep_obj.head_personnel_id = head_pid
+                            dep_obj.assistant_personnel_id = assistant_pid
                             db.session.flush()
-                            log_action(entity=dep, action="UPDATE", before=before, after=serialize_model(dep))
+                            log_action(entity=dep_obj, action="UPDATE", before=before, after=serialize_model(dep_obj))
                             updated_deps += 1
                             did_something = True
 
@@ -859,7 +1170,9 @@ def organization_setup():
             db.session.commit()
 
             flash(
-                f"Import ολοκληρώθηκε. Ενημερώθηκαν: {updated_dirs} Διευθύνσεις, {updated_deps} Τμήματα. "
+                "Import ολοκληρώθηκε. "
+                f"Δημιουργήθηκαν: {created_dirs} Διευθύνσεις, {created_deps} Τμήματα. "
+                f"Ενημερώθηκαν: {updated_dirs} Διευθύνσεις, {updated_deps} Τμήματα. "
                 f"Παραλείφθηκαν: {skipped} γραμμές.",
                 "success",
             )

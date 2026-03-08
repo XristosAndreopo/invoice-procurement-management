@@ -5,12 +5,12 @@
   <div>
     <h1 class="h4 fw-bold mb-1">{{ form_title }}</h1>
     <div class="text-muted small">
-      Βασικά στοιχεία Υπηρεσίας (Κωδικός, Περιγραφή, Συντομογραφία, ΑΑΗΤ, Διοικητής, Επιμελητής, Υπόλογος εφοδιασμού).
-      Οι ρόλοι Manager/Deputy ορίζονται ξεχωριστά από τη σελίδα “Ορισμός Deputy/Manager”.
-      {% if directories is defined %}
-        <br>
-        <span class="fw-semibold">Οργανωτική Δομή:</span> από κάτω μπορείς να διαχειριστείς Διευθύνσεις και Τμήματα (server-side permissions/validation).
-      {% endif %}
+      Βασικά στοιχεία Υπηρεσίας.
+      Οι ρόλοι Manager/Deputy ορίζονται ξεχωριστά από τη σελίδα
+      <span class="fw-semibold">“Ορισμός Deputy/Manager”</span>,
+      ενώ η οργανωτική δομή και οι ρόλοι Διευθυντών/Προϊσταμένων
+      διαχειρίζονται από την ενιαία σελίδα
+      <span class="fw-semibold">“Οργάνωση Υπηρεσίας”</span>.
     </div>
   </div>
 
@@ -18,19 +18,22 @@
     <a href="{{ url_for('settings.service_units_list') }}" class="btn btn-outline-secondary btn-sm">
       &larr; Πίσω στη λίστα Υπηρεσιών
     </a>
+
     {% if unit %}
-      <a href="{{ url_for('settings.service_unit_structure', unit_id=unit.id) }}" class="btn btn-outline-dark btn-sm">
-        Δομή
+      <a href="{{ url_for('settings.service_unit_edit', unit_id=unit.id) }}" class="btn btn-outline-primary btn-sm">
+        Ρόλοι
       </a>
       <a href="{{ url_for('admin.organization_setup', service_unit_id=unit.id) }}" class="btn btn-outline-success btn-sm">
-        SetUp
+        Οργάνωση
+      </a>
+      <a href="{{ url_for('settings.committees', service_unit_id=unit.id) }}" class="btn btn-outline-dark btn-sm">
+        Επιτροπές
       </a>
     {% endif %}
   </div>
 </div>
 
-<!-- BASIC INFO CARD -->
-<div class="card glass-card shadow-sm border-0 mb-3">
+<div class="card glass-card shadow-sm border-0">
   <div class="card-body">
     <h2 class="h6 fw-bold mb-3">Βασικά στοιχεία Υπηρεσίας</h2>
 
@@ -43,99 +46,130 @@
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Κωδικός</label>
             <div class="col-8">
-              <input type="text"
-                     name="code"
-                     class="form-control form-control-sm"
-                     placeholder="π.χ. ΥΝΤΕΛ"
-                     value="{{ unit.code if unit and unit.code is not none else '' }}">
+              <input
+                type="text"
+                name="code"
+                class="form-control form-control-sm"
+                placeholder="π.χ. ΥΝΤΕΛ"
+                value="{{ unit.code if unit and unit.code is not none else '' }}"
+              >
+              <div class="form-text">
+                Προαιρετικό, αλλά αν συμπληρωθεί πρέπει να είναι μοναδικό.
+              </div>
             </div>
           </div>
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Περιγραφή *</label>
             <div class="col-8">
-              <input type="text"
-                     name="description"
-                     class="form-control form-control-sm"
-                     placeholder="πλήρης περιγραφή υπηρεσίας"
-                     value="{{ unit.description if unit and unit.description is not none else '' }}"
-                     required>
+              <input
+                type="text"
+                name="description"
+                class="form-control form-control-sm"
+                placeholder="Πλήρης περιγραφή υπηρεσίας"
+                value="{{ unit.description if unit and unit.description is not none else '' }}"
+                required
+              >
+              <div class="form-text">
+                Υποχρεωτικό και μοναδικό.
+              </div>
             </div>
           </div>
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Συντομογραφία</label>
             <div class="col-8">
-              <input type="text"
-                     name="short_name"
-                     class="form-control form-control-sm"
-                     placeholder="σύντομη ονομασία (για λίστες)"
-                     value="{{ unit.short_name if unit and unit.short_name is not none else '' }}">
+              <input
+                type="text"
+                name="short_name"
+                class="form-control form-control-sm"
+                placeholder="Σύντομη ονομασία για λίστες"
+                value="{{ unit.short_name if unit and unit.short_name is not none else '' }}"
+              >
+              <div class="form-text">
+                Προαιρετικό, αλλά αν συμπληρωθεί πρέπει να είναι μοναδικό.
+              </div>
             </div>
           </div>
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΑΗΤ</label>
             <div class="col-8">
-              <input type="text"
-                     name="aahit"
-                     class="form-control form-control-sm"
-                     value="{{ unit.aahit if unit and unit.aahit is not none else '' }}">
+              <input
+                type="text"
+                name="aahit"
+                class="form-control form-control-sm"
+                placeholder="π.χ. 1011.2030000000.0001"
+                value="{{ unit.aahit if unit and unit.aahit is not none else '' }}"
+              >
             </div>
           </div>
 
-          <!-- Address + Phone (reports) -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Διεύθυνση</label>
             <div class="col-8">
-              <input type="text"
-                     name="address"
-                     class="form-control form-control-sm"
-                     placeholder="π.χ. ΑΓ. ΓΕΩΡΓΙΟΣ - ΛΕΡΟΣ"
-                     value="{{ unit.address if unit and unit.address is not none else '' }}">
-              <div class="form-text">Χρησιμοποιείται στα reports (π.χ. Προτιμολόγιο).</div>
+              <input
+                type="text"
+                name="address"
+                class="form-control form-control-sm"
+                placeholder="π.χ. ΑΓ. ΓΕΩΡΓΙΟΣ - ΛΕΡΟΣ"
+                value="{{ unit.address if unit and unit.address is not none else '' }}"
+              >
+              <div class="form-text">
+                Χρησιμοποιείται σε reports και σε βασική ταυτοποίηση της Υπηρεσίας.
+              </div>
             </div>
           </div>
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τηλέφωνο</label>
             <div class="col-8">
-              <input type="text"
-                     name="phone"
-                     class="form-control form-control-sm"
-                     placeholder="π.χ. 22470xxxx"
-                     value="{{ unit.phone if unit and unit.phone is not none else '' }}">
-              <div class="form-text">Χρησιμοποιείται στα reports (π.χ. Προτιμολόγιο).</div>
+              <input
+                type="text"
+                name="phone"
+                class="form-control form-control-sm"
+                placeholder="π.χ. 22470xxxx"
+                value="{{ unit.phone if unit and unit.phone is not none else '' }}"
+              >
+              <div class="form-text">
+                Χρησιμοποιείται σε reports και επικοινωνία.
+              </div>
             </div>
           </div>
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Διοικητής</label>
             <div class="col-8">
-              <input type="text"
-                     name="commander"
-                     class="form-control form-control-sm"
-                     value="{{ unit.commander if unit and unit.commander is not none else '' }}">
+              <input
+                type="text"
+                name="commander"
+                class="form-control form-control-sm"
+                value="{{ unit.commander if unit and unit.commander is not none else '' }}"
+              >
             </div>
           </div>
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Επιμελητής</label>
             <div class="col-8">
-              <input type="text"
-                     name="curator"
-                     class="form-control form-control-sm"
-                     value="{{ unit.curator if unit and unit.curator is not none else '' }}">
+              <input
+                type="text"
+                name="curator"
+                class="form-control form-control-sm"
+                value="{{ unit.curator if unit and unit.curator is not none else '' }}"
+              >
             </div>
           </div>
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Υπόλογος εφοδιασμού</label>
             <div class="col-8">
-              <input type="text"
-                     name="supply_officer"
-                     class="form-control form-control-sm"
-                     value="{{ unit.supply_officer if unit and unit.supply_officer is not none else '' }}">
+              <input
+                type="text"
+                name="supply_officer"
+                class="form-control form-control-sm"
+                value="{{ unit.supply_officer if unit and unit.supply_officer is not none else '' }}"
+              >
             </div>
           </div>
 
@@ -146,12 +180,11 @@
             <div class="card-body py-3 small">
               <div class="fw-bold mb-2">Σημείωση</div>
               <ul class="mb-0">
-                <li>Η σελίδα αυτή αφορά τα βασικά στοιχεία της Υπηρεσίας.</li>
-                <li>Ο ορισμός Manager/Deputy γίνεται στη σελίδα “Ορισμός Deputy/Manager”.</li>
-                <li><b>Διεύθυνση/Τηλέφωνο</b> χρειάζονται για τα reports.</li>
-                {% if directories is defined %}
-                  <li>Η “Οργανωτική Δομή” παρακάτω είναι org-management (admin ή manager/deputy της υπηρεσίας).</li>
-                {% endif %}
+                <li>Η φόρμα αυτή αφορά μόνο τα βασικά στοιχεία της Υπηρεσίας.</li>
+                <li>Ο κωδικός, η περιγραφή και η συντομογραφία ελέγχονται για διπλότυπα server-side.</li>
+                <li>Οι ρόλοι Manager/Deputy ορίζονται ξεχωριστά.</li>
+                <li>Η οργανωτική δομή και οι λοιποί ρόλοι γίνονται από την ενιαία σελίδα “Οργάνωση”.</li>
+                <li>Διεύθυνση και τηλέφωνο χρειάζονται στα reports.</li>
               </ul>
             </div>
           </div>
@@ -160,177 +193,14 @@
 
       <div class="mt-3">
         <button class="btn btn-primary btn-sm">
-          Αποθήκευση Υπηρεσίας
+          {% if is_create %}
+            Δημιουργία Υπηρεσίας
+          {% else %}
+            Αποθήκευση Υπηρεσίας
+          {% endif %}
         </button>
       </div>
     </form>
   </div>
 </div>
-
-{% if directories is defined %}
-<!-- ORGANIZATIONAL STRUCTURE SECTION -->
-<div class="card glass-card shadow-sm border-0">
-  <div class="card-body">
-    <h2 class="h6 fw-bold mb-3">Οργανωτική Δομή (Διευθύνσεις / Τμήματα)</h2>
-
-    <div class="row g-3">
-      <!-- DIRECTORIES -->
-      <div class="col-12 col-xl-6">
-        <div class="card bg-light border-0 h-100">
-          <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <div class="fw-semibold">Διευθύνσεις</div>
-              <span class="badge bg-secondary">{{ (directories or [])|length }}</span>
-            </div>
-
-            <!-- Create directory -->
-            <form method="post" action="{{ url_for('settings.service_unit_structure', unit_id=unit.id) }}" class="d-flex gap-2 mb-3">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="action" value="create_directory">
-              <input type="text" name="directory_name" class="form-control form-control-sm" placeholder="Νέα Διεύθυνση" required>
-              <button class="btn btn-sm btn-outline-primary">Προσθήκη</button>
-            </form>
-
-            {% if directories %}
-              <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>Διεύθυνση</th>
-                      <th class="text-end"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for d in directories %}
-                      <tr>
-                        <td class="small">
-                          <form method="post" action="{{ url_for('settings.service_unit_structure', unit_id=unit.id) }}" class="d-flex gap-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="update_directory">
-                            <input type="hidden" name="directory_id" value="{{ d.id }}">
-                            <input type="text" name="directory_name" class="form-control form-control-sm" value="{{ d.name }}" required>
-                            <button class="btn btn-sm btn-outline-secondary">Αποθήκευση</button>
-                          </form>
-                        </td>
-                        <td class="text-end">
-                          <form method="post" action="{{ url_for('settings.service_unit_structure', unit_id=unit.id) }}"
-                                style="display:inline"
-                                onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε τη Διεύθυνση;');">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="delete_directory">
-                            <input type="hidden" name="directory_id" value="{{ d.id }}">
-                            <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                          </form>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-              <div class="form-text mt-2">
-                Δεν επιτρέπεται διαγραφή αν υπάρχουν Τμήματα ή Προσωπικό στη Διεύθυνση (server-side enforcement).
-              </div>
-            {% else %}
-              <div class="small text-muted">Δεν υπάρχουν Διευθύνσεις.</div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-
-      <!-- DEPARTMENTS -->
-      <div class="col-12 col-xl-6">
-        <div class="card bg-light border-0 h-100">
-          <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <div class="fw-semibold">Τμήματα</div>
-              <span class="badge bg-secondary">{{ (departments or [])|length }}</span>
-            </div>
-
-            <!-- Create department -->
-            <form method="post" action="{{ url_for('settings.service_unit_structure', unit_id=unit.id) }}" class="row g-2 mb-3">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="action" value="create_department">
-
-              <div class="col-12 col-md-5">
-                <select name="directory_id" class="form-select form-select-sm js-select2" data-placeholder="Διεύθυνση" required>
-                  <option value=""></option>
-                  {% for d in (directories or []) %}
-                    <option value="{{ d.id }}">{{ d.name }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div class="col-12 col-md-5">
-                <input type="text" name="department_name" class="form-control form-control-sm" placeholder="Νέο Τμήμα" required>
-              </div>
-              <div class="col-12 col-md-2 d-grid">
-                <button class="btn btn-sm btn-outline-primary">Προσθήκη</button>
-              </div>
-            </form>
-
-            {% if departments %}
-              <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>Διεύθυνση</th>
-                      <th>Τμήμα</th>
-                      <th class="text-end"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for dep in departments %}
-                      <tr>
-                        <td class="small">{{ dep.directory.name if dep.directory else '—' }}</td>
-                        <td class="small">
-                          <form method="post" action="{{ url_for('settings.service_unit_structure', unit_id=unit.id) }}" class="row g-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="update_department">
-                            <input type="hidden" name="department_id" value="{{ dep.id }}">
-
-                            <div class="col-12 col-md-5">
-                              <select name="directory_id" class="form-select form-select-sm js-select2" data-placeholder="Διεύθυνση" required>
-                                <option value=""></option>
-                                {% for d in (directories or []) %}
-                                  <option value="{{ d.id }}" {% if dep.directory_id == d.id %}selected{% endif %}>{{ d.name }}</option>
-                                {% endfor %}
-                              </select>
-                            </div>
-                            <div class="col-12 col-md-5">
-                              <input type="text" name="department_name" class="form-control form-control-sm" value="{{ dep.name }}" required>
-                            </div>
-                            <div class="col-12 col-md-2 d-grid">
-                              <button class="btn btn-sm btn-outline-secondary">Αποθήκευση</button>
-                            </div>
-                          </form>
-                        </td>
-                        <td class="text-end">
-                          <form method="post" action="{{ url_for('settings.service_unit_structure', unit_id=unit.id) }}"
-                                style="display:inline"
-                                onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε το Τμήμα;');">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="delete_department">
-                            <input type="hidden" name="department_id" value="{{ dep.id }}">
-                            <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                          </form>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-              <div class="form-text mt-2">
-                Δεν επιτρέπεται διαγραφή αν υπάρχει Προσωπικό στο Τμήμα (server-side enforcement).
-              </div>
-            {% else %}
-              <div class="small text-muted">Δεν υπάρχουν Τμήματα.</div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-  </div>
-</div>
-{% endif %}
 {% endblock %}
