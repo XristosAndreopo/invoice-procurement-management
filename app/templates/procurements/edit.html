@@ -40,7 +40,6 @@
         Προτιμολόγιο
       </a>
 
-      {# ✅ Award Decision DOCX download #}
       <a
         class="btn btn-sm btn-outline-primary"
         href="{{ url_for('procurements.report_award_decision_docx', procurement_id=procurement.id) }}"
@@ -132,7 +131,6 @@
             </div>
           </div>
 
-          <!-- ALE searchable dropdown (Select2) -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΛΕ</label>
             <div class="col-8">
@@ -404,7 +402,6 @@
             </div>
           </div>
 
-          <!-- Invitation identity -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Ταυτότητα Εγγράφου Πρόσκλησης</label>
             <div class="col-8">
@@ -421,7 +418,6 @@
             </div>
           </div>
 
-          <!-- SHOW on "All procurements": Implementation fields must be visible -->
           {% if show_all_reports %}
             <hr class="my-3">
             <h3 class="h6 fw-bold mb-3">Στοιχεία Υλοποίησης (από “Όλες”)</h3>
@@ -455,6 +451,41 @@
               <div class="col-8">
                 <input name="adam_contract" class="form-control form-control-sm"
                        value="{{ procurement.adam_contract or '' }}" {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΑΡΙΘΜΟΣ ΤΙΜΟΛΟΓΙΟΥ</label>
+              <div class="col-8">
+                <input name="invoice_number" class="form-control form-control-sm"
+                       value="{{ procurement.invoice_number or '' }}" {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΗΜΕΡΟΜΗΝΙΑ ΤΙΜΟΛΟΓΙΟΥ</label>
+              <div class="col-8">
+                <input type="date" name="invoice_date" class="form-control form-control-sm"
+                       value="{{ procurement.invoice_date.isoformat() if procurement.invoice_date else '' }}"
+                       {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΛΑΒΗΣ ΥΛΙΚΩΝ</label>
+              <div class="col-8">
+                <input type="date" name="materials_receipt_date" class="form-control form-control-sm"
+                       value="{{ procurement.materials_receipt_date.isoformat() if procurement.materials_receipt_date else '' }}"
+                       {% if not can_edit %}disabled{% endif %}>
+              </div>
+            </div>
+
+            <div class="mb-2 row align-items-center">
+              <label class="col-4 col-form-label col-form-label-sm">ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΛΑΒΗΣ ΤΙΜΟΛΟΓΙΟΥ</label>
+              <div class="col-8">
+                <input type="date" name="invoice_receipt_date" class="form-control form-control-sm"
+                       value="{{ procurement.invoice_receipt_date.isoformat() if procurement.invoice_receipt_date else '' }}"
+                       {% if not can_edit %}disabled{% endif %}>
               </div>
             </div>
 
@@ -645,7 +676,6 @@
           <input name="description" class="form-control" placeholder="Περιγραφή γραμμής" required>
         </div>
 
-        <!-- CPV searchable dropdown (Select2) -->
         <div class="col-6 col-md-2">
           <select
             name="cpv"

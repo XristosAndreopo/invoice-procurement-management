@@ -1,7 +1,8 @@
+# C:\Users\xrist\vs code projects\Invoice Management System\app\models.py
 """
-Invoice Management System – Enterprise Domain Models (V4.6)
+Invoice Management System – Enterprise Domain Models (V4.7)
 
-Includes existing V4.5 models and adds enterprise fields required by workflow & master data.
+Includes existing V4.6 models and adds enterprise fields required by workflow & master data.
 
 NEW (V4.4):
 - Procurement.identity_prosklisis:
@@ -16,6 +17,16 @@ NEW (V4.5):
 NEW (V4.6):
 - Supplier.phone:
   Supplier phone number (text) for master data and reports.
+
+NEW (V4.7):
+- Procurement.invoice_number:
+  "Αριθμός Τιμολογίου" (text)
+- Procurement.invoice_date:
+  "Ημερομηνία Τιμολογίου" (date)
+- Procurement.materials_receipt_date:
+  "Ημερομηνία Παραλαβής Υλικών" (date)
+- Procurement.invoice_receipt_date:
+  "Ημερομηνία Παραλαβής Τιμολογίου" (date)
 
 IMPORTANT:
 - UI is never trusted. Any selection must be validated server-side in routes.
@@ -83,6 +94,7 @@ def _display_percent(rate: Decimal) -> Decimal:
 
 
 def _money(x: Decimal) -> Decimal:
+    """Round a Decimal to money precision."""
     return x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
@@ -131,6 +143,7 @@ class Personnel(db.Model):
     )
 
     def full_name(self):
+        """Compact display name used in legacy screens."""
         return f"{self.rank or ''} {self.last_name} {self.first_name}".strip()
 
     def __repr__(self):
@@ -179,25 +192,31 @@ class User(UserMixin, db.Model):
     )
 
     def set_password(self, password: str):
+        """Hash and store a new password."""
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password: str) -> bool:
+        """Check plain password against stored hash."""
         return check_password_hash(self.password_hash, password)
 
     def is_manager(self):
+        """True when this user is the manager of their assigned service unit."""
         if not self.service_unit:
             return False
         return self.service_unit.manager_personnel_id == self.personnel_id
 
     def is_deputy(self):
+        """True when this user is the deputy of their assigned service unit."""
         if not self.service_unit:
             return False
         return self.service_unit.deputy_personnel_id == self.personnel_id
 
     def can_manage(self):
+        """Admin or manager or deputy."""
         return self.is_admin or self.is_manager() or self.is_deputy()
 
     def can_view(self):
+        """Admin or assigned to a service unit."""
         return self.is_admin or self.service_unit_id is not None
 
     def __repr__(self):
@@ -208,6 +227,8 @@ class User(UserMixin, db.Model):
 # Generic option lists (existing)
 # ---------------------------------------------------------------------
 class OptionCategory(db.Model):
+    """Generic option category for dropdown master values."""
+
     __tablename__ = "option_categories"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -218,6 +239,8 @@ class OptionCategory(db.Model):
 
 
 class OptionValue(db.Model):
+    """Generic option value under an OptionCategory."""
+
     __tablename__ = "option_values"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -242,7 +265,7 @@ class OptionValue(db.Model):
 
 
 # ---------------------------------------------------------------------
-# NEW: Admin-only master lists (ALE–KAE, CPV)
+# Admin-only master lists (ALE–KAE, CPV)
 # ---------------------------------------------------------------------
 class AleKae(db.Model):
     """
@@ -293,7 +316,7 @@ class Cpv(db.Model):
 
 
 # ---------------------------------------------------------------------
-# Enterprise master-data (existing)
+# Enterprise master-data
 # ---------------------------------------------------------------------
 class IncomeTaxRule(db.Model):
     """
@@ -341,6 +364,7 @@ class WithholdingProfile(db.Model):
 
     @property
     def total_percent(self) -> Decimal:
+        """Sum all withholding components as display percent."""
         total = (
             _to_decimal(self.mt_eloa_percent)
             + _to_decimal(self.eadhsy_percent)
@@ -408,6 +432,7 @@ class ProcurementCommittee(db.Model):
     )
 
     def members_display(self) -> str:
+        """Human-friendly one-line committee members summary."""
         parts = []
         if self.president:
             parts.append(f"Πρόεδρος: {self.president.full_name()}")
@@ -518,6 +543,8 @@ class Supplier(db.Model):
 # Procurement domain
 # ---------------------------------------------------------------------
 class Procurement(db.Model):
+    """Main procurement entity with workflow, supplier, tax, and implementation fields."""
+
     __tablename__ = "procurements"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -597,16 +624,23 @@ class Procurement(db.Model):
     adam_aay = db.Column(db.String(100), nullable=True, index=True)
     ada_aay = db.Column(db.String(100), nullable=True, index=True)
 
-    # NEW (V4.4): identities (text)
+    # Invitation document fields
     identity_prosklisis = db.Column(db.String(255), nullable=True)
     adam_prosklisis = db.Column(db.String(100), nullable=True, index=True)
 
-    # NEW (V4.4): identities (text)
+    # Award decision fields
     identity_apofasis_anathesis = db.Column(db.String(255), nullable=True)
     adam_apofasis_anathesis = db.Column(db.String(100), nullable=True, index=True)
 
     contract_number = db.Column(db.String(100), nullable=True, index=True)
     adam_contract = db.Column(db.String(100), nullable=True, index=True)
+
+    # New invoice / receipt fields
+    invoice_number = db.Column(db.String(100), nullable=True, index=True)
+    invoice_date = db.Column(db.Date, nullable=True, index=True)
+    materials_receipt_date = db.Column(db.Date, nullable=True, index=True)
+    invoice_receipt_date = db.Column(db.Date, nullable=True, index=True)
+
     protocol_number = db.Column(db.String(100), nullable=True, index=True)
 
     procurement_notes = db.Column(db.Text, nullable=True)
@@ -681,17 +715,26 @@ class Procurement(db.Model):
 
     @property
     def handler_display(self):
+        """Display handler from linked Personnel first, then legacy text fallback."""
         if self.handler_personnel:
             return self.handler_personnel.full_name()
         return self.handler or None
 
     @property
     def aa2_description(self) -> str | None:
+        """Compatibility accessor for procurement type description."""
         if self.income_tax_rule and self.income_tax_rule.description:
             return self.income_tax_rule.description
         return None
 
     def recalc_totals(self):
+        """
+        Recalculate sum_total / vat_amount / grand_total from material lines.
+
+        IMPORTANT:
+        - Totals are always recalculated server-side.
+        - UI-provided totals must never be trusted.
+        """
         total = Decimal("0.00")
         for line in self.materials:
             if line.quantity and line.unit_price:
@@ -712,6 +755,14 @@ class Procurement(db.Model):
         self.grand_total = _money(self.sum_total + vat)
 
     def compute_public_withholdings(self) -> dict:
+        """
+        Compute withholding breakdown from selected profile.
+
+        Returns:
+        - items
+        - total_percent
+        - total_amount
+        """
         base = _to_decimal(self.sum_total)
         profile = self.withholding_profile
 
@@ -748,6 +799,13 @@ class Procurement(db.Model):
         }
 
     def compute_income_tax(self) -> dict:
+        """
+        Compute income tax after public withholdings.
+
+        Rule:
+        - if base_total <= threshold => 0 amount
+        - else rate applies on [sum_total - public_withholdings]
+        """
         base_total = _to_decimal(self.sum_total)
         withh = self.compute_public_withholdings()
         after_withholdings = _money(base_total - _to_decimal(withh["total_amount"]))
@@ -783,6 +841,17 @@ class Procurement(db.Model):
         }
 
     def compute_payment_analysis(self) -> dict:
+        """
+        Compute payment analysis as shown in the UI and reports.
+
+        Returns:
+        - sum_total
+        - public_withholdings
+        - income_tax
+        - vat_percent
+        - vat_amount
+        - payable_total
+        """
         sum_total = _to_decimal(self.sum_total)
         public_withh = self.compute_public_withholdings()
         income_tax = self.compute_income_tax()
@@ -809,6 +878,8 @@ class Procurement(db.Model):
 
 
 class ProcurementSupplier(db.Model):
+    """Association object between Procurement and Supplier."""
+
     __tablename__ = "procurement_suppliers"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -843,6 +914,8 @@ class ProcurementSupplier(db.Model):
 
 
 class MaterialLine(db.Model):
+    """One material/service line under a procurement."""
+
     __tablename__ = "material_lines"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -870,6 +943,7 @@ class MaterialLine(db.Model):
 
     @property
     def total_pre_vat(self):
+        """Server-side computed line total before VAT."""
         if not self.quantity or not self.unit_price:
             return Decimal("0.00")
 
@@ -880,6 +954,8 @@ class MaterialLine(db.Model):
 
 
 class Feedback(db.Model):
+    """User feedback / complaints / bug reports."""
+
     __tablename__ = "feedback"
 
     id = db.Column(db.Integer, primary_key=True)

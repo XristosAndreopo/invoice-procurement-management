@@ -2,7 +2,7 @@
 """
 app/blueprints/procurements/routes.py
 
-Procurement routes – Enterprise Secured Version (V4.8)
+Procurement routes – Enterprise Secured Version (V4.9)
 
 Includes:
 - Inbox / Pending Expenses / All lists
@@ -27,11 +27,19 @@ V4.7:
 
 V4.8:
 - Added report export: Απόφαση Ανάθεσης (DOCX via python-docx) opened as download.
+
+V4.9:
+- Added invoice / receipt implementation fields:
+  - invoice_number
+  - invoice_date
+  - materials_receipt_date
+  - invoice_receipt_date
 """
 
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from urllib.parse import urlparse
@@ -100,6 +108,23 @@ def _parse_optional_int(value: str | None) -> int | None:
         return None
 
 
+def _parse_optional_date(value: str | None):
+    """
+    Parse HTML date input (YYYY-MM-DD) into date.
+
+    Returns None for empty/invalid values to keep route handling defensive.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if raw == "":
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
 def _normalize_digits(value: str | None) -> str:
     """Keep only digits (used for VAT/AFM filters)."""
     if not value:
@@ -123,11 +148,9 @@ def _safe_next_url(raw_next: str | None, fallback_endpoint: str) -> str:
     except Exception:
         return url_for(fallback_endpoint)
 
-    # Disallow external redirects
     if parsed.scheme or parsed.netloc:
         return url_for(fallback_endpoint)
 
-    # Must start with /
     if not raw_next.startswith("/"):
         return url_for(fallback_endpoint)
 
@@ -175,9 +198,7 @@ def _sanitize_filename_component(s: str) -> str:
 
 
 def _money_filename(v: object) -> str:
-    """
-    Money for filename: "1700,00" (no €; dot decimal -> comma).
-    """
+    """Money for filename: '1700,00' (no €; dot decimal -> comma)."""
     try:
         d = Decimal(str(v or "0"))
     except Exception:
@@ -400,6 +421,7 @@ def _is_in_implementation_phase(procurement: Procurement) -> bool:
 @procurements_bp.route("/inbox")
 @login_required
 def inbox_procurements():
+    """Inbox list: non-approved / non-expense procurements."""
     q = _base_procurements_query()
     q = q.filter((Procurement.status.is_(None)) | (Procurement.status != "Ακυρωμένη"))
     q = q.filter((Procurement.send_to_expenses.is_(False)) | (Procurement.send_to_expenses.is_(None)))
@@ -425,6 +447,7 @@ def inbox_procurements():
 @procurements_bp.route("/pending-expenses")
 @login_required
 def pending_expenses():
+    """Pending expenses list."""
     q = _base_procurements_query()
     q = q.filter(Procurement.status == "Εν Εξελίξει")
     q = q.filter(Procurement.hop_approval.isnot(None))
@@ -451,6 +474,7 @@ def pending_expenses():
 @procurements_bp.route("/all")
 @login_required
 def all_procurements():
+    """All procurements list, including cancelled ones."""
     q = _base_procurements_query()
     q = _apply_list_filters(q)
     procurements = _order_by_serial_no(_with_list_eagerloads(q)).all()
@@ -473,6 +497,7 @@ def all_procurements():
 @procurements_bp.route("/")
 @login_required
 def list_procurements():
+    """Legacy route redirects to inbox."""
     return redirect(url_for("procurements.inbox_procurements"))
 
 
@@ -489,9 +514,6 @@ def report_proforma_invoice(procurement_id: int):
     SECURITY:
     - Protected by procurement_access_required (service isolation).
     - No data mutation here.
-
-    OUTPUT:
-    - Content-Disposition: inline; filename="proforma_<id>.pdf"
     """
     procurement = (
         Procurement.query.options(
@@ -531,7 +553,7 @@ def report_proforma_invoice(procurement_id: int):
 
 
 # ---------------------------------------------------------------------
-# Report: Award Decision (ΑΠΟΦΑΣΗ ΑΝΑΘΕΣΗΣ) -> DOCX (python-docx)
+# Report: Award Decision (ΑΠΟΦΑΣΗ ΑΝΑΘΕΣΗΣ) -> DOCX
 # ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/reports/award-decision", methods=["GET"])
 @login_required
@@ -543,9 +565,6 @@ def report_award_decision_docx(procurement_id: int):
     SECURITY:
     - Protected by procurement_access_required (service isolation).
     - No data mutation here.
-
-    OUTPUT:
-    - DOCX download
     """
     procurement = (
         Procurement.query.options(
@@ -582,12 +601,9 @@ def report_award_decision_docx(procurement_id: int):
         constants=AwardDecisionConstants(),
     )
 
-    # Filename as requested:
-    # "Απόφαση Ανάθεσης (Προμήθειας Υλικων/Παροχής Υπηρεσίων) (ΠΕΡΙΓΡΑΦΗ ΠΡΟΜΗΘΕΥΤΗ) (ΓΕΝΙΚΟ ΣΥΝΟΛΟ)"
     kind_label = "Παροχής Υπηρεσιών" if is_services else "Προμήθειας Υλικών"
     supplier_label = _sanitize_filename_component(getattr(winner, "name", None) if winner else "—")
 
-    # Prefer "Γενικό Σύνολο" from the visible totals (grand_total), else fallback to analysis
     amount_value = getattr(procurement, "grand_total", None)
     if amount_value is None:
         amount_value = analysis.get("payable_total") or analysis.get("sum_total") or Decimal("0.00")
@@ -616,6 +632,7 @@ def report_award_decision_docx(procurement_id: int):
 @procurements_bp.route("/new", methods=["GET", "POST"])
 @login_required
 def create_procurement():
+    """Create procurement. Only admin/manager/deputy."""
     if not (current_user.is_admin or current_user.can_manage()):
         abort(403)
 
@@ -633,7 +650,6 @@ def create_procurement():
     if not current_user.is_admin and current_user.service_unit_id:
         handler_candidates = _handler_candidates(current_user.service_unit_id)
 
-    # master data lists for dropdowns
     ale_rows = _active_ale_rows()
 
     if request.method == "POST":
@@ -703,6 +719,10 @@ def create_procurement():
             income_tax_rule_id=rule.id if rule else None,
             withholding_profile_id=wp.id if wp else None,
             committee_id=None,
+            invoice_number=None,
+            invoice_date=None,
+            materials_receipt_date=None,
+            invoice_receipt_date=None,
         )
 
         send_to_expenses = bool(request.form.get("send_to_expenses"))
@@ -743,11 +763,10 @@ def create_procurement():
 @login_required
 @procurement_access_required(_load_procurement)
 def edit_procurement(procurement_id: int):
+    """Main procurement edit page."""
     procurement = Procurement.query.get_or_404(procurement_id)
 
     next_url = _get_next_from_request("procurements.inbox_procurements")
-
-    # UI-only: used to decide which report buttons to show.
     show_all_report_buttons = _opened_from_all_list(next_url)
 
     allocation_options = _get_active_option_values("KATANOMH")
@@ -760,7 +779,6 @@ def edit_procurement(procurement_id: int):
 
     handler_candidates = _handler_candidates(procurement.service_unit_id)
 
-    # master data lists for dropdowns
     ale_rows = _active_ale_rows()
     cpv_rows = _active_cpv_rows()
 
@@ -776,7 +794,6 @@ def edit_procurement(procurement_id: int):
         procurement.serial_no = (request.form.get("serial_no") or "").strip() or None
         procurement.description = (request.form.get("description") or "").strip() or None
 
-        # validate ALE from master list
         ale_raw = (request.form.get("ale") or "").strip()
         procurement.ale = _validate_ale_or_none(ale_raw)
         if ale_raw and procurement.ale is None:
@@ -800,19 +817,43 @@ def edit_procurement(procurement_id: int):
         procurement.aay = (request.form.get("aay") or "").strip() or None
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
 
-        # invitation identity field
         procurement.identity_prosklisis = (request.form.get("identity_prosklisis") or "").strip() or None
 
-        # already part of the edit page
         procurement.adam_aay = (request.form.get("adam_aay") or "").strip() or None
         procurement.ada_aay = (request.form.get("ada_aay") or "").strip() or None
         procurement.adam_prosklisis = (request.form.get("adam_prosklisis") or "").strip() or None
 
-        # When opened from "All procurements", the edit page can include implementation fields.
         procurement.identity_apofasis_anathesis = (request.form.get("identity_apofasis_anathesis") or "").strip() or None
         procurement.adam_apofasis_anathesis = (request.form.get("adam_apofasis_anathesis") or "").strip() or None
         procurement.contract_number = (request.form.get("contract_number") or "").strip() or None
         procurement.adam_contract = (request.form.get("adam_contract") or "").strip() or None
+
+        # New implementation-related invoice fields, visible from "All procurements".
+        invoice_number_raw = request.form.get("invoice_number")
+        invoice_date_raw = request.form.get("invoice_date")
+        materials_receipt_date_raw = request.form.get("materials_receipt_date")
+        invoice_receipt_date_raw = request.form.get("invoice_receipt_date")
+
+        procurement.invoice_number = (invoice_number_raw or "").strip() or None
+
+        parsed_invoice_date = _parse_optional_date(invoice_date_raw)
+        if (invoice_date_raw or "").strip() and parsed_invoice_date is None:
+            flash("Μη έγκυρη Ημερομηνία Τιμολογίου.", "danger")
+            return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.invoice_date = parsed_invoice_date
+
+        parsed_materials_receipt_date = _parse_optional_date(materials_receipt_date_raw)
+        if (materials_receipt_date_raw or "").strip() and parsed_materials_receipt_date is None:
+            flash("Μη έγκυρη Ημερομηνία Παραλαβής Υλικών.", "danger")
+            return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.materials_receipt_date = parsed_materials_receipt_date
+
+        parsed_invoice_receipt_date = _parse_optional_date(invoice_receipt_date_raw)
+        if (invoice_receipt_date_raw or "").strip() and parsed_invoice_receipt_date is None:
+            flash("Μη έγκυρη Ημερομηνία Παραλαβής Τιμολογίου.", "danger")
+            return redirect(url_for("procurements.edit_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.invoice_receipt_date = parsed_invoice_receipt_date
+
         procurement.protocol_number = (request.form.get("protocol_number") or "").strip() or None
 
         handler_candidates = _handler_candidates(procurement.service_unit_id)
@@ -892,6 +933,7 @@ def edit_procurement(procurement_id: int):
 @login_required
 @procurement_access_required(_load_procurement)
 def implementation_procurement(procurement_id: int):
+    """Final implementation/expenses phase page."""
     procurement = Procurement.query.get_or_404(procurement_id)
 
     if not _is_in_implementation_phase(procurement):
@@ -929,7 +971,6 @@ def implementation_procurement(procurement_id: int):
         procurement.aay = (request.form.get("aay") or "").strip() or None
         procurement.procurement_notes = (request.form.get("procurement_notes") or "").strip() or None
 
-        # identity of invitation document (also visible in implementation)
         procurement.identity_prosklisis = (request.form.get("identity_prosklisis") or "").strip() or None
 
         committee_id = _parse_optional_int(request.form.get("committee_id"))
@@ -956,11 +997,36 @@ def implementation_procurement(procurement_id: int):
         procurement.ada_aay = (request.form.get("ada_aay") or "").strip() or None
         procurement.adam_prosklisis = (request.form.get("adam_prosklisis") or "").strip() or None
 
-        # award decision identity + fields
         procurement.identity_apofasis_anathesis = (request.form.get("identity_apofasis_anathesis") or "").strip() or None
         procurement.adam_apofasis_anathesis = (request.form.get("adam_apofasis_anathesis") or "").strip() or None
         procurement.contract_number = (request.form.get("contract_number") or "").strip() or None
         procurement.adam_contract = (request.form.get("adam_contract") or "").strip() or None
+
+        invoice_number_raw = request.form.get("invoice_number")
+        invoice_date_raw = request.form.get("invoice_date")
+        materials_receipt_date_raw = request.form.get("materials_receipt_date")
+        invoice_receipt_date_raw = request.form.get("invoice_receipt_date")
+
+        procurement.invoice_number = (invoice_number_raw or "").strip() or None
+
+        parsed_invoice_date = _parse_optional_date(invoice_date_raw)
+        if (invoice_date_raw or "").strip() and parsed_invoice_date is None:
+            flash("Μη έγκυρη Ημερομηνία Τιμολογίου.", "danger")
+            return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.invoice_date = parsed_invoice_date
+
+        parsed_materials_receipt_date = _parse_optional_date(materials_receipt_date_raw)
+        if (materials_receipt_date_raw or "").strip() and parsed_materials_receipt_date is None:
+            flash("Μη έγκυρη Ημερομηνία Παραλαβής Υλικών.", "danger")
+            return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.materials_receipt_date = parsed_materials_receipt_date
+
+        parsed_invoice_receipt_date = _parse_optional_date(invoice_receipt_date_raw)
+        if (invoice_receipt_date_raw or "").strip() and parsed_invoice_receipt_date is None:
+            flash("Μη έγκυρη Ημερομηνία Παραλαβής Τιμολογίου.", "danger")
+            return redirect(url_for("procurements.implementation_procurement", procurement_id=procurement.id, next=next_url))
+        procurement.invoice_receipt_date = parsed_invoice_receipt_date
+
         procurement.protocol_number = (request.form.get("protocol_number") or "").strip() or None
 
         wp_id = _parse_optional_int(request.form.get("withholding_profile_id"))
@@ -1014,6 +1080,7 @@ def implementation_procurement(procurement_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def add_procurement_supplier(procurement_id: int):
+    """Add a supplier participation entry to a procurement."""
     procurement = Procurement.query.get_or_404(procurement_id)
     next_url = _get_next_from_request("procurements.inbox_procurements")
 
@@ -1062,6 +1129,7 @@ def add_procurement_supplier(procurement_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def delete_procurement_supplier(procurement_id: int, link_id: int):
+    """Delete a supplier participation entry."""
     next_url = _get_next_from_request("procurements.inbox_procurements")
 
     link = ProcurementSupplier.query.get_or_404(link_id)
@@ -1083,6 +1151,7 @@ def delete_procurement_supplier(procurement_id: int, link_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def add_material_line(procurement_id: int):
+    """Add a material/service line to a procurement."""
     procurement = Procurement.query.get_or_404(procurement_id)
     next_url = _get_next_from_request("procurements.inbox_procurements")
 
@@ -1124,6 +1193,7 @@ def add_material_line(procurement_id: int):
 @login_required
 @procurement_edit_required(_load_procurement)
 def delete_material_line(procurement_id: int, line_id: int):
+    """Delete a material/service line."""
     next_url = _get_next_from_request("procurements.inbox_procurements")
 
     line = MaterialLine.query.get_or_404(line_id)

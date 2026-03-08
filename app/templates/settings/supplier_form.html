@@ -5,7 +5,7 @@
   <div>
     <h1 class="h4 fw-bold mb-1">{{ form_title }}</h1>
     <div class="text-muted small">
-      Διαχείριση στοιχείων προμηθευτή (ΑΦΜ, επωνυμία, τηλέφωνο, διεύθυνση, IBAN κ.λπ.).
+      Διαχείριση στοιχείων προμηθευτή (ΑΦΜ, επωνυμία, τηλέφωνο, Δ.Ο.Υ., διεύθυνση, IBAN κ.λπ.).
     </div>
   </div>
   <a href="{{ url_for('settings.suppliers_list') }}" class="btn btn-outline-secondary btn-sm">
@@ -54,7 +54,7 @@
                      class="form-control form-control-sm"
                      placeholder="π.χ. 2101234567"
                      value="{{ supplier.phone if supplier and supplier.phone is not none else '' }}">
-              <div class="form-text">Πεδίο μη υποχρεωτικό. Χρησιμοποιείται σε στοιχεία προμηθευτή / reports.</div>
+              <div class="form-text">Χρησιμοποιείται στα στοιχεία επικοινωνίας του προμηθευτή και στα reports.</div>
             </div>
           </div>
 
@@ -66,7 +66,7 @@
                      class="form-control form-control-sm"
                      placeholder="supplier@example.com"
                      value="{{ supplier.email if supplier and supplier.email is not none else '' }}">
-              <div class="form-text">Χρησιμοποιείται στο Προτιμολόγιο (Στοιχεία Αναδόχου).</div>
+              <div class="form-text">Χρησιμοποιείται στο Προτιμολόγιο και σε λοιπά έγγραφα.</div>
             </div>
           </div>
 
@@ -164,9 +164,13 @@
                 μοναδικότητας γίνεται στον κώδικα ώστε να μην δημιουργούνται
                 διπλές εγγραφές.
               </p>
+              <p class="mb-2">
+                Το τηλέφωνο, το email, η Δ.Ο.Υ. και το ΕΜΠΑ αποθηκεύονται
+                ως στοιχεία master data προμηθευτή.
+              </p>
               <p class="mb-0 text-muted">
                 Τα στοιχεία αυτά χρησιμοποιούνται στις φόρμες προμηθειών
-                και στα reports (π.χ. Προτιμολόγιο).
+                και στα reports.
               </p>
             </div>
           </div>

@@ -5,7 +5,7 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Προμηθευτές</h1>
     <div class="text-muted small">
-      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, Δ.Ο.Υ., Email, ΕΜΠΑ, διεύθυνση, τόπος, Τ.Κ., χώρα, τράπεζα, IBAN).
+      Διαχείριση προμηθευτών (ΑΦΜ, επωνυμία, τηλέφωνο, Δ.Ο.Υ., Email, ΕΜΠΑ, διεύθυνση, τόπος, Τ.Κ., χώρα, τράπεζα, IBAN).
     </div>
   </div>
   <a href="{{ url_for('settings.supplier_create') }}" class="btn btn-primary btn-sm">
@@ -13,7 +13,6 @@
   </a>
 </div>
 
-<!-- NEW: Excel import -->
 <div class="card glass-card shadow-sm border-0 mb-3">
   <div class="card-body">
     <div class="d-flex flex-column flex-md-row align-items-start align-items-md-end justify-content-between gap-2">
@@ -22,6 +21,7 @@
         <span class="fw-semibold">ΑΦΜ</span>,
         <span class="fw-semibold">ΕΠΩΝΥΜΙΑ</span> (ή ΟΝΟΜΑΣΙΑ),
         ΔΟΥ (ή Δ.Ο.Υ.),
+        ΤΗΛΕΦΩΝΟ,
         EMAIL,
         ΕΜΠΑ,
         ΔΙΕΥΘΥΝΣΗ,
@@ -54,6 +54,7 @@
             <tr>
               <th>ΑΦΜ</th>
               <th>Επωνυμία</th>
+              <th>Τηλέφωνο</th>
               <th>Δ.Ο.Υ.</th>
               <th>Email</th>
               <th>ΕΜΠΑ</th>
@@ -71,6 +72,7 @@
               <tr>
                 <td class="small fw-semibold">{{ s.afm }}</td>
                 <td class="small">{{ s.name }}</td>
+                <td class="small">{{ s.phone or '—' }}</td>
                 <td class="small">{{ s.doy or '—' }}</td>
                 <td class="small">{{ s.email or '—' }}</td>
                 <td class="small">{{ s.emba or '—' }}</td>
@@ -79,9 +81,7 @@
                 <td class="small">{{ s.postal_code or '—' }}</td>
                 <td class="small">{{ s.country or '—' }}</td>
                 <td class="small">{{ s.bank_name or '—' }}</td>
-                <td class="small text-nowrap">
-                  {{ s.iban or '—' }}
-                </td>
+                <td class="small text-nowrap">{{ s.iban or '—' }}</td>
                 <td class="text-end">
                   <a href="{{ url_for('settings.supplier_edit', supplier_id=s.id) }}" class="btn btn-sm btn-outline-secondary me-1">
                     Επεξεργασία
