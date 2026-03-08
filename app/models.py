@@ -1,36 +1,30 @@
 # C:\Users\xrist\vs code projects\Invoice Management System\app\models.py
 """
-Invoice Management System – Enterprise Domain Models (V4.7)
+Invoice Management System – Enterprise Domain Models (V5.0)
 
-Includes existing V4.6 models and adds enterprise fields required by workflow & master data.
-
-NEW (V4.4):
-- Procurement.identity_prosklisis:
-  "Ταυτότητα Εγγράφου Πρόσκλησης" (text)
-- Procurement.identity_apofasis_anathesis:
-  "Ταυτότητα Εγγράφου Απόφασης Ανάθεσης" (text)
-
-NEW (V4.5):
-- Supplier.doy:
-  "Δ.Ο.Υ." (text) for supplier master data and reports.
-
-NEW (V4.6):
-- Supplier.phone:
-  Supplier phone number (text) for master data and reports.
+Includes existing V4.7 models and adds Organizational Structure models.
 
 NEW (V4.7):
-- Procurement.invoice_number:
-  "Αριθμός Τιμολογίου" (text)
-- Procurement.invoice_date:
-  "Ημερομηνία Τιμολογίου" (date)
-- Procurement.materials_receipt_date:
-  "Ημερομηνία Παραλαβής Υλικών" (date)
-- Procurement.invoice_receipt_date:
-  "Ημερομηνία Παραλαβής Τιμολογίου" (date)
+- Procurement.invoice_number
+- Procurement.invoice_date
+- Procurement.materials_receipt_date
+- Procurement.invoice_receipt_date
+
+NEW (V5.0) - Organizational structure:
+- ServiceUnit -> Directory -> Department
+- Personnel belongs to:
+  - exactly one ServiceUnit (already existed, nullable historically)
+  - optional Directory
+  - optional Department
+- Role assignments:
+  - Directory has a director: "Τμηματάρχης/Διευθυντής"
+  - Department has a head: "Προϊστάμενος/Αξιωματικός"
+  - Department may have an assistant (future UI)
 
 IMPORTANT:
 - UI is never trusted. Any selection must be validated server-side in routes.
-- These fields are safe nullable to avoid breaking existing data.
+- Foreign keys alone cannot enforce cross-table "same ServiceUnit" constraints.
+  Those rules MUST be enforced in routes.
 """
 
 from __future__ import annotations
@@ -102,7 +96,18 @@ def _money(x: Decimal) -> Decimal:
 # Core directory & users
 # ---------------------------------------------------------------------
 class Personnel(db.Model):
-    """Organizational directory person (Admin-managed)."""
+    """
+    Organizational directory person (Admin-managed).
+
+    Organizational structure:
+    - service_unit_id: assignment to a ServiceUnit (required conceptually)
+    - directory_id: optional assignment to a Directory of that ServiceUnit
+    - department_id: optional assignment to a Department of that Directory/ServiceUnit
+
+    DISPLAY RULES (Dropdowns):
+    - option label:  "Βαθμός Ειδικότητα Όνομα Επώνυμο (ΑΕΜ ... ΑΓΜ)"
+    - selected:      "Βαθμός Ειδικότητα Όνομα Επώνυμο"
+    """
 
     __tablename__ = "personnel"
 
@@ -127,6 +132,21 @@ class Personnel(db.Model):
         index=True,
     )
 
+    # NEW: Optional Directory / Department assignments
+    directory_id = db.Column(
+        db.Integer,
+        db.ForeignKey("directories.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    department_id = db.Column(
+        db.Integer,
+        db.ForeignKey("departments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     user = db.relationship(
@@ -142,9 +162,41 @@ class Personnel(db.Model):
         backref=db.backref("personnel_members", lazy=True),
     )
 
+    directory = db.relationship("Directory", foreign_keys=[directory_id])
+    department = db.relationship("Department", foreign_keys=[department_id])
+
     def full_name(self):
         """Compact display name used in legacy screens."""
         return f"{self.rank or ''} {self.last_name} {self.first_name}".strip()
+
+    # ---------------------------
+    # Dropdown label helpers
+    # ---------------------------
+    def _name_core(self) -> str:
+        """Return 'Βαθμός Ειδικότητα Όνομα Επώνυμο' (no parentheses)."""
+        parts = []
+        if self.rank:
+            parts.append(str(self.rank).strip())
+        if self.specialty:
+            parts.append(str(self.specialty).strip())
+        parts.append(str(self.first_name).strip())
+        parts.append(str(self.last_name).strip())
+        return " ".join([p for p in parts if p]).strip()
+
+    def display_selected_label(self) -> str:
+        """Selected label: 'Βαθμός Ειδικότητα Όνομα Επώνυμο'."""
+        return self._name_core() or self.full_name()
+
+    def display_option_label(self) -> str:
+        """Option label: 'Βαθμός Ειδικότητα Όνομα Επώνυμο (ΑΕΜ ... ΑΓΜ)'."""
+        base = self._name_core() or self.full_name()
+        extra_parts = []
+        if self.aem:
+            extra_parts.append(f"ΑΕΜ {str(self.aem).strip()}")
+        if self.agm:
+            extra_parts.append(f"ΑΓΜ {str(self.agm).strip()}")
+        extra = " ... ".join(extra_parts).strip()
+        return f"{base} ({extra})" if extra else base
 
     def __repr__(self):
         return f"<Personnel {self.full_name()}>"
@@ -221,6 +273,118 @@ class User(UserMixin, db.Model):
 
     def __repr__(self):
         return f"<User {self.username}>"
+
+
+# ---------------------------------------------------------------------
+# Organizational Structure (NEW)
+# ---------------------------------------------------------------------
+class Directory(db.Model):
+    """
+    Directory / Διεύθυνση under a ServiceUnit.
+
+    Role:
+    - director_personnel_id: "Τμηματάρχης/Διευθυντής" (Personnel)
+
+    SECURITY NOTES:
+    - All role assignments must be validated server-side to ensure:
+      director belongs to the same ServiceUnit.
+    """
+
+    __tablename__ = "directories"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    service_unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey("service_units.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    name = db.Column(db.String(255), nullable=False, index=True)
+
+    director_personnel_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    service_unit = db.relationship("ServiceUnit", backref=db.backref("directories", lazy=True, cascade="all, delete-orphan"))
+    director = db.relationship("Personnel", foreign_keys=[director_personnel_id])
+
+    __table_args__ = (
+        db.UniqueConstraint("service_unit_id", "name", name="uq_directory_serviceunit_name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Directory {self.name}>"
+
+
+class Department(db.Model):
+    """
+    Department / Τμήμα under a Directory (and thus under a ServiceUnit).
+
+    Roles:
+    - head_personnel_id: "Προϊστάμενος/Αξιωματικός"
+    - assistant_personnel_id: optional helper (future UI)
+
+    SECURITY NOTES:
+    - Must validate server-side that head/assistant belong to same ServiceUnit.
+    """
+
+    __tablename__ = "departments"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    service_unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey("service_units.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    directory_id = db.Column(
+        db.Integer,
+        db.ForeignKey("directories.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    name = db.Column(db.String(255), nullable=False, index=True)
+
+    head_personnel_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    assistant_personnel_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    directory = db.relationship("Directory", backref=db.backref("departments", lazy=True, cascade="all, delete-orphan"))
+    service_unit = db.relationship("ServiceUnit", backref=db.backref("departments", lazy=True, cascade="all, delete-orphan"))
+
+    head = db.relationship("Personnel", foreign_keys=[head_personnel_id])
+    assistant = db.relationship("Personnel", foreign_keys=[assistant_personnel_id])
+
+    __table_args__ = (
+        db.UniqueConstraint("directory_id", "name", name="uq_department_directory_name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Department {self.name}>"
 
 
 # ---------------------------------------------------------------------
@@ -667,15 +831,7 @@ class Procurement(db.Model):
 
     @property
     def winner_supplier_display(self):
-        """
-        Legacy display: "AFM - Name" for winner supplier (if any).
-
-        NOTE:
-        - Keep for backward compatibility.
-        - For list columns requiring separate AFM and Name, use:
-            - winner_supplier_afm
-            - winner_supplier_name
-        """
+        """Legacy display: 'AFM - Name' for winner supplier (if any)."""
         winner_link = None
         for link in self.supplies_links or []:
             if link.is_winner:
@@ -702,12 +858,7 @@ class Procurement(db.Model):
         return None
 
     def winner_supplier_obj(self) -> "Supplier | None":
-        """
-        Return Supplier instance for winner (if any).
-
-        SECURITY NOTE:
-        - This is a convenience for server-side rendering (reports).
-        """
+        """Return Supplier instance for winner (if any)."""
         for link in self.supplies_links or []:
             if link.is_winner and link.supplier:
                 return link.supplier
@@ -728,13 +879,7 @@ class Procurement(db.Model):
         return None
 
     def recalc_totals(self):
-        """
-        Recalculate sum_total / vat_amount / grand_total from material lines.
-
-        IMPORTANT:
-        - Totals are always recalculated server-side.
-        - UI-provided totals must never be trusted.
-        """
+        """Recalculate totals from material lines (server-side)."""
         total = Decimal("0.00")
         for line in self.materials:
             if line.quantity and line.unit_price:
@@ -755,14 +900,7 @@ class Procurement(db.Model):
         self.grand_total = _money(self.sum_total + vat)
 
     def compute_public_withholdings(self) -> dict:
-        """
-        Compute withholding breakdown from selected profile.
-
-        Returns:
-        - items
-        - total_percent
-        - total_amount
-        """
+        """Compute withholding breakdown from selected profile."""
         base = _to_decimal(self.sum_total)
         profile = self.withholding_profile
 
@@ -799,13 +937,7 @@ class Procurement(db.Model):
         }
 
     def compute_income_tax(self) -> dict:
-        """
-        Compute income tax after public withholdings.
-
-        Rule:
-        - if base_total <= threshold => 0 amount
-        - else rate applies on [sum_total - public_withholdings]
-        """
+        """Compute income tax after public withholdings."""
         base_total = _to_decimal(self.sum_total)
         withh = self.compute_public_withholdings()
         after_withholdings = _money(base_total - _to_decimal(withh["total_amount"]))
@@ -841,17 +973,7 @@ class Procurement(db.Model):
         }
 
     def compute_payment_analysis(self) -> dict:
-        """
-        Compute payment analysis as shown in the UI and reports.
-
-        Returns:
-        - sum_total
-        - public_withholdings
-        - income_tax
-        - vat_percent
-        - vat_amount
-        - payable_total
-        """
+        """Compute payment analysis as shown in the UI and reports."""
         sum_total = _to_decimal(self.sum_total)
         public_withh = self.compute_public_withholdings()
         income_tax = self.compute_income_tax()

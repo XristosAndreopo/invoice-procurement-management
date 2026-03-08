@@ -2,38 +2,25 @@
 """
 app/blueprints/procurements/routes.py
 
-Procurement routes – Enterprise Secured Version (V4.9)
+Procurement routes – Enterprise Secured Version
 
 Includes:
 - Inbox / Pending Expenses / All lists
 - Per-column server-side filtering
 - next= return chain so navigation returns to the list that opened the record
+- Reports (PDF / DOCX)
+- Suppliers / materials management
 
 IMPORTANT:
 - UI is never trusted. Access control and validations are server-side.
+- Organizational structure (ServiceUnit / Directory / Department) exists on Personnel,
+  but for now procurements use it only indirectly through handler_personnel linkage.
+- Future report usage for handler.department / handler.directory is NOT implemented yet.
 
-V4.5:
-- Report export: Προτιμολόγιο (PDF via ReportLab) opened in new browser tab.
-
-V4.6:
-- Added document identity fields:
-  - identity_prosklisis
-  - identity_apofasis_anathesis
-
-V4.7:
-- ALE and CPV master lists are used as the source of truth for dropdowns.
-- Added server-side validation for ALE / CPV.
-- Added support for "All procurements" -> edit page showing/storing implementation fields.
-
-V4.8:
-- Added report export: Απόφαση Ανάθεσης (DOCX via python-docx) opened as download.
-
-V4.9:
-- Added invoice / receipt implementation fields:
-  - invoice_number
-  - invoice_date
-  - materials_receipt_date
-  - invoice_receipt_date
+SECURITY:
+- Admin: full access
+- Non-admin: service isolation by Procurement.service_unit_id
+- Mutations require admin or unit manager/deputy via procurement_edit_required
 """
 
 from __future__ import annotations
@@ -44,7 +31,17 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from urllib.parse import urlparse
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, abort, make_response, send_file
+from flask import (
+    Blueprint,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    flash,
+    abort,
+    make_response,
+    send_file,
+)
 from flask_login import login_required, current_user
 from sqlalchemy import func, case, Integer, and_
 from sqlalchemy.exc import IntegrityError
@@ -294,6 +291,7 @@ def _with_list_eagerloads(q):
     """Prevent N+1 in list pages."""
     return q.options(
         joinedload(Procurement.service_unit),
+        joinedload(Procurement.handler_personnel),
         joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
     )
 
@@ -379,7 +377,13 @@ def _apply_list_filters(q):
 # Handler/committees/master-data lists
 # ---------------------------------------------------------------------
 def _handler_candidates(service_unit_id: int | None):
-    """Active personnel candidates for handler selection (service-unit scoped)."""
+    """
+    Active personnel candidates for handler selection (service-unit scoped).
+
+    NOTE:
+    - Dropdown display formatting is handled in Personnel model/template.
+    - Server-side rule remains only service-unit membership + active status.
+    """
     if not service_unit_id:
         return []
     return (
@@ -518,6 +522,7 @@ def report_proforma_invoice(procurement_id: int):
     procurement = (
         Procurement.query.options(
             joinedload(Procurement.service_unit),
+            joinedload(Procurement.handler_personnel),
             joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
             joinedload(Procurement.materials),
             joinedload(Procurement.withholding_profile),
@@ -569,6 +574,7 @@ def report_award_decision_docx(procurement_id: int):
     procurement = (
         Procurement.query.options(
             joinedload(Procurement.service_unit),
+            joinedload(Procurement.handler_personnel),
             joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
             joinedload(Procurement.materials),
             joinedload(Procurement.withholding_profile),
@@ -828,7 +834,6 @@ def edit_procurement(procurement_id: int):
         procurement.contract_number = (request.form.get("contract_number") or "").strip() or None
         procurement.adam_contract = (request.form.get("adam_contract") or "").strip() or None
 
-        # New implementation-related invoice fields, visible from "All procurements".
         invoice_number_raw = request.form.get("invoice_number")
         invoice_date_raw = request.form.get("invoice_date")
         materials_receipt_date_raw = request.form.get("materials_receipt_date")

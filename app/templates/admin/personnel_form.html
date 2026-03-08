@@ -5,7 +5,7 @@
   <div>
     <h1 class="h4 fw-bold mb-1">{{ form_title }}</h1>
     <div class="text-muted small">
-      Καταχώρηση/ενημέρωση προσωπικού οργανισμού και ανάθεση σε υπηρεσία (για επιλογή χειριστή στις προμήθειες).
+      Καταχώρηση/ενημέρωση προσωπικού οργανισμού και ανάθεση σε Υπηρεσία/Διεύθυνση/Τμήμα.
     </div>
   </div>
   <a href="{{ url_for('admin.personnel_list') }}" class="btn btn-outline-secondary btn-sm">
@@ -21,23 +21,81 @@
         <form method="post">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
+          <!-- ServiceUnit -->
           <div class="mb-2 row align-items-center">
-            <label class="col-4 col-form-label col-form-label-sm">Υπηρεσία</label>
+            <label class="col-4 col-form-label col-form-label-sm">Υπηρεσία *</label>
             <div class="col-8">
-              <select name="service_unit_id" class="form-select form-select-sm">
+              {% if current_user.is_admin %}
+                <select id="service_unit_id" name="service_unit_id" class="form-select form-select-sm">
+                  <option value="">(επιλέξτε)</option>
+                  {% for su in service_units %}
+                    <option value="{{ su.id }}"
+                      {% if person and person.service_unit_id == su.id %}selected{% endif %}>
+                      {{ su.short_name or su.description }}
+                    </option>
+                  {% endfor %}
+                </select>
+              {% else %}
+                <input
+                  class="form-control form-control-sm"
+                  value="{{ current_user.service_unit.short_name if current_user.service_unit else '' }}"
+                  disabled
+                >
+                {# Manager submit: service_unit_id is forced server-side #}
+                <input type="hidden" id="service_unit_id" name="service_unit_id" value="">
+              {% endif %}
+              <div class="form-text">
+                Απαιτείται. Χρησιμοποιείται και για περιορισμό χειριστών/ρόλων.
+              </div>
+            </div>
+          </div>
+
+          <!-- Directory -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Διεύθυνση</label>
+            <div class="col-8">
+              <select id="directory_id" name="directory_id" class="form-select form-select-sm">
                 <option value="">(καμία)</option>
-                {% for su in service_units %}
-                  <option value="{{ su.id }}"
-                    {% if person and person.service_unit_id == su.id %}selected{% endif %}>
-                    {{ su.short_name or su.description }}
+                {% for d in (directories or []) %}
+                  <option
+                    value="{{ d.id }}"
+                    data-service-unit="{{ d.service_unit_id }}"
+                    {% if person and person.directory_id == d.id %}selected{% endif %}
+                  >
+                    {{ d.name }}
                   </option>
                 {% endfor %}
               </select>
               <div class="form-text">
-                Χρησιμοποιείται για να εμφανίζεται ως διαθέσιμος “Χειριστής” στις προμήθειες της υπηρεσίας.
+                Προαιρετικό. Πρέπει να ανήκει στην επιλεγμένη Υπηρεσία (server-side validation).
               </div>
             </div>
           </div>
+
+          <!-- Department -->
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Τμήμα</label>
+            <div class="col-8">
+              <select id="department_id" name="department_id" class="form-select form-select-sm">
+                <option value="">(κανένα)</option>
+                {% for dep in (departments or []) %}
+                  <option
+                    value="{{ dep.id }}"
+                    data-service-unit="{{ dep.service_unit_id }}"
+                    data-directory="{{ dep.directory_id }}"
+                    {% if person and person.department_id == dep.id %}selected{% endif %}
+                  >
+                    {{ dep.name }}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Προαιρετικό. Πρέπει να ανήκει στην επιλεγμένη Διεύθυνση και Υπηρεσία (server-side validation).
+              </div>
+            </div>
+          </div>
+
+          <hr class="my-3">
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΓΜ *</label>
@@ -117,9 +175,9 @@
           <div class="card-body py-3 small">
             <div class="fw-bold mb-2">Σημείωση</div>
             <ul class="mb-0">
-              <li>Το Προσωπικό είναι master list (μόνο Admin).</li>
-              <li>Η ανάθεση σε Υπηρεσία επιτρέπει φιλτράρισμα χειριστών στη “Νέα Προμήθεια”.</li>
-              <li>Μπορείς να απενεργοποιήσεις προσωπικό (δεν θα εμφανίζεται ως χειριστής).</li>
+              <li>Η Υπηρεσία είναι υποχρεωτική (server-side).</li>
+              <li>Διεύθυνση/Τμήμα είναι προαιρετικά, αλλά πρέπει να ταιριάζουν ιεραρχικά.</li>
+              <li>Viewers δεν μπορούν να αλλάξουν δεδομένα (global guard).</li>
             </ul>
           </div>
         </div>
@@ -128,4 +186,87 @@
     </div>
   </div>
 </div>
+
+<script>
+/**
+ * UI-only filtering for Directory/Department selects.
+ * SECURITY NOTE:
+ * - Server-side validation in routes.py is the source of truth.
+ */
+(function() {
+  function getSelectedServiceUnitId() {
+    const su = document.getElementById("service_unit_id");
+    if (!su) return "";
+    // For non-admin manager this is a hidden field; keep empty and rely on server.
+    return (su.value || "").trim();
+  }
+
+  function getSelectedDirectoryId() {
+    const d = document.getElementById("directory_id");
+    if (!d) return "";
+    return (d.value || "").trim();
+  }
+
+  function filterDirectories() {
+    const suId = getSelectedServiceUnitId();
+    const dirSel = document.getElementById("directory_id");
+    if (!dirSel) return;
+
+    const current = dirSel.value;
+    let hasCurrent = false;
+
+    Array.from(dirSel.options).forEach(opt => {
+      if (!opt.value) { opt.hidden = false; return; }
+      const optSu = opt.getAttribute("data-service-unit") || "";
+      const visible = !suId || (optSu === suId);
+      opt.hidden = !visible;
+      if (visible && opt.value === current) hasCurrent = true;
+    });
+
+    if (!hasCurrent) dirSel.value = "";
+  }
+
+  function filterDepartments() {
+    const suId = getSelectedServiceUnitId();
+    const dirId = getSelectedDirectoryId();
+    const depSel = document.getElementById("department_id");
+    if (!depSel) return;
+
+    const current = depSel.value;
+    let hasCurrent = false;
+
+    Array.from(depSel.options).forEach(opt => {
+      if (!opt.value) { opt.hidden = false; return; }
+      const optSu = opt.getAttribute("data-service-unit") || "";
+      const optDir = opt.getAttribute("data-directory") || "";
+      const visible =
+        (!suId || optSu === suId) &&
+        (!dirId || optDir === dirId);
+
+      opt.hidden = !visible;
+      if (visible && opt.value === current) hasCurrent = true;
+    });
+
+    if (!hasCurrent) depSel.value = "";
+  }
+
+  function onServiceUnitChange() {
+    filterDirectories();
+    filterDepartments();
+  }
+
+  function onDirectoryChange() {
+    filterDepartments();
+  }
+
+  const su = document.getElementById("service_unit_id");
+  const dir = document.getElementById("directory_id");
+
+  if (su) su.addEventListener("change", onServiceUnitChange);
+  if (dir) dir.addEventListener("change", onDirectoryChange);
+
+  // initial
+  onServiceUnitChange();
+})();
+</script>
 {% endblock %}

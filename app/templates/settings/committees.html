@@ -43,30 +43,42 @@
 
             <div class="col-md-4">
               <label class="form-label">Πρόεδρος</label>
-              <select name="president_personnel_id" class="form-select">
-                <option value="">(—)</option>
+              <select
+                name="president_personnel_id"
+                class="form-select js-personnel-select"
+                data-placeholder="Αναζήτηση Προέδρου..."
+              >
+                <option value=""></option>
                 {% for p in personnel_list %}
-                  <option value="{{ p.id }}">{{ p.full_name() }}</option>
+                  <option value="{{ p.id }}">{{ p.display_option_label() }}</option>
                 {% endfor %}
               </select>
             </div>
 
             <div class="col-md-4">
               <label class="form-label">Α' Μέλος</label>
-              <select name="member1_personnel_id" class="form-select">
-                <option value="">(—)</option>
+              <select
+                name="member1_personnel_id"
+                class="form-select js-personnel-select"
+                data-placeholder="Αναζήτηση Α' Μέλους..."
+              >
+                <option value=""></option>
                 {% for p in personnel_list %}
-                  <option value="{{ p.id }}">{{ p.full_name() }}</option>
+                  <option value="{{ p.id }}">{{ p.display_option_label() }}</option>
                 {% endfor %}
               </select>
             </div>
 
             <div class="col-md-4">
               <label class="form-label">Β' Μέλος</label>
-              <select name="member2_personnel_id" class="form-select">
-                <option value="">(—)</option>
+              <select
+                name="member2_personnel_id"
+                class="form-select js-personnel-select"
+                data-placeholder="Αναζήτηση Β' Μέλους..."
+              >
+                <option value=""></option>
                 {% for p in personnel_list %}
-                  <option value="{{ p.id }}">{{ p.full_name() }}</option>
+                  <option value="{{ p.id }}">{{ p.display_option_label() }}</option>
                 {% endfor %}
               </select>
             </div>
@@ -123,33 +135,45 @@
                   </td>
 
                   <td>
-                    <select name="president_personnel_id" class="form-select form-select-sm">
-                      <option value="">(—)</option>
+                    <select
+                      name="president_personnel_id"
+                      class="form-select form-select-sm js-personnel-select"
+                      data-placeholder="Αναζήτηση Προέδρου..."
+                    >
+                      <option value=""></option>
                       {% for p in personnel_list %}
                         <option value="{{ p.id }}" {% if c.president_personnel_id == p.id %}selected{% endif %}>
-                          {{ p.full_name() }}
+                          {{ p.display_option_label() }}
                         </option>
                       {% endfor %}
                     </select>
                   </td>
 
                   <td>
-                    <select name="member1_personnel_id" class="form-select form-select-sm">
-                      <option value="">(—)</option>
+                    <select
+                      name="member1_personnel_id"
+                      class="form-select form-select-sm js-personnel-select"
+                      data-placeholder="Αναζήτηση Α' Μέλους..."
+                    >
+                      <option value=""></option>
                       {% for p in personnel_list %}
                         <option value="{{ p.id }}" {% if c.member1_personnel_id == p.id %}selected{% endif %}>
-                          {{ p.full_name() }}
+                          {{ p.display_option_label() }}
                         </option>
                       {% endfor %}
                     </select>
                   </td>
 
                   <td>
-                    <select name="member2_personnel_id" class="form-select form-select-sm">
-                      <option value="">(—)</option>
+                    <select
+                      name="member2_personnel_id"
+                      class="form-select form-select-sm js-personnel-select"
+                      data-placeholder="Αναζήτηση Β' Μέλους..."
+                    >
+                      <option value=""></option>
                       {% for p in personnel_list %}
                         <option value="{{ p.id }}" {% if c.member2_personnel_id == p.id %}selected{% endif %}>
-                          {{ p.full_name() }}
+                          {{ p.display_option_label() }}
                         </option>
                       {% endfor %}
                     </select>
@@ -185,4 +209,43 @@
     <div class="alert alert-info">Επίλεξε υπηρεσία για να δεις/ορίσεις επιτροπές.</div>
   {% endif %}
 </div>
+
+<script>
+/**
+ * Personnel Select2 rendering:
+ * - Dropdown results: full option label with IDs
+ * - Selected value: compact selected label without IDs
+ *
+ * SECURITY:
+ * - Display only. Real validation is server-side.
+ */
+(function() {
+  if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
+
+  function stripIds(text) {
+    if (!text) return text;
+    return String(text).replace(/\s*\([^)]*\)\s*$/, "").trim();
+  }
+
+  jQuery(".js-personnel-select").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
+
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: $el.data("placeholder") || "(αναζήτηση...)",
+      templateResult: function(state) {
+        if (!state || !state.text) return state.text;
+        return state.text;
+      },
+      templateSelection: function(state) {
+        if (!state || !state.text) return state.text;
+        return stripIds(state.text);
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}

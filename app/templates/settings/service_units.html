@@ -5,21 +5,19 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Υπηρεσίες</h1>
     <div class="text-muted small">
-      Διαχείριση Υπηρεσιών και ανάθεση Manager/Deputy από το Προσωπικό.
+      Κεντρική σελίδα διαχείρισης υπηρεσιών: λίστα, ρόλοι (Manager/Deputy), δομή (Διευθύνσεις/Τμήματα) και SetUp (ορισμός Διευθυντών/Προϊσταμένων).
     </div>
   </div>
-  <a href="{{ url_for('settings.options_index') }}" class="btn btn-outline-secondary btn-sm">
-    &larr; Στοιχεία / Πληροφορίες
-  </a>
 </div>
 
 <div class="row g-3">
+
   <div class="col-12 col-md-6">
     <div class="card glass-card shadow-sm border-0 h-100">
       <div class="card-body">
         <h2 class="h6 fw-bold mb-2">Λίστα Υπηρεσιών</h2>
         <p class="small text-muted mb-3">
-          Προβολή όλων των υπηρεσιών, με εμφανή Manager/Deputy.
+          Προβολή/επεξεργασία βασικών στοιχείων υπηρεσιών και πρόσβαση σε Δομή/SetUp ανά υπηρεσία.
         </p>
         <a href="{{ url_for('settings.service_units_list') }}" class="btn btn-outline-primary btn-sm">
           Προβολή λίστας
@@ -31,15 +29,27 @@
   <div class="col-12 col-md-6">
     <div class="card glass-card shadow-sm border-0 h-100">
       <div class="card-body">
-        <h2 class="h6 fw-bold mb-2">Νέα Υπηρεσία</h2>
+        <h2 class="h6 fw-bold mb-2">Ορισμός Deputy/Manager</h2>
         <p class="small text-muted mb-3">
-          Δημιουργία νέας υπηρεσίας και ανάθεση Manager/Deputy από ενεργό προσωπικό.
+          Ανάθεση ρόλων ανά υπηρεσία. Επιτρέπεται επιλογή μόνο από ενεργό προσωπικό.
         </p>
-        <a href="{{ url_for('settings.service_unit_create') }}" class="btn btn-primary btn-sm">
-          Νέα Υπηρεσία
+        <a href="{{ url_for('settings.service_units_roles_list') }}" class="btn btn-outline-primary btn-sm">
+          Μετάβαση στους ρόλους
         </a>
       </div>
     </div>
   </div>
+
+  <div class="col-12">
+    <div class="card glass-card shadow-sm border-0">
+      <div class="card-body">
+        <div class="fw-bold mb-1">Σημείωση</div>
+        <div class="small text-muted">
+          Η “Δομή” και το “SetUp” γίνονται <b>ανά υπηρεσία</b> μέσα από τη Λίστα Υπηρεσιών (κουμπιά “Δομή” και “SetUp” στη γραμμή κάθε υπηρεσίας).
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 {% endblock %}

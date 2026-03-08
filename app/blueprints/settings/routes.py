@@ -13,19 +13,14 @@ Enterprise scope:
 - Income Tax Rules (admin-only)
 - Withholding Profiles (admin-only)
 - Procurement Committees (manager+admin)
-
-NEW:
 - ALE–KAE master list (admin-only) + Excel import
 - CPV master list (admin-only) + Excel import
 
-REPORT FIELDS (V4.3):
-- ServiceUnit.address, ServiceUnit.phone
-- Supplier.email, Supplier.emba
-
-REPORT FIELDS (V4.6):
-- Supplier.phone
-
-These are required for report headers and supplier contact details.
+NEW (Organizational Structure):
+- ServiceUnit -> Directories -> Departments
+- Structure management per ServiceUnit:
+  - Admin can manage all
+  - Manager/Deputy can manage ONLY their own ServiceUnit (server-side)
 
 SECURITY:
 - UI is never trusted. All permissions are enforced server-side.
@@ -55,6 +50,8 @@ from ...models import (
     ProcurementCommittee,
     AleKae,
     Cpv,
+    Directory,
+    Department,
 )
 from ...security import admin_required, manager_required
 
@@ -88,7 +85,9 @@ def _parse_decimal(value: str | None) -> Optional[Decimal]:
 
 
 def _active_personnel_for_dropdown(service_unit_id: Optional[int] = None):
-    """Active personnel list for dropdown selection (optionally filtered by service unit)."""
+    """
+    Active personnel list for dropdown selection (optionally filtered by service unit).
+    """
     q = Personnel.query.filter_by(is_active=True)
     if service_unit_id:
         q = q.filter_by(service_unit_id=service_unit_id)
@@ -127,6 +126,24 @@ def _ensure_committee_scope_or_403(service_unit_id: int):
     """
     Manager/Deputy can manage committees ONLY for their own ServiceUnit.
     Admin can manage all.
+    """
+    if current_user.is_admin:
+        return
+    if not current_user.service_unit_id or current_user.service_unit_id != service_unit_id:
+        abort(403)
+    if not current_user.can_manage():
+        abort(403)
+
+
+def _ensure_structure_scope_or_403(service_unit_id: int):
+    """
+    Organizational Structure management scope.
+
+    Admin: allowed for any ServiceUnit.
+    Manager/Deputy: ONLY for their own ServiceUnit.
+
+    SECURITY:
+    - Server-side enforcement.
     """
     if current_user.is_admin:
         return
@@ -329,16 +346,7 @@ def service_units_roles_list():
 @login_required
 @admin_required
 def service_unit_create():
-    """
-    Create ServiceUnit (admin-only).
-
-    IMPORTANT:
-    - Basic fields only.
-    - Manager/Deputy assignment is done in /service-units/<id>/edit.
-
-    REPORT FIELDS:
-    - address, phone are used by reports (e.g., Προτιμολόγιο header).
-    """
+    """Create ServiceUnit (admin-only)."""
     if request.method == "POST":
         description = (request.form.get("description") or "").strip()
         code = (request.form.get("code") or "").strip()
@@ -389,24 +397,7 @@ def service_unit_create():
 @login_required
 @admin_required
 def service_units_import():
-    """
-    Import ServiceUnits from Excel (admin-only).
-
-    Expected headers (Greek or English, accents are ignored):
-    - Κωδικός / code
-    - Περιγραφή / description  (required)
-    - Συντομογραφία / short_name (or "short name")
-
-    NOTE:
-    - This import currently does NOT set address/phone.
-      Those are report fields and can be edited from the form.
-
-    Behavior:
-    - Creates new ServiceUnits from rows with a non-empty description.
-    - Skips empty rows.
-    - Does NOT set Manager/Deputy here.
-    - AUDIT: logs CREATE per inserted ServiceUnit (id exists after flush).
-    """
+    """Import ServiceUnits from Excel (admin-only)."""
     file = request.files.get("file")
     if not file or not file.filename:
         flash("Δεν επιλέχθηκε αρχείο.", "danger")
@@ -488,12 +479,7 @@ def service_units_import():
 @login_required
 @admin_required
 def service_unit_edit_info(unit_id: int):
-    """
-    Edit ServiceUnit basic fields (admin-only).
-
-    REPORT FIELDS:
-    - address, phone used by reports (e.g., Προτιμολόγιο).
-    """
+    """Edit ServiceUnit basic fields (admin-only)."""
     unit = ServiceUnit.query.get_or_404(unit_id)
 
     if request.method == "POST":
@@ -601,6 +587,227 @@ def service_unit_delete(unit_id: int):
 
 
 # ----------------------------------------------------------------------
+# NEW: SERVICE UNIT STRUCTURE (Directories / Departments)
+# ----------------------------------------------------------------------
+@settings_bp.route("/service-units/<int:unit_id>/structure", methods=["GET", "POST"])
+@login_required
+@manager_required
+def service_unit_structure(unit_id: int):
+    """
+    Manage organizational structure for a ServiceUnit:
+    - Directories (Διευθύνσεις)
+    - Departments (Τμήματα)
+
+    Permissions:
+    - Admin: any unit
+    - Manager/Deputy: only their own unit
+
+    SECURITY:
+    - UI is never trusted.
+    - Server-side scope checks and FK ownership checks are enforced here.
+    """
+    unit = ServiceUnit.query.get_or_404(unit_id)
+    _ensure_structure_scope_or_403(unit.id)
+
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+
+        # -----------------------
+        # DIRECTORY CRUD
+        # -----------------------
+        if action == "directory_create":
+            name = (request.form.get("name") or "").strip()
+            if not name:
+                flash("Η ονομασία Διεύθυνσης είναι υποχρεωτική.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            exists = Directory.query.filter_by(service_unit_id=unit.id, name=name).first()
+            if exists:
+                flash("Υπάρχει ήδη Διεύθυνση με αυτή την ονομασία στην Υπηρεσία.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            d = Directory(service_unit_id=unit.id, name=name, is_active=True, director_personnel_id=None)
+            db.session.add(d)
+            db.session.flush()
+            log_action(entity=d, action="CREATE", before=None, after=serialize_model(d))
+            db.session.commit()
+
+            flash("Η Διεύθυνση δημιουργήθηκε.", "success")
+            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+        if action == "directory_update":
+            did = _parse_optional_int((request.form.get("directory_id") or "").strip())
+            if did is None:
+                flash("Μη έγκυρη Διεύθυνση.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            d = Directory.query.get_or_404(did)
+            if d.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(d)
+
+            name = (request.form.get("name") or "").strip()
+            is_active = bool(request.form.get("is_active"))
+
+            if not name:
+                flash("Η ονομασία Διεύθυνσης είναι υποχρεωτική.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            exists = Directory.query.filter(Directory.service_unit_id == unit.id, Directory.name == name, Directory.id != d.id).first()
+            if exists:
+                flash("Υπάρχει ήδη άλλη Διεύθυνση με αυτή την ονομασία.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            d.name = name
+            d.is_active = is_active
+
+            db.session.flush()
+            log_action(entity=d, action="UPDATE", before=before, after=serialize_model(d))
+            db.session.commit()
+
+            flash("Η Διεύθυνση ενημερώθηκε.", "success")
+            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+        if action == "directory_delete":
+            did = _parse_optional_int((request.form.get("directory_id") or "").strip())
+            if did is None:
+                flash("Μη έγκυρη Διεύθυνση.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            d = Directory.query.get_or_404(did)
+            if d.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(d)
+            db.session.delete(d)
+            db.session.flush()
+            log_action(entity=d, action="DELETE", before=before, after=None)
+            db.session.commit()
+
+            flash("Η Διεύθυνση διαγράφηκε.", "success")
+            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+        # -----------------------
+        # DEPARTMENT CRUD
+        # -----------------------
+        if action == "department_create":
+            directory_id = _parse_optional_int((request.form.get("directory_id") or "").strip())
+            name = (request.form.get("name") or "").strip()
+
+            if not directory_id:
+                flash("Η Διεύθυνση είναι υποχρεωτική για δημιουργία Τμήματος.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+            if not name:
+                flash("Η ονομασία Τμήματος είναι υποχρεωτική.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            d = Directory.query.get(directory_id)
+            if not d or d.service_unit_id != unit.id:
+                flash("Μη έγκυρη Διεύθυνση για την Υπηρεσία.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            exists = Department.query.filter_by(directory_id=d.id, name=name).first()
+            if exists:
+                flash("Υπάρχει ήδη Τμήμα με αυτή την ονομασία στη συγκεκριμένη Διεύθυνση.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            dep = Department(
+                service_unit_id=unit.id,
+                directory_id=d.id,
+                name=name,
+                is_active=True,
+                head_personnel_id=None,
+                assistant_personnel_id=None,
+            )
+            db.session.add(dep)
+            db.session.flush()
+            log_action(entity=dep, action="CREATE", before=None, after=serialize_model(dep))
+            db.session.commit()
+
+            flash("Το Τμήμα δημιουργήθηκε.", "success")
+            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+        if action == "department_update":
+            dep_id = _parse_optional_int((request.form.get("department_id") or "").strip())
+            if dep_id is None:
+                flash("Μη έγκυρο Τμήμα.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            dep = Department.query.get_or_404(dep_id)
+            if dep.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(dep)
+
+            name = (request.form.get("name") or "").strip()
+            is_active = bool(request.form.get("is_active"))
+
+            if not name:
+                flash("Η ονομασία Τμήματος είναι υποχρεωτική.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            exists = Department.query.filter(
+                Department.directory_id == dep.directory_id,
+                Department.name == name,
+                Department.id != dep.id,
+            ).first()
+            if exists:
+                flash("Υπάρχει ήδη άλλο Τμήμα με αυτή την ονομασία στη συγκεκριμένη Διεύθυνση.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            dep.name = name
+            dep.is_active = is_active
+
+            db.session.flush()
+            log_action(entity=dep, action="UPDATE", before=before, after=serialize_model(dep))
+            db.session.commit()
+
+            flash("Το Τμήμα ενημερώθηκε.", "success")
+            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+        if action == "department_delete":
+            dep_id = _parse_optional_int((request.form.get("department_id") or "").strip())
+            if dep_id is None:
+                flash("Μη έγκυρο Τμήμα.", "danger")
+                return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+            dep = Department.query.get_or_404(dep_id)
+            if dep.service_unit_id != unit.id:
+                abort(403)
+
+            before = serialize_model(dep)
+            db.session.delete(dep)
+            db.session.flush()
+            log_action(entity=dep, action="DELETE", before=before, after=None)
+            db.session.commit()
+
+            flash("Το Τμήμα διαγράφηκε.", "success")
+            return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+        flash("Μη έγκυρη ενέργεια.", "danger")
+        return redirect(url_for("settings.service_unit_structure", unit_id=unit.id))
+
+    directories = (
+        Directory.query.filter_by(service_unit_id=unit.id)
+        .order_by(Directory.name.asc())
+        .all()
+    )
+    departments = (
+        Department.query.filter_by(service_unit_id=unit.id)
+        .order_by(Department.directory_id.asc(), Department.name.asc())
+        .all()
+    )
+
+    return render_template(
+        "settings/service_unit_structure.html",
+        unit=unit,
+        directories=directories,
+        departments=departments,
+    )
+
+
+# ----------------------------------------------------------------------
 # SUPPLIERS CRUD (admin only)
 # ----------------------------------------------------------------------
 @settings_bp.route("/suppliers")
@@ -616,12 +823,7 @@ def suppliers_list():
 @login_required
 @admin_required
 def supplier_create():
-    """
-    Create supplier (admin-only).
-
-    REPORT FIELDS:
-    - phone, email, emba used in reports / supplier master data.
-    """
+    """Create supplier (admin-only)."""
     if request.method == "POST":
         afm = (request.form.get("afm") or "").strip()
         name = (request.form.get("name") or "").strip()
@@ -674,12 +876,7 @@ def supplier_create():
 @login_required
 @admin_required
 def supplier_edit(supplier_id: int):
-    """
-    Edit supplier (admin-only).
-
-    REPORT FIELDS:
-    - phone, email, emba used in reports / supplier master data.
-    """
+    """Edit supplier (admin-only)."""
     supplier = Supplier.query.get_or_404(supplier_id)
 
     if request.method == "POST":
@@ -750,19 +947,7 @@ def supplier_delete(supplier_id: int):
 @login_required
 @admin_required
 def suppliers_import():
-    """
-    Admin-only Excel import for Suppliers.
-
-    Headers (Greek preferred, accents ignored):
-    - ΑΦΜ (required) / afm
-    - ΕΠΩΝΥΜΙΑ (required) / name / ονομασια
-    - ΔΟΥ (optional) / doy / δ.ο.υ.
-    - ΤΗΛΕΦΩΝΟ (optional) / phone
-    - EMAIL, ΕΜΠΑ, ΔΙΕΥΘΥΝΣΗ, ΤΟΠΟΣ, ΤΚ, ΧΩΡΑ, ΤΡΑΠΕΖΑ, IBAN (optional)
-
-    Behavior:
-    - Skip duplicates by AFM (no update).
-    """
+    """Admin-only Excel import for Suppliers."""
     file = request.files.get("file")
     if not file or not file.filename:
         flash("Δεν επιλέχθηκε αρχείο.", "danger")
@@ -879,12 +1064,7 @@ def suppliers_import():
 @login_required
 @admin_required
 def ale_kae():
-    """
-    Admin-only CRUD page for ALE–KAE.
-
-    POST action:
-    - create, update, delete
-    """
+    """Admin-only CRUD page for ALE–KAE."""
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
 
@@ -979,15 +1159,7 @@ def ale_kae():
 @login_required
 @admin_required
 def ale_kae_import():
-    """
-    Admin-only Excel import for ALE–KAE.
-
-    Headers (Greek preferred, accents ignored):
-    - ΑΛΕ (required)
-    - ΠΑΛΙΟΣ ΚΑΕ
-    - ΠΕΡΙΓΡΑΦΗ
-    - ΑΡΜΟΔΙΟΤΗΤΑΣ
-    """
+    """Admin-only Excel import for ALE–KAE."""
     file = request.files.get("file")
     if not file or not file.filename:
         flash("Δεν επιλέχθηκε αρχείο.", "danger")
@@ -1076,12 +1248,7 @@ def ale_kae_import():
 @login_required
 @admin_required
 def cpv():
-    """
-    Admin-only CRUD page for CPV.
-
-    POST action:
-    - create, update, delete
-    """
+    """Admin-only CRUD page for CPV."""
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
 
@@ -1165,13 +1332,7 @@ def cpv():
 @login_required
 @admin_required
 def cpv_import():
-    """
-    Admin-only Excel import for CPV.
-
-    Headers (Greek preferred, accents ignored):
-    - CPV (required)
-    - ΠΕΡΙΓΡΑΦΗ
-    """
+    """Admin-only Excel import for CPV."""
     file = request.files.get("file")
     if not file or not file.filename:
         flash("Δεν επιλέχθηκε αρχείο.", "danger")

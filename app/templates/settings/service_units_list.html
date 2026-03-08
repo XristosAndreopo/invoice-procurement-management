@@ -5,7 +5,7 @@
   <div>
     <h1 class="h4 fw-bold mb-1">Υπηρεσίες</h1>
     <div class="text-muted small">
-      Βασικά στοιχεία υπηρεσιών (Κωδικός, Περιγραφή, Συντομογραφία). Οι ρόλοι (Manager/Deputy) ορίζονται ξεχωριστά.
+      Βασικά στοιχεία υπηρεσιών (Κωδικός, Περιγραφή, Συντομογραφία) + διαχείριση Δομής και SetUp.
     </div>
   </div>
   <div class="d-flex gap-2">
@@ -56,10 +56,22 @@
                      class="btn btn-sm btn-outline-secondary me-1">
                     Επεξεργασία
                   </a>
+
                   <a href="{{ url_for('settings.service_unit_edit', unit_id=u.id) }}"
                      class="btn btn-sm btn-outline-primary me-1">
                     Ρόλοι
                   </a>
+
+                  <a href="{{ url_for('settings.service_unit_structure', unit_id=u.id) }}"
+                     class="btn btn-sm btn-outline-primary me-1">
+                    Δομή
+                  </a>
+
+                  <a href="{{ url_for('admin.organization_setup', service_unit_id=u.id) }}"
+                     class="btn btn-sm btn-outline-primary me-1">
+                    SetUp
+                  </a>
+
                   <form
                     method="post"
                     action="{{ url_for('settings.service_unit_delete', unit_id=u.id) }}"

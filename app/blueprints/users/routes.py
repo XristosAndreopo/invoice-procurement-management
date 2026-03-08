@@ -5,10 +5,22 @@ Enterprise rules enforced:
 - Every User MUST link to exactly one Personnel (1-to-1).
 - Admin selects Personnel from the organizational directory.
 - UI never trusted: we validate server-side.
+- Personnel organizational assignment is the source of truth for ServiceUnit consistency.
+
+NEW ORGANIZATIONAL CONSISTENCY RULES:
+- Each Personnel belongs to one ServiceUnit (nullable only where legacy data may exist).
+- For non-admin users:
+  - selected User.service_unit_id must match selected Personnel.service_unit_id
+  - if Personnel has no ServiceUnit, non-admin user cannot be created/updated
+- For admin users:
+  - service_unit_id may remain None
+  - service_unit_id may optionally be set, but must exist if provided
 
 Audit:
 - CREATE / UPDATE logged
 """
+
+from __future__ import annotations
 
 from flask import (
     Blueprint,
@@ -45,13 +57,16 @@ def _parse_optional_int(value: str):
 
 def _available_personnel_for_user_dropdown(exclude_user_id: int | None = None):
     """
-    Returns active Personnel that can be linked to a User.
+    Return active Personnel that can be linked to a User.
 
     Rule:
     - Personnel must be active
     - Personnel must NOT already have a user (1-to-1)
     - If editing an existing user, allow that user's current personnel
-      (so form doesn't break).
+      so the form remains stable
+
+    NOTE:
+    - Organizational placement display is handled in template/model helpers.
     """
     query = (
         Personnel.query
@@ -66,17 +81,27 @@ def _available_personnel_for_user_dropdown(exclude_user_id: int | None = None):
             allowed.append(p)
             continue
 
-        # If editing: allow the currently linked personnel for that user
         if exclude_user_id and p.user and p.user.id == exclude_user_id:
             allowed.append(p)
 
     return allowed
 
 
+def _validate_service_unit_exists(service_unit_id: int | None) -> bool:
+    """
+    Validate that a service unit exists when provided.
+
+    SECURITY:
+    - UI is never trusted; forged ids must be rejected.
+    """
+    if service_unit_id is None:
+        return True
+    return ServiceUnit.query.get(service_unit_id) is not None
+
+
 # ---------------------------------------------------------------------
 # LIST USERS
 # ---------------------------------------------------------------------
-
 @users_bp.route("/")
 @login_required
 @admin_required
@@ -93,7 +118,6 @@ def list_users():
 # ---------------------------------------------------------------------
 # CREATE USER
 # ---------------------------------------------------------------------
-
 @users_bp.route("/new", methods=["GET", "POST"])
 @login_required
 @admin_required
@@ -105,6 +129,10 @@ def create_user():
     - username
     - password
     - personnel_id (must be active + unlinked)
+
+    Organizational consistency:
+    - Non-admin users must inherit/match the selected Personnel.service_unit_id
+    - Admin users may have no service unit
     """
     service_units = ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
     personnel_list = _available_personnel_for_user_dropdown(exclude_user_id=None)
@@ -125,10 +153,41 @@ def create_user():
             flash("Το username υπάρχει ήδη.", "danger")
             return redirect(url_for("users.create_user"))
 
+        if not _validate_service_unit_exists(service_unit_id):
+            flash("Μη έγκυρη υπηρεσία.", "danger")
+            return redirect(url_for("users.create_user"))
+
         allowed_personnel_ids = {p.id for p in personnel_list}
         if personnel_id is None or personnel_id not in allowed_personnel_ids:
             flash("Πρέπει να επιλέξετε έγκυρο (ενεργό και μη συσχετισμένο) Προσωπικό.", "danger")
             return redirect(url_for("users.create_user"))
+
+        personnel = Personnel.query.get(personnel_id)
+        if not personnel or not personnel.is_active:
+            flash("Το επιλεγμένο Προσωπικό δεν είναι έγκυρο.", "danger")
+            return redirect(url_for("users.create_user"))
+
+        # ---------------------------------------------------------
+        # Organizational consistency (server-side enforced)
+        # ---------------------------------------------------------
+        if not is_admin:
+            if not personnel.service_unit_id:
+                flash(
+                    "Το επιλεγμένο Προσωπικό δεν έχει ορισμένη Υπηρεσία. "
+                    "Δεν μπορεί να δημιουργηθεί non-admin χρήστης χωρίς υπηρεσία.",
+                    "danger",
+                )
+                return redirect(url_for("users.create_user"))
+
+            if service_unit_id is None:
+                service_unit_id = personnel.service_unit_id
+
+            if service_unit_id != personnel.service_unit_id:
+                flash(
+                    "Η Υπηρεσία του χρήστη πρέπει να ταυτίζεται με την Υπηρεσία του επιλεγμένου Προσωπικού.",
+                    "danger",
+                )
+                return redirect(url_for("users.create_user"))
 
         user = User(
             username=username,
@@ -140,7 +199,7 @@ def create_user():
         user.set_password(password)
 
         db.session.add(user)
-        db.session.commit()
+        db.session.flush()
 
         log_action(
             user,
@@ -163,7 +222,6 @@ def create_user():
 # ---------------------------------------------------------------------
 # EDIT USER
 # ---------------------------------------------------------------------
-
 @users_bp.route("/<int:user_id>/edit", methods=["GET", "POST"])
 @login_required
 @admin_required
@@ -177,6 +235,10 @@ def edit_user(user_id):
     - toggle admin
     - reset password
     - change personnel link (only to eligible personnel; 1-to-1 enforced)
+
+    Organizational consistency:
+    - Non-admin users must match selected Personnel.service_unit_id
+    - Admin users may remain without service_unit_id
     """
     user = User.query.get_or_404(user_id)
     service_units = ServiceUnit.query.order_by(ServiceUnit.description.asc()).all()
@@ -185,11 +247,13 @@ def edit_user(user_id):
     if request.method == "POST":
         before_snapshot = serialize_model(user)
 
-        user.is_admin = bool(request.form.get("is_admin"))
-        user.is_active = bool(request.form.get("is_active"))
-
+        is_admin = bool(request.form.get("is_admin"))
+        is_active = bool(request.form.get("is_active"))
         service_unit_id = _parse_optional_int((request.form.get("service_unit_id") or "").strip())
-        user.service_unit_id = service_unit_id
+
+        if not _validate_service_unit_exists(service_unit_id):
+            flash("Μη έγκυρη υπηρεσία.", "danger")
+            return redirect(url_for("users.edit_user", user_id=user.id))
 
         personnel_id = _parse_optional_int((request.form.get("personnel_id") or "").strip())
         allowed_personnel_ids = {p.id for p in personnel_list}
@@ -197,13 +261,43 @@ def edit_user(user_id):
             flash("Μη έγκυρο Προσωπικό. Επιτρέπεται μόνο ενεργό και διαθέσιμο (ή το ήδη συνδεδεμένο).", "danger")
             return redirect(url_for("users.edit_user", user_id=user.id))
 
+        personnel = Personnel.query.get(personnel_id)
+        if not personnel or not personnel.is_active:
+            flash("Το επιλεγμένο Προσωπικό δεν είναι έγκυρο.", "danger")
+            return redirect(url_for("users.edit_user", user_id=user.id))
+
+        # ---------------------------------------------------------
+        # Organizational consistency (server-side enforced)
+        # ---------------------------------------------------------
+        if not is_admin:
+            if not personnel.service_unit_id:
+                flash(
+                    "Το επιλεγμένο Προσωπικό δεν έχει ορισμένη Υπηρεσία. "
+                    "Δεν μπορεί να αποθηκευτεί non-admin χρήστης χωρίς υπηρεσία.",
+                    "danger",
+                )
+                return redirect(url_for("users.edit_user", user_id=user.id))
+
+            if service_unit_id is None:
+                service_unit_id = personnel.service_unit_id
+
+            if service_unit_id != personnel.service_unit_id:
+                flash(
+                    "Η Υπηρεσία του χρήστη πρέπει να ταυτίζεται με την Υπηρεσία του επιλεγμένου Προσωπικού.",
+                    "danger",
+                )
+                return redirect(url_for("users.edit_user", user_id=user.id))
+
+        user.is_admin = is_admin
+        user.is_active = is_active
+        user.service_unit_id = service_unit_id
         user.personnel_id = personnel_id
 
         new_password = (request.form.get("password") or "").strip()
         if new_password:
             user.set_password(new_password)
 
-        db.session.commit()
+        db.session.flush()
 
         log_action(
             user,

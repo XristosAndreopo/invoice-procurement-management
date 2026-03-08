@@ -16,7 +16,6 @@
 <div class="card glass-card shadow-sm border-0">
   <div class="card-body">
     <div class="row g-3">
-      <!-- LEFT: FORM -->
       <div class="col-12 col-lg-8">
         <form method="post">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -40,11 +39,16 @@
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Προσωπικό (υποχρεωτικό) *</label>
             <div class="col-8">
-              <select name="personnel_id" class="form-select form-select-sm" required>
-                <option value="">(επιλέξτε)</option>
+              <select
+                name="personnel_id"
+                class="form-select form-select-sm js-personnel-select"
+                data-placeholder="Αναζήτηση Προσωπικού..."
+                required
+              >
+                <option value=""></option>
                 {% for p in personnel_list %}
                   <option value="{{ p.id }}">
-                    {{ p.full_name() }} {% if p.agm %}• ΑΓΜ: {{ p.agm }}{% endif %}
+                    {{ p.display_option_label() }}
                   </option>
                 {% endfor %}
               </select>
@@ -91,7 +95,6 @@
         </form>
       </div>
 
-      <!-- RIGHT: INFO -->
       <div class="col-12 col-lg-4">
         <div class="card bg-light border-0 h-100">
           <div class="card-body py-3 small">
@@ -108,4 +111,43 @@
     </div>
   </div>
 </div>
+
+<script>
+/**
+ * Personnel Select2 rendering:
+ * - Dropdown results: full option label with IDs
+ * - Selected value: compact selected label without IDs
+ *
+ * SECURITY:
+ * - Display only. Real validation is server-side.
+ */
+(function() {
+  if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
+
+  function stripIds(text) {
+    if (!text) return text;
+    return String(text).replace(/\s*\([^)]*\)\s*$/, "").trim();
+  }
+
+  jQuery(".js-personnel-select").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
+
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: $el.data("placeholder") || "(αναζήτηση...)",
+      templateResult: function(state) {
+        if (!state || !state.text) return state.text;
+        return state.text;
+      },
+      templateSelection: function(state) {
+        if (!state || !state.text) return state.text;
+        return stripIds(state.text);
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}

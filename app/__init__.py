@@ -71,7 +71,6 @@ NAV_SECTIONS = [
             {"label": "Κρατήσεις", "endpoint": "settings.withholding_profiles", "admin_only": True},
             {"label": "Επιτροπές Προμηθειών", "endpoint": "settings.committees", "admin_only": False},
 
-            # NEW master data (placeholders until implemented)
             {"label": "ΑΛΕ-ΚΑΕ", "endpoint": "settings.ale_kae", "admin_only": True},
             {"label": "CPV", "endpoint": "settings.cpv", "admin_only": True},
 
@@ -80,10 +79,17 @@ NAV_SECTIONS = [
             # -------------------------
             {"type": "header", "label": "Οργανισμός"},
             {"label": "Υπηρεσίες", "endpoint": "settings.service_units_list", "admin_only": True},
-            {"label": "Προσωπικό", "endpoint": "admin.personnel_list", "admin_only": True},
+            {"label": "Προσωπικό", "endpoint": "admin.personnel_list", "admin_only": False},
 
-            # ✅ Now implemented
+            # ✅ Existing
             {"label": "Ορισμός Deputy/Manager", "endpoint": "settings.service_units_roles_list", "admin_only": True},
+
+            # ✅ NEW: Setup page (Directors / Heads)
+            {
+                "label": "Ορισμός Διευθυντών/Προϊσταμένων",
+                "endpoint": "admin.organization_setup",
+                "admin_only": False,
+            },
 
             {"label": "Χρήστες", "endpoint": "users.list_users", "admin_only": True},
 
@@ -186,6 +192,24 @@ def create_app() -> Flask:
                     current_user.is_authenticated
                     and (current_user.is_admin or current_user.can_manage())
                 )
+
+            # Setup: allowed for admin OR manager (NOT deputy)
+            if endpoint == "admin.organization_setup":
+                if not current_user.is_authenticated:
+                    return False
+                if current_user.is_admin:
+                    return True
+                is_mgr = getattr(current_user, "is_manager", None)
+                return bool(callable(is_mgr) and is_mgr())
+
+            # Personnel list: allow admin OR manager (NOT deputy) visibility
+            if endpoint == "admin.personnel_list":
+                if not current_user.is_authenticated:
+                    return False
+                if current_user.is_admin:
+                    return True
+                is_mgr = getattr(current_user, "is_manager", None)
+                return bool(callable(is_mgr) and is_mgr())
 
             return True
 

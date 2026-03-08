@@ -1,8 +1,8 @@
-"""reset dev schema
+"""initial schema
 
-Revision ID: db5e37c1095c
+Revision ID: 9d65c2425440
 Revises: 
-Create Date: 2026-03-04 23:38:39.191245
+Create Date: 2026-03-08 16:54:23.912989
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = 'db5e37c1095c'
+revision = '9d65c2425440'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -42,6 +42,50 @@ def upgrade():
     with op.batch_alter_table('cpv', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_cpv_cpv'), ['cpv'], unique=True)
         batch_op.create_index(batch_op.f('ix_cpv_created_at'), ['created_at'], unique=False)
+
+    op.create_table('departments',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('service_unit_id', sa.Integer(), nullable=False),
+    sa.Column('directory_id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('head_personnel_id', sa.Integer(), nullable=True),
+    sa.Column('assistant_personnel_id', sa.Integer(), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['assistant_personnel_id'], ['personnel.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['directory_id'], ['directories.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['head_personnel_id'], ['personnel.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['service_unit_id'], ['service_units.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('directory_id', 'name', name='uq_department_directory_name')
+    )
+    with op.batch_alter_table('departments', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_departments_assistant_personnel_id'), ['assistant_personnel_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_departments_created_at'), ['created_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_departments_directory_id'), ['directory_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_departments_head_personnel_id'), ['head_personnel_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_departments_is_active'), ['is_active'], unique=False)
+        batch_op.create_index(batch_op.f('ix_departments_name'), ['name'], unique=False)
+        batch_op.create_index(batch_op.f('ix_departments_service_unit_id'), ['service_unit_id'], unique=False)
+
+    op.create_table('directories',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('service_unit_id', sa.Integer(), nullable=False),
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('director_personnel_id', sa.Integer(), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['director_personnel_id'], ['personnel.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['service_unit_id'], ['service_units.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('service_unit_id', 'name', name='uq_directory_serviceunit_name')
+    )
+    with op.batch_alter_table('directories', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_directories_created_at'), ['created_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_directories_director_personnel_id'), ['director_personnel_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_directories_is_active'), ['is_active'], unique=False)
+        batch_op.create_index(batch_op.f('ix_directories_name'), ['name'], unique=False)
+        batch_op.create_index(batch_op.f('ix_directories_service_unit_id'), ['service_unit_id'], unique=False)
 
     op.create_table('income_tax_rules',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -77,7 +121,11 @@ def upgrade():
     sa.Column('last_name', sa.String(length=120), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('service_unit_id', sa.Integer(), nullable=True),
+    sa.Column('directory_id', sa.Integer(), nullable=True),
+    sa.Column('department_id', sa.Integer(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['department_id'], ['departments.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['directory_id'], ['directories.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['service_unit_id'], ['service_units.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -85,6 +133,8 @@ def upgrade():
         batch_op.create_index(batch_op.f('ix_personnel_aem'), ['aem'], unique=False)
         batch_op.create_index(batch_op.f('ix_personnel_agm'), ['agm'], unique=True)
         batch_op.create_index(batch_op.f('ix_personnel_created_at'), ['created_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_personnel_department_id'), ['department_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_personnel_directory_id'), ['directory_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_personnel_is_active'), ['is_active'], unique=False)
         batch_op.create_index(batch_op.f('ix_personnel_service_unit_id'), ['service_unit_id'], unique=False)
 
@@ -116,6 +166,8 @@ def upgrade():
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('afm', sa.String(length=9), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('doy', sa.String(length=255), nullable=True),
+    sa.Column('phone', sa.String(length=50), nullable=True),
     sa.Column('email', sa.String(length=255), nullable=True),
     sa.Column('emba', sa.String(length=255), nullable=True),
     sa.Column('address', sa.String(length=255), nullable=True),
@@ -269,6 +321,10 @@ def upgrade():
     sa.Column('adam_apofasis_anathesis', sa.String(length=100), nullable=True),
     sa.Column('contract_number', sa.String(length=100), nullable=True),
     sa.Column('adam_contract', sa.String(length=100), nullable=True),
+    sa.Column('invoice_number', sa.String(length=100), nullable=True),
+    sa.Column('invoice_date', sa.Date(), nullable=True),
+    sa.Column('materials_receipt_date', sa.Date(), nullable=True),
+    sa.Column('invoice_receipt_date', sa.Date(), nullable=True),
     sa.Column('protocol_number', sa.String(length=100), nullable=True),
     sa.Column('procurement_notes', sa.Text(), nullable=True),
     sa.Column('send_to_expenses', sa.Boolean(), nullable=False),
@@ -305,6 +361,10 @@ def upgrade():
         batch_op.create_index(batch_op.f('ix_procurements_hop_forward2_preapproval'), ['hop_forward2_preapproval'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_hop_preapproval'), ['hop_preapproval'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_income_tax_rule_id'), ['income_tax_rule_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_invoice_date'), ['invoice_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_invoice_number'), ['invoice_number'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_invoice_receipt_date'), ['invoice_receipt_date'], unique=False)
+        batch_op.create_index(batch_op.f('ix_procurements_materials_receipt_date'), ['materials_receipt_date'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_protocol_number'), ['protocol_number'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_quarterly'), ['quarterly'], unique=False)
         batch_op.create_index(batch_op.f('ix_procurements_send_to_expenses'), ['send_to_expenses'], unique=False)
@@ -397,6 +457,10 @@ def downgrade():
         batch_op.drop_index(batch_op.f('ix_procurements_send_to_expenses'))
         batch_op.drop_index(batch_op.f('ix_procurements_quarterly'))
         batch_op.drop_index(batch_op.f('ix_procurements_protocol_number'))
+        batch_op.drop_index(batch_op.f('ix_procurements_materials_receipt_date'))
+        batch_op.drop_index(batch_op.f('ix_procurements_invoice_receipt_date'))
+        batch_op.drop_index(batch_op.f('ix_procurements_invoice_number'))
+        batch_op.drop_index(batch_op.f('ix_procurements_invoice_date'))
         batch_op.drop_index(batch_op.f('ix_procurements_income_tax_rule_id'))
         batch_op.drop_index(batch_op.f('ix_procurements_hop_preapproval'))
         batch_op.drop_index(batch_op.f('ix_procurements_hop_forward2_preapproval'))
@@ -472,6 +536,8 @@ def downgrade():
     with op.batch_alter_table('personnel', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_personnel_service_unit_id'))
         batch_op.drop_index(batch_op.f('ix_personnel_is_active'))
+        batch_op.drop_index(batch_op.f('ix_personnel_directory_id'))
+        batch_op.drop_index(batch_op.f('ix_personnel_department_id'))
         batch_op.drop_index(batch_op.f('ix_personnel_created_at'))
         batch_op.drop_index(batch_op.f('ix_personnel_agm'))
         batch_op.drop_index(batch_op.f('ix_personnel_aem'))
@@ -487,6 +553,24 @@ def downgrade():
         batch_op.drop_index(batch_op.f('ix_income_tax_rules_created_at'))
 
     op.drop_table('income_tax_rules')
+    with op.batch_alter_table('directories', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_directories_service_unit_id'))
+        batch_op.drop_index(batch_op.f('ix_directories_name'))
+        batch_op.drop_index(batch_op.f('ix_directories_is_active'))
+        batch_op.drop_index(batch_op.f('ix_directories_director_personnel_id'))
+        batch_op.drop_index(batch_op.f('ix_directories_created_at'))
+
+    op.drop_table('directories')
+    with op.batch_alter_table('departments', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_departments_service_unit_id'))
+        batch_op.drop_index(batch_op.f('ix_departments_name'))
+        batch_op.drop_index(batch_op.f('ix_departments_is_active'))
+        batch_op.drop_index(batch_op.f('ix_departments_head_personnel_id'))
+        batch_op.drop_index(batch_op.f('ix_departments_directory_id'))
+        batch_op.drop_index(batch_op.f('ix_departments_created_at'))
+        batch_op.drop_index(batch_op.f('ix_departments_assistant_personnel_id'))
+
+    op.drop_table('departments')
     with op.batch_alter_table('cpv', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_cpv_created_at'))
         batch_op.drop_index(batch_op.f('ix_cpv_cpv'))

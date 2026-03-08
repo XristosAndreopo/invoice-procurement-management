@@ -30,28 +30,46 @@
       <div class="row g-3">
         <div class="col-12 col-lg-8">
 
+          <!-- UPDATED: Personnel dropdown rendering -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Manager (Προσωπικό)</label>
             <div class="col-8">
-              <select name="manager_personnel_id" class="form-select form-select-sm">
-                <option value="">(κανένας)</option>
+              <select
+                name="manager_personnel_id"
+                class="form-select form-select-sm js-select2 personnel-select"
+                data-placeholder="(κανένας)"
+              >
+                <option value=""></option>
                 {% for p in personnel_list %}
-                  <option value="{{ p.id }}" {% if unit.manager_personnel_id == p.id %}selected{% endif %}>
-                    {{ p.full_name() }} {% if p.agm %}• ΑΓΜ: {{ p.agm }}{% endif %}
+                  <option
+                    value="{{ p.id }}"
+                    data-selected-label="{{ p.display_selected_label() }}"
+                    {% if unit.manager_personnel_id == p.id %}selected{% endif %}
+                  >
+                    {{ p.display_option_label() }}
                   </option>
                 {% endfor %}
               </select>
             </div>
           </div>
 
+          <!-- UPDATED: Personnel dropdown rendering -->
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Deputy (Προσωπικό)</label>
             <div class="col-8">
-              <select name="deputy_personnel_id" class="form-select form-select-sm">
-                <option value="">(κανένας)</option>
+              <select
+                name="deputy_personnel_id"
+                class="form-select form-select-sm js-select2 personnel-select"
+                data-placeholder="(κανένας)"
+              >
+                <option value=""></option>
                 {% for p in personnel_list %}
-                  <option value="{{ p.id }}" {% if unit.deputy_personnel_id == p.id %}selected{% endif %}>
-                    {{ p.full_name() }} {% if p.agm %}• ΑΓΜ: {{ p.agm }}{% endif %}
+                  <option
+                    value="{{ p.id }}"
+                    data-selected-label="{{ p.display_selected_label() }}"
+                    {% if unit.deputy_personnel_id == p.id %}selected{% endif %}
+                  >
+                    {{ p.display_option_label() }}
                   </option>
                 {% endfor %}
               </select>
@@ -83,4 +101,45 @@
 
   </div>
 </div>
+
+<script>
+/**
+ * Personnel Select2 rendering:
+ * - Options: show option text (includes "(ΑΕΜ ... ΑΓΜ)")
+ * - Selected: show data-selected-label (without parentheses)
+ *
+ * SECURITY NOTE:
+ * - UI-only. Server-side validation is enforced in routes.
+ */
+(function() {
+  function initPersonnelSelect2() {
+    if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
+
+    jQuery(".personnel-select").each(function() {
+      const $el = jQuery(this);
+      if ($el.data("select2")) return;
+
+      const placeholder = $el.data("placeholder") || "(αναζήτηση...)";
+
+      $el.select2({
+        theme: "bootstrap-5",
+        width: "100%",
+        placeholder: placeholder,
+        allowClear: true,
+        templateSelection: function(state) {
+          if (!state || !state.element) return state.text || "";
+          const lbl = state.element.getAttribute("data-selected-label");
+          return lbl || state.text || "";
+        }
+      });
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initPersonnelSelect2);
+  } else {
+    initPersonnelSelect2();
+  }
+})();
+</script>
 {% endblock %}

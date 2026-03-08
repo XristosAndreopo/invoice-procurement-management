@@ -33,10 +33,18 @@
                 <td class="small"><code>{{ u.code or '—' }}</code></td>
                 <td class="small">{{ u.description }}</td>
                 <td class="small">
-                  {% if u.manager %}{{ u.manager.full_name() }}{% else %}—{% endif %}
+                  {% if u.manager %}
+                    {{ u.manager.display_selected_label() }}
+                  {% else %}
+                    —
+                  {% endif %}
                 </td>
                 <td class="small">
-                  {% if u.deputy %}{{ u.deputy.full_name() }}{% else %}—{% endif %}
+                  {% if u.deputy %}
+                    {{ u.deputy.display_selected_label() }}
+                  {% else %}
+                    —
+                  {% endif %}
                 </td>
                 <td class="text-end">
                   <a href="{{ url_for('settings.service_unit_edit', unit_id=u.id) }}"
