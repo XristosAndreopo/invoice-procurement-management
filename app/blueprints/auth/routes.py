@@ -1,183 +1,151 @@
 """
-Authentication Routes – Enterprise Version
+app/blueprints/auth/routes.py
 
-Provides:
+Authentication routes for the Invoice / Procurement Management System.
+
+PROVIDES
+--------
 - /auth/login
 - /auth/logout
-- /auth/seed-admin (first system bootstrap)
+- /auth/seed-admin
 
-Enterprise Rules:
-- Every User MUST be linked to a Personnel record.
-- No orphan users allowed.
-- UI is never trusted; all auth-sensitive logic is server-side.
+ARCHITECTURAL INTENT
+--------------------
+This file is route-focused.
 
-ADMIN MODEL DECISION:
-- Admin user is linked 1-to-1 with a normal Personnel record.
-- That Personnel may be "neutral":
-  - service_unit_id = None
-  - directory_id = None
-  - department_id = None
+Routes should remain responsible only for:
+- decorators
+- request data reads
+- Flask-Login session calls
+- final HTTP branching
+- flash / redirect / render_template
 
-BOOTSTRAP RULES:
-- If ANY user already exists -> block reseeding
-- Seed admin creates BOTH Personnel and User
-- Seeded admin Personnel is neutral and system-generated
+NON-HTTP ORCHESTRATION HAS BEEN EXTRACTED TO
+--------------------------------------------
+- app/services/auth_service.py
 
-SECURITY:
-- Only active users may log in
-- Passwords are validated via password hash
-- Bootstrap route is self-locking after first user creation
+DECISIONS FOR THIS REFACTOR PASS
+--------------------------------
+1. login
+   - extracted to focused auth service for credential validation and safe next
+     resolution
+
+2. logout
+   - stabilized as-is because it is already thin and purely HTTP/session
+     orchestration
+
+3. seed-admin
+   - extracted to focused auth service for bootstrap validation and persistence
+
+SECURITY MODEL
+--------------
+- UI is never trusted.
+- Only active users may log in.
+- Password validation is always server-side.
+- The bootstrap admin route is self-locking after first user creation.
+- Every system user must be linked to a Personnel record.
+
+IMPORTANT BOUNDARY
+------------------
+This module must not re-absorb business/application orchestration back into the
+route layer. If future auth flows become more complex, they should expand the
+focused auth service module rather than fattening the routes again.
 """
 
 from __future__ import annotations
 
-from flask import (
-    Blueprint,
-    render_template,
-    redirect,
-    url_for,
-    flash,
-    request,
-)
-from flask_login import (
-    login_user,
-    logout_user,
-    login_required,
-    current_user,
-)
+from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask_login import current_user, login_required, login_user, logout_user
 
-from ...extensions import db
-from ...models import User, Personnel
-
+from ...services.auth_service import (
+    build_login_page_context,
+    build_seed_admin_page_context,
+    execute_login,
+    execute_seed_admin,
+    should_block_seed_admin,
+)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 
-# ============================================================
-# LOGIN
-# ============================================================
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
     """
     Authenticate a user.
 
-    Enterprise logic:
-    - Only active users may log in
-    - Credentials validated via password hash
-    - Already-authenticated users are redirected away from login
+    ROUTE RESPONSIBILITIES
+    ----------------------
+    - redirect already-authenticated users away from login
+    - read request form/query values
+    - call service-layer validation
+    - establish Flask-Login session on success
+    - emit flash messages and final response
     """
     if current_user.is_authenticated:
-        return redirect(url_for("procurements.list_procurements"))
+        return redirect(url_for("procurements.inbox_procurements"))
+
+    raw_next = request.args.get("next") or request.form.get("next")
 
     if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
+        result = execute_login(request.form, raw_next)
+        for item in result.flashes:
+            flash(item.message, item.category)
 
-        user = User.query.filter_by(username=username).first()
+        if result.ok and result.user is not None and result.redirect_url:
+            login_user(result.user)
+            return redirect(result.redirect_url)
 
-        if not user or not user.check_password(password):
-            flash("Λάθος όνομα χρήστη ή κωδικός.", "danger")
-            return render_template("auth/login.html")
+        context = build_login_page_context(raw_next)
+        return render_template("auth/login.html", **context)
 
-        if not user.is_active:
-            flash("Ο λογαριασμός είναι ανενεργός.", "danger")
-            return render_template("auth/login.html")
-
-        login_user(user)
-        flash("Καλώς ήρθατε!", "success")
-
-        next_url = request.args.get("next")
-        return redirect(next_url or url_for("procurements.list_procurements"))
-
-    return render_template("auth/login.html")
+    context = build_login_page_context(raw_next)
+    return render_template("auth/login.html", **context)
 
 
-# ============================================================
-# LOGOUT
-# ============================================================
 @auth_bp.route("/logout")
 @login_required
 def logout():
-    """Log out the current user."""
+    """
+    Log out the current user.
+
+    STABILIZE DECISION
+    ------------------
+    This route already matches the target architecture:
+    - pure HTTP/session boundary concern
+    - no business orchestration
+    - no need for service extraction
+    """
     logout_user()
     flash("Αποσυνδεθήκατε.", "info")
     return redirect(url_for("auth.login"))
 
 
-# ============================================================
-# SEED FIRST ADMIN (BOOTSTRAP)
-# ============================================================
 @auth_bp.route("/seed-admin", methods=["GET", "POST"])
 def seed_admin():
     """
-    Bootstrap the FIRST admin of the system.
+    Bootstrap the first admin of the system.
 
-    Enterprise safety rules:
-    - If ANY user already exists -> prevent re-seeding
-    - Admin MUST have linked Personnel record
-    - Seeded admin Personnel is neutral (no ServiceUnit/Directory/Department)
-    - Admin User itself also starts with service_unit_id = None
+    ROUTE RESPONSIBILITIES
+    ----------------------
+    - enforce the self-locking redirect when bootstrap is already closed
+    - read submitted form data
+    - call service-layer creation orchestration
+    - emit flash messages and final response
     """
-    if User.query.count() > 0:
+    if should_block_seed_admin():
         flash("Υπάρχει ήδη χρήστης στο σύστημα.", "warning")
         return redirect(url_for("auth.login"))
 
     if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
+        result = execute_seed_admin(request.form)
+        for item in result.flashes:
+            flash(item.message, item.category)
 
-        if not username or not password:
-            flash("Συμπληρώστε όνομα χρήστη και κωδικό.", "danger")
-            return render_template("auth/seed_admin.html")
+        if result.ok:
+            return redirect(url_for("auth.login"))
 
-        if User.query.filter_by(username=username).first():
-            flash("Το username υπάρχει ήδη.", "danger")
-            return render_template("auth/seed_admin.html")
+        context = build_seed_admin_page_context()
+        return render_template("auth/seed_admin.html", **context)
 
-        existing_admin_personnel = Personnel.query.filter_by(agm="SYS-ADMIN-001").first()
-        if existing_admin_personnel:
-            flash(
-                "Υπάρχει ήδη system-generated εγγραφή Προσωπικού για bootstrap admin. "
-                "Ελέγξτε τη βάση πριν συνεχίσετε.",
-                "danger",
-            )
-            return render_template("auth/seed_admin.html")
-
-        # ----------------------------------------------------
-        # 1) Create neutral Personnel record for Admin
-        # ----------------------------------------------------
-        personnel = Personnel(
-            agm="SYS-ADMIN-001",
-            aem=None,
-            rank="SYSTEM",
-            specialty="SYSTEM",
-            first_name="System",
-            last_name="Administrator",
-            is_active=True,
-            service_unit_id=None,
-            directory_id=None,
-            department_id=None,
-        )
-
-        db.session.add(personnel)
-        db.session.flush()  # get personnel.id without full commit
-
-        # ----------------------------------------------------
-        # 2) Create Admin User linked 1-to-1 to Personnel
-        # ----------------------------------------------------
-        user = User(
-            username=username,
-            is_admin=True,
-            is_active=True,
-            personnel_id=personnel.id,
-            service_unit_id=None,
-        )
-        user.set_password(password)
-
-        db.session.add(user)
-        db.session.commit()
-
-        flash("Ο admin δημιουργήθηκε. Συνδεθείτε.", "success")
-        return redirect(url_for("auth.login"))
-
-    return render_template("auth/seed_admin.html")
+    context = build_seed_admin_page_context()
+    return render_template("auth/seed_admin.html", **context)

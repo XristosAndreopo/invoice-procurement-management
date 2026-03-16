@@ -1,0 +1,71 @@
+Invoice Management System/
+├─ app/
+│  ├─ __init__.py
+│  ├─ audit.py
+│  ├─ extensions.py
+│  ├─ security.py
+│  ├─ seed.py
+│  ├─ utils.py
+│  ├─ blueprints/
+│  │  ├─ admin/
+│  │  │  └─ routes.py
+│  │  ├─ auth/
+│  │  │  └─ routes.py
+│  │  ├─ procurements/
+│  │  │  └─ routes.py
+│  │  ├─ settings/
+│  │  │  └─ routes.py
+│  │  └─ users/
+│  │     └─ routes.py
+│  ├─ services/
+│  │  ├─ excel_imports.py
+│  │  ├─ master_data_service.py
+│  │  ├─ organization_service.py
+│  │  ├─ parsing.py
+│  │  └─ procurement_service.py
+│  ├─ static/
+│  │  └─ app.css
+│  ├─ templates/
+│  │  ├─ base.html
+│  │  ├─ admin/
+│  │  │  ├─ organization_setup.html
+│  │  │  ├─ personnel_form.html
+│  │  │  └─ personnel_list.html
+│  │  ├─ auth/
+│  │  │  ├─ login.html
+│  │  │  └─ seed_admin.html
+│  │  ├─ errors/
+│  │  │  └─ 403.html
+│  │  ├─ procurements/
+│  │  │  ├─ edit.html
+│  │  │  ├─ implementation.html
+│  │  │  ├─ list.html
+│  │  │  ├─ new.html
+│  │  │  └─ proforma_invoice.html
+│  │  ├─ settings/
+│  │  │  ├─ ale_kae.html
+│  │  │  ├─ committees.html
+│  │  │  ├─ cpv.html
+│  │  │  ├─ feedback.html
+│  │  │  ├─ feedback_admin.html
+│  │  │  ├─ income_tax_rules.html
+│  │  │  ├─ options_values.html
+│  │  │  ├─ service_unit_form.html
+│  │  │  ├─ service_unit_roles_form.html
+│  │  │  ├─ service_unit_structure.html
+│  │  │  ├─ service_units.html
+│  │  │  ├─ service_units_list.html
+│  │  │  ├─ service_units_roles_list.html
+│  │  │  ├─ supplier_form.html
+│  │  │  ├─ suppliers.html
+│  │  │  ├─ suppliers_list.html
+│  │  │  ├─ theme.html
+│  │  │  └─ withholding_profiles.html
+│  │  └─ users/
+│  │     ├─ edit.html
+│  │     ├─ list.html
+│  │     └─ new.html
+│  └─ reports/
+│     └─ proforma_invoice.py
+├─ app.db                     (το έσβησες)
+└─ migrations/                (το έσβησες)

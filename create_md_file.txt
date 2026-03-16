@@ -1,0 +1,5 @@
+$output = "combined_project.md"; if (Test-Path $output) { Remove-Item $output }; 'PROJECT: Invoice Management System' | Add-Content $output; '' | Add-Content $output; Get-ChildItem .\app -Recurse -File | Where-Object { $_.Extension -in @('.py', '.html', '.css') } | Sort-Object FullName | ForEach-Object { $relativePath = Resolve-Path -Relative $_.FullName; $ext = $_.Extension.TrimStart('.'); Add-Content $output "FILE: $relativePath"; if ($ext -eq 'py') { Add-Content $output '```python' } elseif ($ext -eq 'html') { Add-Content $output '```html' } elseif ($ext -eq 'css') { Add-Content $output '```css' } else { Add-Content $output '```' }; Get-Content $_.FullName | Add-Content $output; '' | Add-Content $output; '```' | Add-Content $output; '' | Add-Content $output }
+
+Get-Content .\combined_project.md -TotalCount 40
+
+notepad .\combined_project.md
