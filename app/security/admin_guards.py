@@ -166,3 +166,4 @@ __all__ = [
     "ensure_personnel_manage_scope_or_403",
     "ensure_organization_service_unit_scope_or_403",
 ]
+

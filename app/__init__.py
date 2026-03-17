@@ -72,3 +72,4 @@ def create_app() -> Flask:
     app.config.from_object("config.Config")
     configure_app(app)
     return app
+

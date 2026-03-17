@@ -339,3 +339,4 @@ def build_visible_nav_sections() -> list[dict]:
             )
 
     return visible_sections
+

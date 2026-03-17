@@ -58,3 +58,4 @@ def procurement_row_class(proc: Any) -> str:
 
 
 __all__ = ["procurement_row_class"]
+

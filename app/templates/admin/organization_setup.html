@@ -150,301 +150,301 @@
     </div>
   </div>
 
-  <div class="row g-3">
-    <!-- LEFT COLUMN: STRUCTURE -->
-    <div class="col-12 col-xl-6">
-      <div class="card glass-card shadow-sm border-0 h-100">
-        <div class="card-body">
-          <h2 class="h6 fw-bold mb-3">Οργανωτική Δομή</h2>
+<div class="row g-3">
+  <!-- FULL WIDTH: STRUCTURE -->
+  <div class="col-12">
+    <div class="card glass-card shadow-sm border-0">
+      <div class="card-body">
+        <h2 class="h6 fw-bold mb-3">Οργανωτική Δομή</h2>
 
-          <!-- Create Directory -->
-          <div class="card bg-light border-0 mb-3">
-            <div class="card-body">
-              <div class="fw-semibold mb-2">Νέα Διεύθυνση</div>
-              <form method="post" class="row g-2">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="action" value="create_directory">
-                <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+        <!-- Create Directory -->
+        <div class="card bg-light border-0 mb-3">
+          <div class="card-body">
+            <div class="fw-semibold mb-2">Νέα Διεύθυνση</div>
+            <form method="post" class="row g-2">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="create_directory">
+              <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
 
-                <div class="col-12 col-md-8">
-                  <input name="directory_name" class="form-control form-control-sm" placeholder="Ονομασία Διεύθυνσης" required>
-                </div>
-                <div class="col-12 col-md-4">
-                  <button class="btn btn-sm btn-primary w-100">Προσθήκη</button>
-                </div>
-              </form>
-            </div>
-          </div>
-
-          <!-- Create Department -->
-          <div class="card bg-light border-0 mb-3">
-            <div class="card-body">
-              <div class="fw-semibold mb-2">Νέο Τμήμα</div>
-              <form method="post" class="row g-2">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="action" value="create_department">
-                <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
-
-                <div class="col-12 col-md-5">
-                  <select name="directory_id" class="form-select form-select-sm js-select2" data-placeholder="Διεύθυνση" required>
-                    <option value=""></option>
-                    {% for d in directories %}
-                      <option value="{{ d.id }}">{{ d.name }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-
-                <div class="col-12 col-md-5">
-                  <input name="department_name" class="form-control form-control-sm" placeholder="Ονομασία Τμήματος" required>
-                </div>
-
-                <div class="col-12 col-md-2">
-                  <button class="btn btn-sm btn-primary w-100">Προσθήκη</button>
-                </div>
-              </form>
-            </div>
-          </div>
-
-          <!-- Directories Table -->
-          <div class="mb-3">
-            <div class="fw-semibold mb-2">Διευθύνσεις</div>
-            {% if directories %}
-              <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>Ονομασία</th>
-                      <th>Ενεργό</th>
-                      <th class="text-end">Ενέργειες</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for d in directories %}
-                      <tr>
-                        <td style="min-width: 220px;">
-                          <form method="post" class="d-flex gap-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="update_directory">
-                            <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
-                            <input type="hidden" name="directory_id" value="{{ d.id }}">
-                            <input name="directory_name" class="form-control form-control-sm" value="{{ d.name }}" required>
-                        </td>
-                        <td>
-                          <input type="checkbox" name="is_active" {% if d.is_active %}checked{% endif %}>
-                        </td>
-                        <td class="text-end">
-                            <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
-                          </form>
-
-                          <form method="post" class="d-inline" onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε τη Διεύθυνση;');">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="delete_directory">
-                            <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
-                            <input type="hidden" name="directory_id" value="{{ d.id }}">
-                            <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                          </form>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
+              <div class="col-12 col-md-8">
+                <input name="directory_name" class="form-control form-control-sm" placeholder="Ονομασία Διεύθυνσης" required>
               </div>
-            {% else %}
-              <div class="small text-muted">Δεν υπάρχουν Διευθύνσεις.</div>
-            {% endif %}
-          </div>
-
-          <!-- Departments Table -->
-          <div>
-            <div class="fw-semibold mb-2">Τμήματα</div>
-            {% if departments %}
-              <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>Διεύθυνση</th>
-                      <th>Τμήμα</th>
-                      <th>Ενεργό</th>
-                      <th class="text-end">Ενέργειες</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for dep in departments %}
-                      <tr>
-                        <td class="small" style="min-width: 180px;">
-                          {{ dep.directory.name if dep.directory else '—' }}
-                        </td>
-                        <td style="min-width: 240px;">
-                          <form method="post" class="row g-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="update_department">
-                            <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
-                            <input type="hidden" name="department_id" value="{{ dep.id }}">
-
-                            <div class="col-12 col-md-5">
-                              <select name="directory_id" class="form-select form-select-sm js-select2" data-placeholder="Διεύθυνση" required>
-                                <option value=""></option>
-                                {% for d in directories %}
-                                  <option value="{{ d.id }}" {% if dep.directory_id == d.id %}selected{% endif %}>
-                                    {{ d.name }}
-                                  </option>
-                                {% endfor %}
-                              </select>
-                            </div>
-
-                            <div class="col-12 col-md-5">
-                              <input name="department_name" class="form-control form-control-sm" value="{{ dep.name }}" required>
-                            </div>
-
-                            <div class="col-12 col-md-2">
-                              <button class="btn btn-sm btn-outline-primary w-100">Αποθήκευση</button>
-                            </div>
-                        </td>
-                        <td>
-                          <input type="checkbox" name="is_active" {% if dep.is_active %}checked{% endif %}>
-                        </td>
-                        <td class="text-end">
-                          </form>
-
-                          <form method="post" class="d-inline" onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε το Τμήμα;');">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="delete_department">
-                            <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
-                            <input type="hidden" name="department_id" value="{{ dep.id }}">
-                            <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                          </form>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
+              <div class="col-12 col-md-4">
+                <button class="btn btn-sm btn-primary w-100">Προσθήκη</button>
               </div>
-            {% else %}
-              <div class="small text-muted">Δεν υπάρχουν Τμήματα.</div>
-            {% endif %}
+            </form>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- RIGHT COLUMN: ROLE ASSIGNMENTS -->
-    <div class="col-12 col-xl-6">
-      <div class="card glass-card shadow-sm border-0 h-100">
-        <div class="card-body">
-          <h2 class="h6 fw-bold mb-3">Ρόλοι Δομής</h2>
+        <!-- Create Department -->
+        <div class="card bg-light border-0 mb-3">
+          <div class="card-body">
+            <div class="fw-semibold mb-2">Νέο Τμήμα</div>
+            <form method="post" class="row g-2">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="create_department">
+              <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
 
-          <div class="mb-4">
-            <div class="fw-semibold mb-2">Διευθύνσεις → Διευθυντής</div>
-
-            {% if directories %}
-              <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>Διεύθυνση</th>
-                      <th>Διευθυντής (Τμηματάρχης/Διευθυντής)</th>
-                      <th class="text-end"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for d in directories %}
-                      <tr>
-                        <td class="small" style="min-width: 180px;">{{ d.name }}</td>
-                        <td style="min-width: 280px;">
-                          <form method="post" class="d-flex gap-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="update_directory_director">
-                            <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
-                            <input type="hidden" name="directory_id" value="{{ d.id }}">
-
-                            <select name="director_personnel_id" class="form-select form-select-sm js-personnel-select">
-                              <option value="">(κανένας)</option>
-                              {% for p in personnel_list %}
-                                <option value="{{ p.id }}" {% if d.director_personnel_id == p.id %}selected{% endif %}>
-                                  {{ p.display_option_label() }}
-                                </option>
-                              {% endfor %}
-                            </select>
-                        </td>
-                        <td class="text-end">
-                            <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
-                          </form>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
+              <div class="col-12 col-md-5">
+                <select name="directory_id" class="form-select form-select-sm js-select2" data-placeholder="Διεύθυνση" required>
+                  <option value=""></option>
+                  {% for d in directories %}
+                    <option value="{{ d.id }}">{{ d.name }}</option>
+                  {% endfor %}
+                </select>
               </div>
-            {% else %}
-              <div class="small text-muted">Δεν υπάρχουν Διευθύνσεις για ανάθεση ρόλων.</div>
-            {% endif %}
-          </div>
 
-          <div>
-            <div class="fw-semibold mb-2">Τμήματα → Προϊστάμενος / Βοηθός</div>
-
-            {% if departments %}
-              <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th>Διεύθυνση</th>
-                      <th>Τμήμα</th>
-                      <th>Προϊστάμενος</th>
-                      <th>Βοηθός</th>
-                      <th class="text-end"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for dep in departments %}
-                      <tr>
-                        <td class="small" style="min-width: 160px;">
-                          {{ dep.directory.name if dep.directory else '—' }}
-                        </td>
-                        <td class="small" style="min-width: 160px;">{{ dep.name }}</td>
-                        <td style="min-width: 240px;">
-                          <form method="post" class="d-flex gap-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="action" value="update_department_roles">
-                            <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
-                            <input type="hidden" name="department_id" value="{{ dep.id }}">
-
-                            <select name="head_personnel_id" class="form-select form-select-sm js-personnel-select">
-                              <option value="">(κανένας)</option>
-                              {% for p in personnel_list %}
-                                <option value="{{ p.id }}" {% if dep.head_personnel_id == p.id %}selected{% endif %}>
-                                  {{ p.display_option_label() }}
-                                </option>
-                              {% endfor %}
-                            </select>
-                        </td>
-                        <td style="min-width: 240px;">
-                            <select name="assistant_personnel_id" class="form-select form-select-sm js-personnel-select">
-                              <option value="">(κανένας)</option>
-                              {% for p in personnel_list %}
-                                <option value="{{ p.id }}" {% if dep.assistant_personnel_id == p.id %}selected{% endif %}>
-                                  {{ p.display_option_label() }}
-                                </option>
-                              {% endfor %}
-                            </select>
-                        </td>
-                        <td class="text-end">
-                            <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
-                          </form>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
+              <div class="col-12 col-md-5">
+                <input name="department_name" class="form-control form-control-sm" placeholder="Ονομασία Τμήματος" required>
               </div>
-            {% else %}
-              <div class="small text-muted">Δεν υπάρχουν Τμήματα για ανάθεση ρόλων.</div>
-            {% endif %}
+
+              <div class="col-12 col-md-2">
+                <button class="btn btn-sm btn-primary w-100">Προσθήκη</button>
+              </div>
+            </form>
           </div>
+        </div>
+
+        <!-- Directories Table -->
+        <div class="mb-4">
+          <div class="fw-semibold mb-2">Διευθύνσεις</div>
+          {% if directories %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Ονομασία</th>
+                    <th>Ενεργό</th>
+                    <th class="text-end">Ενέργειες</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for d in directories %}
+                    <tr>
+                      <td style="min-width: 220px;">
+                        <form method="post" class="d-flex gap-2">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <input type="hidden" name="action" value="update_directory">
+                          <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                          <input type="hidden" name="directory_id" value="{{ d.id }}">
+                          <input name="directory_name" class="form-control form-control-sm" value="{{ d.name }}" required>
+                      </td>
+                      <td>
+                        <input type="checkbox" name="is_active" {% if d.is_active %}checked{% endif %}>
+                      </td>
+                      <td class="text-end">
+                          <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
+                        </form>
+
+                        <form method="post" class="d-inline" onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε τη Διεύθυνση;');">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <input type="hidden" name="action" value="delete_directory">
+                          <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                          <input type="hidden" name="directory_id" value="{{ d.id }}">
+                          <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="small text-muted">Δεν υπάρχουν Διευθύνσεις.</div>
+          {% endif %}
+        </div>
+
+        <!-- Departments Table -->
+        <div>
+          <div class="fw-semibold mb-2">Τμήματα</div>
+          {% if departments %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Διεύθυνση</th>
+                    <th>Τμήμα</th>
+                    <th>Ενεργό</th>
+                    <th class="text-end">Ενέργειες</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for dep in departments %}
+                    <tr>
+                      <td class="small" style="min-width: 180px;">
+                        {{ dep.directory.name if dep.directory else '—' }}
+                      </td>
+                      <td style="min-width: 240px;">
+                        <form method="post" class="row g-2">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <input type="hidden" name="action" value="update_department">
+                          <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                          <input type="hidden" name="department_id" value="{{ dep.id }}">
+
+                          <div class="col-12 col-md-5">
+                            <select name="directory_id" class="form-select form-select-sm js-select2" data-placeholder="Διεύθυνση" required>
+                              <option value=""></option>
+                              {% for d in directories %}
+                                <option value="{{ d.id }}" {% if dep.directory_id == d.id %}selected{% endif %}>
+                                  {{ d.name }}
+                                </option>
+                              {% endfor %}
+                            </select>
+                          </div>
+
+                          <div class="col-12 col-md-5">
+                            <input name="department_name" class="form-control form-control-sm" value="{{ dep.name }}" required>
+                          </div>
+
+                          <div class="col-12 col-md-2">
+                            <button class="btn btn-sm btn-outline-primary w-100">Αποθήκευση</button>
+                          </div>
+                      </td>
+                      <td>
+                        <input type="checkbox" name="is_active" {% if dep.is_active %}checked{% endif %}>
+                      </td>
+                      <td class="text-end">
+                        </form>
+
+                        <form method="post" class="d-inline" onsubmit="return confirm('Σίγουρα θέλετε να διαγράψετε το Τμήμα;');">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <input type="hidden" name="action" value="delete_department">
+                          <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                          <input type="hidden" name="department_id" value="{{ dep.id }}">
+                          <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="small text-muted">Δεν υπάρχουν Τμήματα.</div>
+          {% endif %}
         </div>
       </div>
     </div>
   </div>
+
+  <!-- FULL WIDTH: ROLE ASSIGNMENTS -->
+  <div class="col-12">
+    <div class="card glass-card shadow-sm border-0">
+      <div class="card-body">
+        <h2 class="h6 fw-bold mb-3">Ρόλοι Δομής</h2>
+
+        <div class="mb-4">
+          <div class="fw-semibold mb-2">Διευθύνσεις → Διευθυντής</div>
+
+          {% if directories %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Διεύθυνση</th>
+                    <th>Διευθυντής (Τμηματάρχης/Διευθυντής)</th>
+                    <th class="text-end"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for d in directories %}
+                    <tr>
+                      <td class="small" style="min-width: 180px;">{{ d.name }}</td>
+                      <td style="min-width: 280px;">
+                        <form method="post" class="d-flex gap-2">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <input type="hidden" name="action" value="update_directory_director">
+                          <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                          <input type="hidden" name="directory_id" value="{{ d.id }}">
+
+                          <select name="director_personnel_id" class="form-select form-select-sm js-personnel-select">
+                            <option value="">(κανένας)</option>
+                            {% for p in personnel_list %}
+                              <option value="{{ p.id }}" {% if d.director_personnel_id == p.id %}selected{% endif %}>
+                                {{ p.display_option_label() }}
+                              </option>
+                            {% endfor %}
+                          </select>
+                      </td>
+                      <td class="text-end">
+                          <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="small text-muted">Δεν υπάρχουν Διευθύνσεις για ανάθεση ρόλων.</div>
+          {% endif %}
+        </div>
+
+        <div>
+          <div class="fw-semibold mb-2">Τμήματα → Προϊστάμενος / Βοηθός</div>
+
+          {% if departments %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Διεύθυνση</th>
+                    <th>Τμήμα</th>
+                    <th>Προϊστάμενος</th>
+                    <th>Βοηθός</th>
+                    <th class="text-end"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for dep in departments %}
+                    <tr>
+                      <td class="small" style="min-width: 160px;">
+                        {{ dep.directory.name if dep.directory else '—' }}
+                      </td>
+                      <td class="small" style="min-width: 160px;">{{ dep.name }}</td>
+                      <td style="min-width: 240px;">
+                        <form method="post" class="d-flex gap-2">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <input type="hidden" name="action" value="update_department_roles">
+                          <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                          <input type="hidden" name="department_id" value="{{ dep.id }}">
+
+                          <select name="head_personnel_id" class="form-select form-select-sm js-personnel-select">
+                            <option value="">(κανένας)</option>
+                            {% for p in personnel_list %}
+                              <option value="{{ p.id }}" {% if dep.head_personnel_id == p.id %}selected{% endif %}>
+                                {{ p.display_option_label() }}
+                              </option>
+                            {% endfor %}
+                          </select>
+                      </td>
+                      <td style="min-width: 240px;">
+                          <select name="assistant_personnel_id" class="form-select form-select-sm js-personnel-select">
+                            <option value="">(κανένας)</option>
+                            {% for p in personnel_list %}
+                              <option value="{{ p.id }}" {% if dep.assistant_personnel_id == p.id %}selected{% endif %}>
+                                {{ p.display_option_label() }}
+                              </option>
+                            {% endfor %}
+                          </select>
+                      </td>
+                      <td class="text-end">
+                          <button class="btn btn-sm btn-outline-primary">Αποθήκευση</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="small text-muted">Δεν υπάρχουν Τμήματα για ανάθεση ρόλων.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
   <script>
   /**
@@ -508,3 +508,4 @@
 {% endif %}
 
 {% endblock %}
+

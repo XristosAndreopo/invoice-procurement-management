@@ -83,3 +83,4 @@ def can_mutate_procurement(user: User, procurement: Procurement) -> bool:
         and procurement.service_unit_id
         and int(user.service_unit_id) == int(procurement.service_unit_id)
     )
+

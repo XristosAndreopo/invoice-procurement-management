@@ -481,3 +481,4 @@ __all__ = [
     "get_cpv_row_by_code",
     "validate_cpv_or_none",
 ]
+

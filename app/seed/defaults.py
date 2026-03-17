@@ -153,3 +153,4 @@ DEFAULT_WITHHOLDING_PROFILES = [
     ("ΔΑΠΑΝΕΣ <= 1000 (ΔΗΜΟΣΙΟΣ ΦΟΡΕΑΣ)", Decimal("4.00"), Decimal("0.00"), Decimal("0.00"), Decimal("0.00")),
     ("ΔΑΠΑΝΕΣ > 1000 (ΔΗΜΟΣΙΟΣ ΦΟΡΕΑΣ)", Decimal("4.00"), Decimal("0.10"), Decimal("0.00"), Decimal("0.00")),
 ]
+

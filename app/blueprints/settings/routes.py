@@ -69,17 +69,17 @@ from flask_login import current_user, login_required
 from ...models import ServiceUnit, Supplier
 from ...security import admin_required, manager_required
 from ...security.settings_guards import ensure_settings_structure_scope_or_403
-from ...services.settings_theme_service import (
+from ...services.settings.theme import (
     build_theme_page_context,
     execute_theme_update,
 )
-from ...services.settings_feedback_service import (
+from ...services.settings.feedback import (
     build_feedback_admin_page_context,
     build_feedback_page_context,
     execute_feedback_admin_status_update,
     execute_feedback_submission,
 )
-from ...services.settings_master_data_admin_service import (
+from ...services.settings.master_data_admin import (
     build_ale_kae_page_context,
     build_cpv_page_context,
     build_income_tax_rules_page_context,
@@ -93,11 +93,11 @@ from ...services.settings_master_data_admin_service import (
     execute_option_value_action,
     execute_withholding_profile_action,
 )
-from ...services.settings_committees_service import (
+from ...services.settings.committees import (
     build_committees_page_context,
     execute_committee_action,
 )
-from ...services.settings_service_units_service import (
+from ...services.settings.service_units import (
     build_service_unit_form_page_context,
     build_service_unit_roles_form_page_context,
     build_service_units_list_page_context,
@@ -108,7 +108,7 @@ from ...services.settings_service_units_service import (
     execute_edit_service_unit_info,
     execute_import_service_units,
 )
-from ...services.settings_suppliers_service import (
+from ...services.settings.suppliers import (
     build_supplier_form_page_context,
     build_suppliers_list_page_context,
     execute_create_supplier,
@@ -287,7 +287,7 @@ def service_unit_edit(unit_id: int):
         unit=unit,
         form_title="Ορισμός Deputy/Manager",
     )
-    return render_template("settings/service_units_roles_form.html", **context)
+    return render_template("settings/service_unit_roles_form.html", **context)
 
 
 @settings_bp.route("/service-units/<int:unit_id>/delete", methods=["POST"])
@@ -585,3 +585,4 @@ def committees():
 
     context = build_committees_page_context(request.args)
     return render_template("settings/committees.html", **context)
+

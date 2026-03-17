@@ -213,3 +213,4 @@ def log_action(
         after=after,
     )
     db.session.add(entry)
+

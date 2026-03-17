@@ -11,3 +11,4 @@ IMPORTANT:
 from __future__ import annotations
 
 from .routes import procurements_bp  # noqa: F401
+

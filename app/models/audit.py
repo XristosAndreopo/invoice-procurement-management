@@ -166,3 +166,4 @@ class AuditLog(db.Model):
 
     def __repr__(self) -> str:
         return f"<AuditLog {self.id}: {self.display_name}>"
+

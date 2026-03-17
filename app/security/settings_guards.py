@@ -113,3 +113,4 @@ __all__ = [
     "ensure_committee_scope_or_403",
     "ensure_settings_structure_scope_or_403",
 ]
+

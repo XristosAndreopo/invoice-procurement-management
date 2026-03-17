@@ -665,3 +665,4 @@ def build_award_decision_filename(
 
     total_str = _money_plain(grand_total)
     return f"Απόφαση Ανάθεσης {kind} {supplier_name} {total_str}.docx"
+

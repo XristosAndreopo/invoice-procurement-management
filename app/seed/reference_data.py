@@ -240,3 +240,4 @@ def seed_reference_data() -> None:
     seed_income_tax_rules()
     seed_withholding_profiles()
     db.session.commit()
+

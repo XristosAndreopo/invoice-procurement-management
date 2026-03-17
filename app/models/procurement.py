@@ -643,3 +643,4 @@ class MaterialLine(db.Model):
 
     def __repr__(self) -> str:
         return f"<MaterialLine {self.id}: line_no={self.line_no}>"
+

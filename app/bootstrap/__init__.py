@@ -160,3 +160,4 @@ __all__ = [
     "register_root_routes",
     "configure_app",
 ]
+

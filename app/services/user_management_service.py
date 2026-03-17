@@ -362,3 +362,4 @@ def _failure(message: str, *, category: str = "danger") -> OperationResult:
         ok=False,
         flashes=(FlashMessage(message, category),),
     )
+

@@ -40,7 +40,7 @@ It must NOT:
 
 from __future__ import annotations
 
-from .organization_queries import (
+from .organization.queries import (
     active_personnel_for_service_unit,
     active_personnel_ids_for_service_unit,
     departments_for_dropdown,
@@ -48,12 +48,12 @@ from .organization_queries import (
     match_service_unit_from_text,
     service_units_for_dropdown,
 )
-from .organization_scope import (
+from .organization.scope import (
     effective_scope_service_unit_id_for_manager_or_none,
     ensure_admin_or_manager_only,
     ensure_manager_scope_or_403,
 )
-from .organization_validation import (
+from .organization.validation import (
     validate_department_for_directory_and_service_unit,
     validate_directory_for_service_unit,
     validate_service_unit_required,
@@ -73,3 +73,4 @@ __all__ = [
     "ensure_admin_or_manager_only",
     "ensure_manager_scope_or_403",
 ]
+

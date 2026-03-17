@@ -68,8 +68,8 @@ from typing import Any
 
 from ..extensions import db
 from ..models import Personnel, User
-from ..services.operation_results import FlashMessage, OperationResult
-from ..services.parsing import safe_next_url
+from ..services.shared.operation_results import FlashMessage, OperationResult
+from ..services.shared.parsing import safe_next_url
 
 
 @dataclass(frozen=True)
@@ -357,3 +357,4 @@ __all__ = [
     "build_seed_admin_page_context",
     "execute_seed_admin",
 ]
+

@@ -149,3 +149,4 @@ def seed_admin():
 
     context = build_seed_admin_page_context()
     return render_template("auth/seed_admin.html", **context)
+

@@ -6,3 +6,4 @@ The actual routes and logic are in routes.py.
 """
 
 from .routes import auth_bp  # noqa: F401
+

@@ -56,14 +56,14 @@ modules, for example:
 
 from __future__ import annotations
 
-from .procurement_queries import (
+from .procurement.queries import (
     apply_list_filters,
     base_procurements_query,
     load_procurement,
     order_by_serial_no,
     with_list_eagerloads,
 )
-from .procurement_reference_data import (
+from .procurement.reference_data import (
     active_income_tax_rules,
     active_withholding_profiles,
     committees_for_service_unit,
@@ -71,7 +71,7 @@ from .procurement_reference_data import (
     handler_candidates,
     service_units_for_filter,
 )
-from .procurement_workflow import is_in_implementation_phase
+from .procurement.workflow import is_in_implementation_phase
 from ..presentation.procurement_ui import (
     money_filename,
     opened_from_all_list,
@@ -95,3 +95,4 @@ __all__ = [
     "sanitize_filename_component",
     "money_filename",
 ]
+

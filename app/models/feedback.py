@@ -138,3 +138,4 @@ class Feedback(db.Model):
 
     def __repr__(self) -> str:
         return f"<Feedback {self.id}: {self.display_name}>"
+

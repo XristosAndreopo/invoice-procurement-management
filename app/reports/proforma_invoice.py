@@ -337,3 +337,4 @@ def build_proforma_invoice_pdf(
 
     doc.build(elems)
     return buf.getvalue()
+

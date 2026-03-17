@@ -195,3 +195,4 @@ def can_manage_service_unit(service_unit_id: int | None) -> bool:
         current_user.service_unit_id
         and int(current_user.service_unit_id) == int(service_unit_id)
     )
+

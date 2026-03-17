@@ -29,7 +29,7 @@ from flask_login import login_required
 
 from ...models import User
 from ...security import admin_required
-from ...services.parsing import parse_optional_int
+from ...services.shared.parsing import parse_optional_int
 from ...services.user_management_service import (
     build_create_user_page_context,
     build_edit_user_page_context,
@@ -122,3 +122,4 @@ def edit_user(user_id: int):
 
     context = build_edit_user_page_context(user)
     return render_template("users/edit.html", **context)
+

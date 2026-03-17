@@ -83,25 +83,25 @@ from ...reports.award_decision_docx import AwardDecisionConstants, build_award_d
 from ...reports.proforma_invoice import ProformaConstants, build_proforma_invoice_pdf
 from ...security import procurement_access_required, procurement_edit_required
 from ...security.procurement_guards import can_mutate_procurement
-from ...services.parsing import next_from_request
-from ...services.procurement_create_service import (
+from ...services.shared.parsing import next_from_request
+from ...services.procurement.create import (
     build_create_procurement_page_context,
     execute_create_procurement,
 )
-from ...services.procurement_edit_service import (
+from ...services.procurement.edit import (
     build_edit_procurement_page_context,
     execute_edit_procurement,
 )
-from ...services.procurement_implementation_service import (
+from ...services.procurement.implementation import (
     build_implementation_procurement_page_context,
     execute_implementation_procurement_update,
 )
-from ...services.procurement_list_page_service import (
+from ...services.procurement.list_pages import (
     build_all_procurements_list_context,
     build_inbox_procurements_list_context,
     build_pending_expenses_list_context,
 )
-from ...services.procurement_related_entities_service import (
+from ...services.procurement.related_entities import (
     execute_add_material_line,
     execute_add_procurement_supplier,
     execute_delete_material_line,
@@ -515,3 +515,4 @@ def delete_material_line(procurement_id: int, line_id: int):
             next=next_url,
         )
     )
+

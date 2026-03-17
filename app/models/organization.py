@@ -439,3 +439,4 @@ class Department(db.Model):
 
     def __repr__(self) -> str:
         return f"<Department {self.id}: {self.display_name}>"
+

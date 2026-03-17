@@ -91,10 +91,22 @@
                   {% endif %}
                 </td>
                 <td class="text-end">
-                  <a href="{{ url_for('admin.edit_personnel', personnel_id=p.id) }}"
-                     class="btn btn-sm btn-outline-secondary">
-                    Επεξεργασία
-                  </a>
+                  <div class="d-inline-flex gap-1">
+                    <a href="{{ url_for('admin.edit_personnel', personnel_id=p.id) }}"
+                      class="btn btn-sm btn-outline-secondary">
+                      Επεξεργασία
+                    </a>
+
+                    <form method="post"
+                          action="{{ url_for('admin.delete_personnel', personnel_id=p.id) }}"
+                          style="display:inline"
+                          onsubmit="return confirm('Να διαγραφεί το προσωπικό;');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit" class="btn btn-sm btn-outline-danger">
+                        Διαγραφή
+                      </button>
+                    </form>
+                  </div>
                 </td>
               </tr>
             {% endfor %}
@@ -107,3 +119,4 @@
   </div>
 </div>
 {% endblock %}
+

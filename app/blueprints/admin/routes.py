@@ -55,16 +55,17 @@ from ...security.admin_guards import (
     admin_or_manager_required,
     ensure_personnel_manage_scope_or_403,
 )
-from ...services.admin_organization_setup_service import (
+from ...services.admin.organization_setup import (
     build_organization_setup_page_context,
     execute_organization_setup_action,
 )
-from ...services.admin_personnel_service import (
+from ...services.admin.personnel import (
     build_personnel_form_page_context,
     build_personnel_list_page_context,
     execute_create_personnel,
     execute_edit_personnel,
     execute_import_personnel,
+    execute_delete_personnel,
 )
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -174,15 +175,13 @@ def edit_personnel(personnel_id: int):
 @login_required
 @admin_or_manager_required
 def organization_setup():
-    """
-    Consolidated ServiceUnit organization management page.
-    """
     if request.method == "POST":
         result = execute_organization_setup_action(
-            request.form,
-            is_admin=getattr(current_user, "is_admin", False),
-            current_service_unit_id=getattr(current_user, "service_unit_id", None),
-        )
+        request.form,
+        files=request.files,
+        is_admin=getattr(current_user, "is_admin", False),
+        current_service_unit_id=getattr(current_user, "service_unit_id", None),
+    )
         for item in result.flashes:
             flash(item.message, item.category)
 
@@ -202,3 +201,25 @@ def organization_setup():
         current_service_unit_id=getattr(current_user, "service_unit_id", None),
     )
     return render_template("admin/organization_setup.html", **context)
+
+@admin_bp.route("/personnel/<int:personnel_id>/delete", methods=["POST"])
+@login_required
+@admin_or_manager_required
+def delete_personnel(personnel_id: int):
+    """
+    Delete an existing Personnel row.
+
+    Admin:
+    - may delete any Personnel
+
+    Manager:
+    - may delete only Personnel of their own ServiceUnit
+    """
+    person = Personnel.query.get_or_404(personnel_id)
+    ensure_personnel_manage_scope_or_403(person)
+
+    result = execute_delete_personnel(person)
+    for item in result.flashes:
+        flash(item.message, item.category)
+
+    return redirect(url_for("admin.personnel_list"))

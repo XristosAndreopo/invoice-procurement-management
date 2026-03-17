@@ -41,3 +41,4 @@ __all__ = [
     "login_manager",
     "csrf",
 ]
+

@@ -220,3 +220,4 @@ def _money(value: Decimal | Any) -> Decimal:
         Rounded to Decimal("0.01") using ROUND_HALF_UP.
     """
     return _to_decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+

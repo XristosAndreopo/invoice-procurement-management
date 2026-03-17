@@ -38,3 +38,4 @@ from __future__ import annotations
 from .presentation import procurement_row_class
 
 __all__ = ["procurement_row_class"]
+

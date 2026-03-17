@@ -94,7 +94,7 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
 
     is_admin = db.Column(db.Boolean, default=False, nullable=False, index=True)
-
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
     # UI preference
     theme = db.Column(db.String(20), nullable=False, default="default")
 
@@ -238,3 +238,4 @@ class User(UserMixin, db.Model):
 
     def __repr__(self) -> str:
         return f"<User {self.id}: {self.username}>"
+

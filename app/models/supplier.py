@@ -174,3 +174,4 @@ class Supplier(db.Model):
 
     def __repr__(self) -> str:
         return f"<Supplier {self.afm} - {self.name}>"
+

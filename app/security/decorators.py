@@ -205,3 +205,4 @@ def ensure_manage_service_unit_or_403(service_unit_id: int | None) -> None:
     if not can_manage_service_unit(service_unit_id):
         from . import _abort_or_render_forbidden
         _abort_or_render_forbidden()
+

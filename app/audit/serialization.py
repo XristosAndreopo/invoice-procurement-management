@@ -132,3 +132,4 @@ def snapshot_to_json(data: dict[str, Any] | None) -> str | None:
     if not data:
         return None
     return json.dumps(data, ensure_ascii=False)
+
