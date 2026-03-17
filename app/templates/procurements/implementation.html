@@ -170,50 +170,50 @@
 
             <div class="d-flex justify-content-between mb-1">
               <span>Σύνολο</span>
-              <span class="fw-semibold">{{ "{:,.2f}".format(analysis["sum_total"]) }} €</span>
+              <span class="fw-semibold">{{ "{:,.2f}".format(analysis.get("sum_total", 0)) }} €</span>
             </div>
 
-            {% set pw = analysis["public_withholdings"] %}
-            {% if pw["total_amount"] and pw["total_amount"] != 0 %}
+            {% set pw = analysis.get("public_withholdings") or {} %}
+            {% if pw.get("total_amount") and pw.get("total_amount") != 0 %}
               <div class="mt-2">
                 <div class="d-flex justify-content-between fw-semibold">
-                  <span>Κρατήσεις υπέρ δημοσίου ({{ pw["total_percent"] }}%)</span>
-                  <span>{{ "{:,.2f}".format(pw["total_amount"]) }} €</span>
+                  <span>Κρατήσεις υπέρ δημοσίου ({{ pw.get("total_percent", 0) }}%)</span>
+                  <span>{{ "{:,.2f}".format(pw.get("total_amount", 0)) }} €</span>
                 </div>
 
                 <div class="mt-2">
-                  {% for item in pw["items"] %}
+                  {% for item in pw.get("items", []) %}
                     <div class="d-flex justify-content-between">
-                      <span>{{ item["label"] }} ({{ item["percent"] }}%)</span>
-                      <span>{{ "{:,.2f}".format(item["amount"]) }} €</span>
+                      <span>{{ item.get("label", "—") }} ({{ item.get("percent", 0) }}%)</span>
+                      <span>{{ "{:,.2f}".format(item.get("amount", 0)) }} €</span>
                     </div>
                   {% endfor %}
                 </div>
               </div>
             {% endif %}
 
-            {% set it = analysis["income_tax"] %}
-            {% if it["amount"] and it["amount"] != 0 %}
+            {% set it = analysis.get("income_tax") or {} %}
+            {% if it.get("amount") and it.get("amount") != 0 %}
               <div class="mt-2">
                 <div class="d-flex justify-content-between fw-semibold">
-                  <span>Φόρος Εισοδήματος ({{ it["rate_percent"] }}%)</span>
-                  <span>{{ "{:,.2f}".format(it["amount"]) }} €</span>
+                  <span>Φόρος Εισοδήματος ({{ it.get("rate_percent", 0) }}%)</span>
+                  <span>{{ "{:,.2f}".format(it.get("amount", 0)) }} €</span>
                 </div>
               </div>
             {% endif %}
 
-            {% if analysis["vat_amount"] and analysis["vat_amount"] != 0 %}
+            {% if analysis.get("vat_amount") and analysis.get("vat_amount") != 0 %}
               <div class="mt-2">
                 <div class="d-flex justify-content-between fw-semibold">
                   <span>ΦΠΑ ({{ vat_pct }}%)</span>
-                  <span>{{ "{:,.2f}".format(analysis["vat_amount"]) }} €</span>
+                  <span>{{ "{:,.2f}".format(analysis.get("vat_amount", 0)) }} €</span>
                 </div>
               </div>
             {% endif %}
 
             <div class="mt-2 pt-2 border-top d-flex justify-content-between fw-bold">
               <span>Τελικό Πληρωτέο Ποσό</span>
-              <span>{{ "{:,.2f}".format(analysis["payable_total"]) }} €</span>
+              <span>{{ "{:,.2f}".format(analysis.get("payable_total", 0)) }} €</span>
             </div>
 
           </div>

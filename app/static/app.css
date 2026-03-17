@@ -166,32 +166,33 @@ body.theme-ocean .navbar{
    - Therefore color the cells via `> *`.
    ------------------------------------------------------------------ */
 
-.row-approval > *{
-  background-color: #fff7cc !important;
-}
-
+   
 .row-complete > *{
-  background-color: #cfe8a9 !important;
+  background-color: #cfe8a9 !important;   /* πράσινο */
 }
 
 .row-cancelled > *{
-  background-color: #ffd6d6 !important;
-}
-
-.row-expense > *{
-  background-color: #ffe1b3 !important;
+  background-color: #e40f0f !important;   /* κόκκινο */
 }
 
 .row-expense-purple > *{
-  background-color: #efe3ff !important;
+  background-color: #efe3ff !important;   /* ανοικτό μωβ */
 }
 
-/* ✅ Do NOT color the Open button cell */
+.row-invoice > *{
+  background-color: #ffb366 !important;   /* βαθύ πορτοκαλί */
+}
+
+.row-approval > *{
+  background-color: #fff4b3 !important;   /* ανοικτό κίτρινο */
+}
+
+/* Do NOT color the Open button cell */
 .row-approval > td.open-cell,
 .row-complete > td.open-cell,
 .row-cancelled > td.open-cell,
-.row-expense > td.open-cell,
-.row-expense-purple > td.open-cell{
+.row-expense-purple > td.open-cell,
+.row-invoice > td.open-cell{
   background-color: transparent !important;
 }
 

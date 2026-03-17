@@ -129,25 +129,30 @@
             </div>
           </div>
 
+          
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">ΑΛΕ</label>
             <div class="col-8">
               <select
                 name="ale"
-                class="form-select form-select-sm js-select2"
+                class="form-select form-select-sm js-ale-select"
                 data-placeholder="Αναζήτηση ΑΛΕ..."
                 {% if not can_edit %}disabled{% endif %}
               >
                 <option value=""></option>
                 {% for r in (ale_rows or []) %}
-                  <option value="{{ r.ale }}" {% if procurement.ale == r.ale %}selected{% endif %}>
-                    {{ r.ale }}{% if r.description %} — {{ r.description }}{% endif %}
+                  {% set ale_display = r.ale ~ ('/' ~ r.responsibility if r.responsibility else '') %}
+                  <option value="{{ r.ale }}"
+                          data-ale-display="{{ ale_display }}"
+                          {% if procurement.ale == r.ale %}selected{% endif %}>
+                    {{ ale_display }}{% if r.description %} — {{ r.description }}{% endif %}
                   </option>
                 {% endfor %}
               </select>
               <div class="form-text">Πηγή: Ρυθμίσεις → ΑΛΕ-ΚΑΕ.</div>
             </div>
           </div>
+
 
           <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Κατανομή</label>
@@ -241,7 +246,7 @@
                 </span>
               </div>
               <div class="d-flex justify-content-between">
-                <span>ΦΠΑ ({{ analysis["vat_percent"] }}%)</span>
+                <span>ΦΠΑ ({{ analysis.get("vat_percent", 0) }}%)</span>
                 <span class="fw-semibold">
                   {% if procurement.vat_amount %}{{ "{:,.2f}".format(procurement.vat_amount) }} €{% else %}—{% endif %}
                 </span>
@@ -259,53 +264,53 @@
 
               <div class="d-flex justify-content-between mb-1">
                 <span>Σύνολο</span>
-                <span class="fw-semibold">{{ "{:,.2f}".format(analysis["sum_total"]) }} €</span>
+                <span class="fw-semibold">{{ "{:,.2f}".format(analysis.get("sum_total", 0)) }} €</span>
               </div>
 
-              {% set pw = analysis["public_withholdings"] %}
-              {% if pw["total_amount"] and pw["total_amount"] != 0 %}
+              {% set pw = analysis.get("public_withholdings") or {} %}
+              {% if pw.get("total_amount") and pw.get("total_amount") != 0 %}
                 <div class="mt-2">
                   <div class="d-flex justify-content-between fw-semibold">
-                    <span>Κρατήσεις υπέρ δημοσίου ({{ pw["total_percent"] }}%)</span>
-                    <span>{{ "{:,.2f}".format(pw["total_amount"]) }} €</span>
+                    <span>Κρατήσεις υπέρ δημοσίου ({{ pw.get("total_percent", 0) }}%)</span>
+                    <span>{{ "{:,.2f}".format(pw.get("total_amount", 0)) }} €</span>
                   </div>
 
                   <div class="mt-2">
-                    {% for item in pw["items"] %}
+                    {% for item in pw.get("items", []) %}
                       <div class="d-flex justify-content-between">
-                        <span>{{ item["label"] }} ({{ item["percent"] }}%)</span>
-                        <span>{{ "{:,.2f}".format(item["amount"]) }} €</span>
+                        <span>{{ item.get("label", "—") }} ({{ item.get("percent", 0) }}%)</span>
+                        <span>{{ "{:,.2f}".format(item.get("amount", 0)) }} €</span>
                       </div>
                     {% endfor %}
                   </div>
                 </div>
               {% endif %}
 
-              {% set it = analysis["income_tax"] %}
-              {% if it["amount"] and it["amount"] != 0 %}
+              {% set it = analysis.get("income_tax") or {} %}
+              {% if it.get("amount") and it.get("amount") != 0 %}
                 <div class="mt-2">
                   <div class="d-flex justify-content-between fw-semibold">
-                    <span>Φόρος Εισοδήματος ({{ it["rate_percent"] }}%)</span>
-                    <span>{{ "{:,.2f}".format(it["amount"]) }} €</span>
+                    <span>Φόρος Εισοδήματος ({{ it.get("rate_percent", 0) }}%)</span>
+                    <span>{{ "{:,.2f}".format(it.get("amount", 0)) }} €</span>
                   </div>
                   <div class="text-muted" style="font-size: 12px;">
-                    Υπολογισμός: [Σύνολο - Κρατήσεις] × {{ it["rate_percent"] }}%
+                    Υπολογισμός: [Σύνολο - Κρατήσεις] × {{ it.get("rate_percent", 0) }}%
                   </div>
                 </div>
               {% endif %}
 
-              {% if analysis["vat_amount"] and analysis["vat_amount"] != 0 %}
+              {% if analysis.get("vat_amount") and analysis.get("vat_amount") != 0 %}
                 <div class="mt-2">
                   <div class="d-flex justify-content-between fw-semibold">
-                    <span>ΦΠΑ ({{ analysis["vat_percent"] }}%)</span>
-                    <span>{{ "{:,.2f}".format(analysis["vat_amount"]) }} €</span>
+                    <span>ΦΠΑ ({{ analysis.get("vat_percent", 0) }}%)</span>
+                    <span>{{ "{:,.2f}".format(analysis.get("vat_amount", 0)) }} €</span>
                   </div>
                 </div>
               {% endif %}
 
               <div class="mt-2 pt-2 border-top d-flex justify-content-between fw-bold">
                 <span>Τελικό Πληρωτέο Ποσό</span>
-                <span>{{ "{:,.2f}".format(analysis["payable_total"]) }} €</span>
+                <span>{{ "{:,.2f}".format(analysis.get("payable_total", 0)) }} €</span>
               </div>
 
             </div>
@@ -790,6 +795,32 @@
       templateSelection: function(state) {
         if (!state || !state.text) return state.text;
         return stripIds(state.text);
+      }
+    });
+  });
+})();
+</script>
+
+<script>
+(function() {
+  if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
+
+  jQuery(".js-ale-select").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
+
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: $el.data("placeholder") || "(αναζήτηση...)",
+      templateResult: function(state) {
+        if (!state || !state.element) return state.text;
+        return state.text;
+      },
+      templateSelection: function(state) {
+        if (!state || !state.element) return state.text;
+        return state.element.getAttribute("data-ale-display") || state.text;
       }
     });
   });

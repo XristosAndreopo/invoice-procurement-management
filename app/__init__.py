@@ -50,6 +50,8 @@ from __future__ import annotations
 
 from flask import Flask
 
+from app.presentation import init_presentation
+
 from .bootstrap import configure_app
 
 
@@ -71,5 +73,6 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object("config.Config")
     configure_app(app)
+    init_presentation(app)
     return app
 

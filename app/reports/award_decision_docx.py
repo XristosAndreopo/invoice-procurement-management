@@ -579,6 +579,7 @@ def build_award_decision_docx(
     winner_line = _winner_supplier_line(winner) if winner is not None else "—"
     commander = _safe(getattr(service_unit, "commander", None), default="—")
     document_total_plain = _resolve_document_total(procurement, analysis)
+    handler = getattr(procurement, "handler_personnel", None)
 
     mapping: dict[str, str] = {
         "{{PROC_TYPE}}": proc_type,
@@ -616,6 +617,12 @@ def build_award_decision_docx(
         "{{AN_SUM_TOTAL}}": _money_plain(analysis.get("sum_total", 0)),
         "{{AN_PAYABLE_TOTAL}}": _money_plain(analysis.get("payable_total", 0)),
         "{{ML_TOTAL}}": document_total_plain,
+        "{{HANDLER_DIRECTORY}}": _safe(
+            getattr(getattr(handler, "directory", None), "name", None)
+        ),
+        "{{HANDLER_DEPARTMENT}}": _safe(
+            getattr(getattr(handler, "department", None), "name", None)
+        ),
     }
 
     _replace_everywhere(doc, mapping)

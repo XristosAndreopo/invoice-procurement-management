@@ -23,39 +23,43 @@ Helpers in this package must NOT:
 
 from __future__ import annotations
 
-from typing import Any
 
-
-def _as_clean_text(value: Any) -> str:
-    """
-    Normalize a value into a stripped display string.
-    """
+def _as_clean_text(value):
     if value is None:
         return ""
     return str(value).strip()
 
 
-def procurement_row_class(proc: Any) -> str:
-    """
-    Compute CSS class for a procurement row based on status / stage priority.
-    """
+def procurement_row_class(proc):
     status = _as_clean_text(getattr(proc, "status", None))
     stage = _as_clean_text(getattr(proc, "stage", None))
 
-    if status == "Ακυρωμένη":
+    if status == "ΑΚΥΡΩΘΗΚΕ":
         return "row-cancelled"
 
-    if status == "Πέρας":
+    if status == "ΟΛΟΚΛΗΡΩΘΗΚΕ":
         return "row-complete"
 
-    if stage == "Αποστολή Δαπάνης":
-        return "row-expense"
+    if status == "ΣΕ ΕΞΕΛΙΞΗ" and stage == "Αποστολή Δαπάνης":
+        return "row-expense-purple"
 
-    if stage == "Έγκριση":
+    if status == "ΣΕ ΕΞΕΛΙΞΗ" and stage == "Τιμολόγιο":
+        return "row-invoice"
+
+    if status == "ΣΕ ΕΞΕΛΙΞΗ" and stage == "Έγκριση":
         return "row-approval"
 
     return ""
 
 
-__all__ = ["procurement_row_class"]
+def init_presentation(app):
+    app.jinja_env.globals["procurement_row_class"] = procurement_row_class
 
+    @app.context_processor
+    def inject_template_helpers():
+        return {
+            "procurement_row_class": procurement_row_class,
+        }
+
+
+__all__ = ["init_presentation", "procurement_row_class"]

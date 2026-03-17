@@ -78,9 +78,7 @@ def build_inbox_procurements_list_context(
     Build template context for the `/procurements/inbox` page.
     """
     query = base_procurements_query()
-    query = query.filter(
-        (Procurement.status.is_(None)) | (Procurement.status != "Ακυρωμένη")
-    )
+    query = query.filter(Procurement.status == "ΣΕ ΕΞΕΛΙΞΗ")
     query = query.filter(
         (Procurement.send_to_expenses.is_(False))
         | (Procurement.send_to_expenses.is_(None))
@@ -92,11 +90,12 @@ def build_inbox_procurements_list_context(
     return {
         "procurements": procurements,
         "page_title": "Λίστα Προμηθειών (μη εγκεκριμένες)",
-        "page_subtitle": "Εδώ δημιουργούνται νέες προμήθειες. Ακυρωμένες εμφανίζονται μόνο στις “Όλες”.",
+        "page_subtitle": "Προμήθειες σε εξέλιξη που δεν έχουν μεταφερθεί στις Εκκρεμείς Δαπάνες.",
         "allow_create": allow_create,
         "open_mode": "edit",
         "show_open_button": True,
         "enable_row_colors": True,
+        "allow_delete": False,
         "service_units": service_units_for_filter(),
         "status_options": get_active_option_values("KATASTASH"),
         "stage_options": get_active_option_values("STADIO"),
@@ -110,8 +109,7 @@ def build_pending_expenses_list_context(
     Build template context for the `/procurements/pending-expenses` page.
     """
     query = base_procurements_query()
-    query = query.filter(Procurement.status == "Εν Εξελίξει")
-    query = query.filter(Procurement.hop_approval.isnot(None))
+    query = query.filter(Procurement.status == "ΣΕ ΕΞΕΛΙΞΗ")
     query = query.filter(Procurement.send_to_expenses.is_(True))
 
     query = apply_list_filters(query, request_args)
@@ -120,11 +118,12 @@ def build_pending_expenses_list_context(
     return {
         "procurements": procurements,
         "page_title": "Εκκρεμείς Δαπάνες",
-        "page_subtitle": "Εγκεκριμένες προμήθειες που μεταφέρθηκαν στις δαπάνες.",
+        "page_subtitle": "Προμήθειες σε εξέλιξη που έχουν μεταφερθεί στις Εκκρεμείς Δαπάνες.",
         "allow_create": False,
         "open_mode": "implementation",
         "show_open_button": True,
         "enable_row_colors": True,
+        "allow_delete": False,
         "service_units": service_units_for_filter(),
         "status_options": get_active_option_values("KATASTASH"),
         "stage_options": get_active_option_values("STADIO"),
@@ -144,11 +143,12 @@ def build_all_procurements_list_context(
     return {
         "procurements": procurements,
         "page_title": "Όλες οι Προμήθειες",
-        "page_subtitle": "Περιλαμβάνει και τις ακυρωμένες.",
+        "page_subtitle": "Περιλαμβάνει όλες τις προμήθειες ανεξάρτητα από στάδιο και κατάσταση.",
         "allow_create": False,
         "open_mode": "edit",
         "show_open_button": True,
         "enable_row_colors": True,
+        "allow_delete": True,
         "service_units": service_units_for_filter(),
         "status_options": get_active_option_values("KATASTASH"),
         "stage_options": get_active_option_values("STADIO"),

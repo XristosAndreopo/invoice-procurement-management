@@ -280,8 +280,7 @@ def build_proforma_invoice_pdf(
             analysis_rows.append(
                 [f"— {_safe(item.get('label'))} ({_safe(item.get('percent'))}%)", _money(item.get("amount"))]
             )
-    else:
-        analysis_rows.append(["— (Δεν υπάρχουν επιλεγμένες κρατήσεις)", "0,00 €"])
+
 
     analysis_rows += [
         [f"ΦΟΡΟΣ ΕΙΣΟΔΗΜΑΤΟΣ ({_safe(it.get('rate_percent'))}%)", _money(it.get("amount"))],

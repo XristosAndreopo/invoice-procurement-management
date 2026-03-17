@@ -68,13 +68,15 @@
             <div class="col-8">
               <select
                 name="ale"
-                class="form-select form-select-sm js-select2"
+                class="form-select form-select-sm js-ale-select"
                 data-placeholder="Αναζήτηση ΑΛΕ..."
               >
                 <option value=""></option>
                 {% for r in (ale_rows or []) %}
-                  <option value="{{ r.ale }}">
-                    {{ r.ale }}{% if r.description %} — {{ r.description }}{% endif %}
+                  {% set ale_display = r.ale ~ ('/' ~ r.responsibility if r.responsibility else '') %}
+                  <option value="{{ r.ale }}"
+                          data-ale-display="{{ ale_display }}">
+                    {{ ale_display }}{% if r.description %} — {{ r.description }}{% endif %}
                   </option>
                 {% endfor %}
               </select>
@@ -313,5 +315,32 @@
   });
 })();
 </script>
+
+<script>
+(function() {
+  if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
+
+  jQuery(".js-ale-select").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
+
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: $el.data("placeholder") || "(αναζήτηση...)",
+      templateResult: function(state) {
+        if (!state || !state.element) return state.text;
+        return state.text;
+      },
+      templateSelection: function(state) {
+        if (!state || !state.element) return state.text;
+        return state.element.getAttribute("data-ale-display") || state.text;
+      }
+    });
+  });
+})();
+</script>
+
 {% endblock %}
 

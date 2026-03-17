@@ -143,30 +143,20 @@
                 </select>
               </th>
 
-              <th class="text-end" style="min-width:170px;">
-                <a href="{{ request.path }}" class="btn btn-sm btn-outline-secondary">
-                  Καθαρισμός
-                </a>
-              </th>
+              {% if show_open_button %}
+                <th class="text-end" style="min-width:240px;">
+                  <a href="{{ request.path }}" class="btn btn-sm btn-outline-secondary">
+                    Καθαρισμός
+                  </a>
+                </th>
+              {% endif %}
             </tr>
           </thead>
 
           <tbody>
             {% if procurements %}
               {% for p in procurements %}
-                {% set row_class = "" %}
-
-                {% if enable_row_colors %}
-                  {% if p.status == 'Ακυρωμένη' %}
-                    {% set row_class = "row-cancelled" %}
-                  {% elif p.status == 'Πέρας' %}
-                    {% set row_class = "row-complete" %}
-                  {% elif p.status == 'Εν Εξελίξει' and p.stage == 'Αποστολή Δαπάνης' %}
-                    {% set row_class = "row-expense-purple" %}
-                  {% elif p.status == 'Εν Εξελίξει' and p.hop_approval %}
-                    {% set row_class = "row-approval" %}
-                  {% endif %}
-                {% endif %}
+                {% set row_class = procurement_row_class(p) if enable_row_colors else "" %}
 
                 <tr class="{{ row_class }} text-center">
                   <td>
@@ -196,17 +186,34 @@
 
                   {% if show_open_button %}
                     <td class="text-end open-cell">
-                      {% if open_mode == "implementation" %}
-                        <a href="{{ url_for('procurements.implementation_procurement', procurement_id=p.id, next=request.full_path) }}"
-                           class="btn btn-sm btn-outline-secondary">
-                          Άνοιγμα
-                        </a>
-                      {% else %}
-                        <a href="{{ url_for('procurements.edit_procurement', procurement_id=p.id, next=request.full_path) }}"
-                           class="btn btn-sm btn-outline-secondary">
-                          Άνοιγμα
-                        </a>
-                      {% endif %}
+                      <div class="d-inline-flex gap-2">
+                        {% if open_mode == "implementation" %}
+                          <a href="{{ url_for('procurements.implementation_procurement', procurement_id=p.id, next=request.full_path) }}"
+                             class="btn btn-sm btn-outline-secondary">
+                            Άνοιγμα
+                          </a>
+                        {% else %}
+                          <a href="{{ url_for('procurements.edit_procurement', procurement_id=p.id, next=request.full_path) }}"
+                             class="btn btn-sm btn-outline-secondary">
+                            Άνοιγμα
+                          </a>
+                        {% endif %}
+
+                        {% if allow_delete %}
+                          <form method="post"
+                                action="{{ url_for('procurements.delete_procurement', procurement_id=p.id) }}"
+                                class="d-inline js-delete-procurement-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="next" value="{{ request.full_path }}">
+                            <input type="hidden" name="delete_origin" value="all_procurements">
+                            <button type="submit"
+                                    class="btn btn-sm btn-outline-danger"
+                                    data-procurement-label="{{ p.serial_no or p.id }}">
+                              Διαγραφή
+                            </button>
+                          </form>
+                        {% endif %}
+                      </div>
                     </td>
                   {% endif %}
                 </tr>
@@ -253,6 +260,21 @@
       if (ev.key === "Enter") {
         ev.preventDefault();
         submitNow();
+      }
+    });
+  });
+})();
+
+(function() {
+  document.querySelectorAll(".js-delete-procurement-form").forEach(form => {
+    form.addEventListener("submit", function(ev) {
+      const btn = form.querySelector("button[type='submit']");
+      const label = btn?.getAttribute("data-procurement-label") || "τη συγκεκριμένη προμήθεια";
+      const ok = window.confirm(
+        `Είσαι βέβαιος ότι θέλεις να διαγράψεις την προμήθεια ${label}; Η ενέργεια δεν αναιρείται.`
+      );
+      if (!ok) {
+        ev.preventDefault();
       }
     });
   });

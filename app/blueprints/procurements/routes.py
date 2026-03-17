@@ -78,6 +78,10 @@ from flask import (
 from flask_login import current_user, login_required
 from sqlalchemy.orm import joinedload
 
+from app.models.organization import Personnel
+
+from ...audit import log_action, serialize_model
+from ...extensions import db
 from ...models import Procurement, ProcurementSupplier
 from ...reports.award_decision_docx import AwardDecisionConstants, build_award_decision_docx
 from ...reports.proforma_invoice import ProformaConstants, build_proforma_invoice_pdf
@@ -124,7 +128,7 @@ procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements"
 @login_required
 def inbox_procurements():
     """
-    Inbox list: procurements that are not cancelled and not yet sent to expenses.
+    Inbox list: procurements in progress that have not been sent to pending expenses.
     """
     context = build_inbox_procurements_list_context(
         request.args,
@@ -141,8 +145,7 @@ def pending_expenses():
 
     These are procurements that:
     - are in progress
-    - have approval reference
-    - have been sent to expenses
+    - have been sent to pending expenses
     """
     context = build_pending_expenses_list_context(request.args)
     return render_template("procurements/list.html", **context)
@@ -167,6 +170,40 @@ def list_procurements():
     Redirects to inbox to preserve old links/bookmarks.
     """
     return redirect(url_for("procurements.inbox_procurements"))
+
+
+@procurements_bp.route("/<int:procurement_id>/delete", methods=["POST"])
+@login_required
+@procurement_edit_required(load_procurement)
+def delete_procurement(procurement_id: int):
+    """
+    Delete a procurement.
+
+    SECURITY RULES
+    --------------
+    - Mutation permission is enforced server-side.
+    - Deletion is allowed only when triggered from the "All Procurements" page.
+    - UI is never trusted.
+    """
+    procurement = Procurement.query.get_or_404(procurement_id)
+
+    if not can_mutate_procurement(current_user, procurement):
+        abort(403)
+
+    origin = (request.form.get("delete_origin") or "").strip()
+    if origin != "all_procurements":
+        flash("Η διαγραφή επιτρέπεται μόνο από τη σελίδα «Όλες οι Προμήθειες».", "warning")
+        return redirect(url_for("procurements.all_procurements"))
+
+    next_url = (request.form.get("next") or "").strip()
+    before_snapshot = serialize_model(procurement)
+
+    db.session.delete(procurement)
+    log_action(procurement, "DELETE", before=before_snapshot, after=None)
+    db.session.commit()
+
+    flash("Η προμήθεια διαγράφηκε επιτυχώς.", "success")
+    return redirect(next_url or url_for("procurements.all_procurements"))
 
 
 # ---------------------------------------------------------------------
@@ -230,15 +267,16 @@ def report_award_decision_docx(procurement_id: int):
     Export 'ΑΠΟΦΑΣΗ ΑΝΑΘΕΣΗΣ' as downloadable DOCX.
     """
     procurement = (
-        Procurement.query.options(
-            joinedload(Procurement.service_unit),
-            joinedload(Procurement.handler_personnel),
-            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
-            joinedload(Procurement.materials),
-            joinedload(Procurement.withholding_profile),
-            joinedload(Procurement.income_tax_rule),
-        )
-        .get_or_404(procurement_id)
+    Procurement.query.options(
+        joinedload(Procurement.service_unit),
+        joinedload(Procurement.handler_personnel).joinedload(Personnel.directory),
+        joinedload(Procurement.handler_personnel).joinedload(Personnel.department),
+        joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+        joinedload(Procurement.materials),
+        joinedload(Procurement.withholding_profile),
+        joinedload(Procurement.income_tax_rule),
+    )
+    .get_or_404(procurement_id)
     )
 
     winner = procurement.winner_supplier_obj()
