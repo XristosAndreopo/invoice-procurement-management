@@ -16,20 +16,47 @@ It moves out:
 - ORM mutation orchestration
 - audit logging / commit
 
+IMPORTANT CHANGE
+----------------
+Organization membership is assignment-based.
+
+A person may belong to multiple departments/directories inside the same
+ServiceUnit through `PersonnelDepartmentAssignment`.
+
+That means:
+- Personnel edit page no longer owns department/directory assignment.
+- All organizational placement is centrally managed from Organization Setup.
+- Procurement handler dropdown uses these assignment rows directly.
+
+BUSINESS RULE FOR PROCUREMENT HANDLERS
+--------------------------------------
+Procurement handler selection is assignment-based and must preserve the exact:
+- person
+- directory
+- department
+
+used for a specific procurement.
+
+Therefore, when a department role holder is assigned manually from the
+organization setup screen:
+- head_personnel_id
+- assistant_personnel_id
+
+the corresponding PersonnelDepartmentAssignment should also exist.
+
+Otherwise the person is visible as a department role holder in organization
+setup, but does not appear in the procurement handler dropdown, because
+procurement handlers are loaded from assignment rows.
+
+This module therefore auto-creates missing assignment rows for:
+- department head
+- department assistant
+
+when department roles are updated manually.
+
 ARCHITECTURAL INTENT
 --------------------
 This module is intentionally explicit and function-first.
-
-We do NOT introduce:
-- a generic action framework
-- class-per-action patterns
-- complex command handlers
-- abstract base services
-
-Instead:
-- one public page-context builder
-- one public action executor
-- a small set of focused private helpers
 
 BOUNDARY
 --------
@@ -45,36 +72,34 @@ This module MUST NOT:
 - call render_template(...)
 - call redirect(...)
 - call flash(...)
-
-SECURITY NOTE
--------------
-Routes remain responsible for:
-- authentication
-- top-level access decorators
-
-This service still enforces service-unit scope before mutating target rows,
-because submitted ids are never trusted.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Any
 
 from openpyxl import load_workbook
 
 from ...audit import log_action, serialize_model
 from ...extensions import db
-from ...models import Department, Directory, Personnel, ServiceUnit
-from ..shared.operation_results import FlashMessage
+from ...models import (
+    Department,
+    Directory,
+    Personnel,
+    PersonnelDepartmentAssignment,
+    ServiceUnit,
+)
 from ..organization import (
     active_personnel_for_service_unit,
     active_personnel_ids_for_service_unit,
     service_units_for_dropdown,
 )
+from ..shared.operation_results import FlashMessage
 from ..shared.parsing import parse_optional_int
-from io import BytesIO
+
 
 @dataclass(frozen=True)
 class OrganizationSetupOperationResult:
@@ -95,6 +120,16 @@ def build_organization_setup_page_context(
 ) -> dict[str, Any]:
     """
     Build template context for the consolidated organization setup page.
+
+    RETURNS
+    -------
+    dict[str, Any]
+        Includes:
+        - service unit scope
+        - directories
+        - departments
+        - active personnel list
+        - department membership rows grouped per department
     """
     if is_admin:
         service_unit_id = parse_optional_int(request_args.get("service_unit_id"))
@@ -107,6 +142,7 @@ def build_organization_setup_page_context(
     directories: list[Directory] = []
     departments: list[Department] = []
     personnel_list: list[Personnel] = []
+    department_memberships: dict[int, list[PersonnelDepartmentAssignment]] = {}
 
     if unit:
         _ensure_target_service_unit_scope(
@@ -127,6 +163,19 @@ def build_organization_setup_page_context(
         )
         personnel_list = active_personnel_for_service_unit(unit.id)
 
+        assignments = (
+            PersonnelDepartmentAssignment.query.filter_by(service_unit_id=unit.id)
+            .order_by(
+                PersonnelDepartmentAssignment.department_id.asc(),
+                PersonnelDepartmentAssignment.is_primary.desc(),
+                PersonnelDepartmentAssignment.id.asc(),
+            )
+            .all()
+        )
+
+        for assignment in assignments:
+            department_memberships.setdefault(assignment.department_id, []).append(assignment)
+
     return {
         "service_units": service_units,
         "scope_service_unit_id": (unit.id if unit else None),
@@ -134,8 +183,10 @@ def build_organization_setup_page_context(
         "directories": directories,
         "departments": departments,
         "personnel_list": personnel_list,
+        "department_memberships": department_memberships,
         "is_admin": is_admin,
     }
+
 
 def execute_organization_setup_action(
     form_data: Mapping[str, Any],
@@ -144,6 +195,19 @@ def execute_organization_setup_action(
     is_admin: bool,
     current_service_unit_id: int | None,
 ) -> OrganizationSetupOperationResult:
+    """
+    Dispatch and execute one organization-setup action.
+
+    SUPPORTED ACTIONS
+    -----------------
+    - import
+    - create/update/delete directory
+    - create/update/delete department
+    - update directory director
+    - update department roles
+    - add_department_member
+    - remove_department_member
+    """
     action = (form_data.get("action") or "").strip()
 
     target_service_unit_id = _resolve_target_service_unit_id(
@@ -206,11 +270,22 @@ def execute_organization_setup_action(
             allowed_personnel_ids=allowed_personnel_ids,
         )
 
+    if action == "add_department_member":
+        return _execute_add_department_member(
+            unit,
+            form_data,
+            allowed_personnel_ids=allowed_personnel_ids,
+        )
+
+    if action == "remove_department_member":
+        return _execute_remove_department_member(unit, form_data)
+
     return OrganizationSetupOperationResult(
         ok=False,
         flashes=(FlashMessage("Μη έγκυρη ενέργεια.", "danger"),),
         redirect_service_unit_id=unit.id,
     )
+
 
 def _resolve_target_service_unit_id(
     form_data: Mapping[str, Any],
@@ -218,15 +293,6 @@ def _resolve_target_service_unit_id(
     is_admin: bool,
     current_service_unit_id: int | None,
 ) -> int | None:
-    """
-    Resolve the target ServiceUnit id for POST actions.
-
-    Admin:
-    - may submit any service_unit_id
-
-    Manager:
-    - is forced to their own current service unit
-    """
     if is_admin:
         return parse_optional_int(form_data.get("service_unit_id"))
     return current_service_unit_id
@@ -238,15 +304,11 @@ def _ensure_target_service_unit_scope(
     is_admin: bool,
     current_service_unit_id: int | None,
 ) -> None:
-    """
-    Enforce organization setup scope for the target ServiceUnit.
-    """
     if is_admin:
         return
 
     if not current_service_unit_id or service_unit_id != current_service_unit_id:
         from flask import abort
-
         abort(403)
 
 
@@ -255,15 +317,6 @@ def _validate_service_unit_personnel_or_none(
     *,
     allowed_personnel_ids: set[int],
 ) -> tuple[int | None, FlashMessage | None]:
-    """
-    Validate service-unit-scoped personnel selection.
-
-    BEHAVIOR
-    --------
-    Preserves the previous route behavior:
-    - blank/None -> accepted as None
-    - invalid selection -> returns None AND a danger flash
-    """
     personnel_id = parse_optional_int(raw_personnel_id)
     if personnel_id is None:
         return None, None
@@ -272,6 +325,73 @@ def _validate_service_unit_personnel_or_none(
         return None, FlashMessage("Μη έγκυρη επιλογή προσωπικού για την υπηρεσία.", "danger")
 
     return personnel_id, None
+
+
+def _ensure_department_assignment(
+    *,
+    unit: ServiceUnit,
+    department: Department,
+    personnel_id: int | None,
+    is_primary: bool,
+) -> bool:
+    """
+    Ensure that a PersonnelDepartmentAssignment exists for the given person and
+    department.
+
+    PARAMETERS
+    ----------
+    unit:
+        The scoped ServiceUnit.
+    department:
+        The target Department.
+    personnel_id:
+        Personnel id to ensure membership for.
+    is_primary:
+        Whether the created/updated membership should be primary.
+
+    RETURNS
+    -------
+    bool
+        True when a new assignment row was created.
+        False when no new row was needed.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Procurement handler selection is assignment-based. If a user is assigned as
+    Department Head or Assistant but no membership row exists, they will not
+    appear as a selectable handler for procurements.
+
+    This helper keeps manual role assignment consistent with the assignment-
+    based organizational model.
+    """
+    if personnel_id is None:
+        return False
+
+    existing_assignment = PersonnelDepartmentAssignment.query.filter_by(
+        personnel_id=personnel_id,
+        department_id=department.id,
+    ).first()
+
+    if existing_assignment is not None:
+        existing_assignment.service_unit_id = unit.id
+        existing_assignment.directory_id = department.directory_id
+
+        if is_primary and not existing_assignment.is_primary:
+            existing_assignment.is_primary = True
+
+        return False
+
+    assignment = PersonnelDepartmentAssignment(
+        personnel_id=personnel_id,
+        service_unit_id=unit.id,
+        directory_id=department.directory_id,
+        department_id=department.id,
+        is_primary=is_primary,
+    )
+    db.session.add(assignment)
+    db.session.flush()
+    log_action(entity=assignment, action="CREATE", before=None, after=serialize_model(assignment))
+    return True
 
 
 def _execute_create_directory(
@@ -328,7 +448,6 @@ def _execute_update_directory(
     directory = Directory.query.get_or_404(directory_id)
     if directory.service_unit_id != unit.id:
         from flask import abort
-
         abort(403)
 
     name = (form_data.get("directory_name") or "").strip()
@@ -383,7 +502,6 @@ def _execute_delete_directory(
     directory = Directory.query.get_or_404(directory_id)
     if directory.service_unit_id != unit.id:
         from flask import abort
-
         abort(403)
 
     before = serialize_model(directory)
@@ -393,9 +511,8 @@ def _execute_delete_directory(
         synchronize_session=False,
     )
 
-    Personnel.query.filter_by(directory_id=directory.id).update(
-        {"directory_id": None, "department_id": None},
-        synchronize_session=False,
+    PersonnelDepartmentAssignment.query.filter_by(directory_id=directory.id).delete(
+        synchronize_session=False
     )
 
     departments_to_delete = Department.query.filter_by(directory_id=directory.id).all()
@@ -506,13 +623,11 @@ def _execute_update_department(
     department = Department.query.get_or_404(department_id)
     if department.service_unit_id != unit.id:
         from flask import abort
-
         abort(403)
 
     new_directory = Directory.query.get_or_404(new_directory_id)
     if new_directory.service_unit_id != unit.id:
         from flask import abort
-
         abort(403)
 
     exists = Department.query.filter(
@@ -531,6 +646,11 @@ def _execute_update_department(
     department.directory_id = new_directory.id
     department.name = name
     department.is_active = bool(form_data.get("is_active"))
+
+    PersonnelDepartmentAssignment.query.filter_by(department_id=department.id).update(
+        {"directory_id": new_directory.id},
+        synchronize_session=False,
+    )
 
     db.session.flush()
     log_action(entity=department, action="UPDATE", before=before, after=serialize_model(department))
@@ -558,14 +678,12 @@ def _execute_delete_department(
     department = Department.query.get_or_404(department_id)
     if department.service_unit_id != unit.id:
         from flask import abort
-
         abort(403)
 
     before = serialize_model(department)
 
-    Personnel.query.filter_by(department_id=department.id).update(
-        {"department_id": None},
-        synchronize_session=False,
+    PersonnelDepartmentAssignment.query.filter_by(department_id=department.id).delete(
+        synchronize_session=False
     )
 
     department.head_personnel_id = None
@@ -601,7 +719,6 @@ def _execute_update_directory_director(
     directory = Directory.query.get_or_404(directory_id)
     if directory.service_unit_id != unit.id:
         from flask import abort
-
         abort(403)
 
     director_personnel_id, validation_flash = _validate_service_unit_personnel_or_none(
@@ -634,6 +751,16 @@ def _execute_update_department_roles(
     *,
     allowed_personnel_ids: set[int],
 ) -> OrganizationSetupOperationResult:
+    """
+    Update department role holders and ensure assignment-based membership exists.
+
+    IMPORTANT
+    ---------
+    Procurement handler selection is built from PersonnelDepartmentAssignment.
+    Therefore, assigning a Department Head / Assistant manually must also ensure
+    the corresponding membership row exists, otherwise the role holder will not
+    appear as a selectable procurement handler.
+    """
     department_id = parse_optional_int(form_data.get("department_id"))
     if department_id is None:
         return OrganizationSetupOperationResult(
@@ -665,12 +792,29 @@ def _execute_update_department_roles(
     department = Department.query.get_or_404(department_id)
     if department.service_unit_id != unit.id:
         from flask import abort
-
         abort(403)
 
     before = serialize_model(department)
     department.head_personnel_id = head_personnel_id
     department.assistant_personnel_id = assistant_personnel_id
+
+    created_memberships = 0
+
+    if _ensure_department_assignment(
+        unit=unit,
+        department=department,
+        personnel_id=head_personnel_id,
+        is_primary=True,
+    ):
+        created_memberships += 1
+
+    if _ensure_department_assignment(
+        unit=unit,
+        department=department,
+        personnel_id=assistant_personnel_id,
+        is_primary=False,
+    ):
+        created_memberships += 1
 
     db.session.flush()
     log_action(entity=department, action="UPDATE", before=before, after=serialize_model(department))
@@ -681,6 +825,15 @@ def _execute_update_department_roles(
         flashes.append(head_flash)
     if assistant_flash is not None:
         flashes.append(assistant_flash)
+
+    if created_memberships:
+        flashes.append(
+            FlashMessage(
+                f"Δημιουργήθηκαν αυτόματα {created_memberships} αναθέσεις μέλους για συμβατότητα με τον Χειριστή Προμήθειας.",
+                "info",
+            )
+        )
+
     flashes.append(FlashMessage("Οι ρόλοι Τμήματος ενημερώθηκαν.", "success"))
 
     return OrganizationSetupOperationResult(
@@ -690,9 +843,113 @@ def _execute_update_department_roles(
     )
 
 
-#----------------------------------------------
-# Helper for the "import" action is intentionally omitted, as it is more complex and may require additional dependencies.
-#----------------------------------------------
+def _execute_add_department_member(
+    unit: ServiceUnit,
+    form_data: Mapping[str, Any],
+    *,
+    allowed_personnel_ids: set[int],
+) -> OrganizationSetupOperationResult:
+    """
+    Add one personnel membership assignment to a department.
+
+    VALIDATION
+    ----------
+    - Person must belong to same service unit scope.
+    - Department must belong to same service unit.
+    - Duplicate membership is prevented by validation before insert.
+    """
+    department_id = parse_optional_int(form_data.get("department_id"))
+    personnel_id = parse_optional_int(form_data.get("personnel_id"))
+
+    if department_id is None:
+        return OrganizationSetupOperationResult(
+            ok=False,
+            flashes=(FlashMessage("Μη έγκυρο Τμήμα.", "danger"),),
+            redirect_service_unit_id=unit.id,
+        )
+
+    if personnel_id is None:
+        return OrganizationSetupOperationResult(
+            ok=False,
+            flashes=(FlashMessage("Το προσωπικό είναι υποχρεωτικό.", "danger"),),
+            redirect_service_unit_id=unit.id,
+        )
+
+    if personnel_id not in allowed_personnel_ids:
+        return OrganizationSetupOperationResult(
+            ok=False,
+            flashes=(FlashMessage("Μη έγκυρη επιλογή προσωπικού για την υπηρεσία.", "danger"),),
+            redirect_service_unit_id=unit.id,
+        )
+
+    department = Department.query.get_or_404(department_id)
+    if department.service_unit_id != unit.id:
+        from flask import abort
+        abort(403)
+
+    exists = PersonnelDepartmentAssignment.query.filter_by(
+        personnel_id=personnel_id,
+        department_id=department.id,
+    ).first()
+    if exists:
+        return OrganizationSetupOperationResult(
+            ok=False,
+            flashes=(FlashMessage("Το προσωπικό είναι ήδη καταχωρημένο στο συγκεκριμένο Τμήμα.", "warning"),),
+            redirect_service_unit_id=unit.id,
+        )
+
+    assignment = PersonnelDepartmentAssignment(
+        personnel_id=personnel_id,
+        service_unit_id=unit.id,
+        directory_id=department.directory_id,
+        department_id=department.id,
+        is_primary=False,
+    )
+
+    db.session.add(assignment)
+    db.session.flush()
+    log_action(entity=assignment, action="CREATE", before=None, after=serialize_model(assignment))
+    db.session.commit()
+
+    return OrganizationSetupOperationResult(
+        ok=True,
+        flashes=(FlashMessage("Το μέλος προστέθηκε στο Τμήμα.", "success"),),
+        redirect_service_unit_id=unit.id,
+    )
+
+
+def _execute_remove_department_member(
+    unit: ServiceUnit,
+    form_data: Mapping[str, Any],
+) -> OrganizationSetupOperationResult:
+    """
+    Remove one personnel membership assignment from a department.
+    """
+    assignment_id = parse_optional_int(form_data.get("assignment_id"))
+    if assignment_id is None:
+        return OrganizationSetupOperationResult(
+            ok=False,
+            flashes=(FlashMessage("Μη έγκυρη ανάθεση μέλους.", "danger"),),
+            redirect_service_unit_id=unit.id,
+        )
+
+    assignment = PersonnelDepartmentAssignment.query.get_or_404(assignment_id)
+    if assignment.service_unit_id != unit.id:
+        from flask import abort
+        abort(403)
+
+    before = serialize_model(assignment)
+    db.session.delete(assignment)
+    db.session.flush()
+    log_action(entity=assignment, action="DELETE", before=before, after=None)
+    db.session.commit()
+
+    return OrganizationSetupOperationResult(
+        ok=True,
+        flashes=(FlashMessage("Το μέλος αφαιρέθηκε από το Τμήμα.", "success"),),
+        redirect_service_unit_id=unit.id,
+    )
+
 
 def _clean_cell(value: Any) -> str:
     if value is None:
@@ -707,9 +964,6 @@ def _normalize_agm(value: Any) -> str:
     if raw.endswith(".0"):
         raw = raw[:-2]
     return raw.strip()
-
-
-
 
 
 def _personnel_id_by_agm_for_service_unit(service_unit_id: int, agm: str) -> int | None:
@@ -727,12 +981,23 @@ def _personnel_id_by_agm_for_service_unit(service_unit_id: int, agm: str) -> int
     )
     return person.id if person else None
 
+
 def _execute_import_organization_structure(
     unit,
     file_storage,
     *,
     allowed_personnel_ids: set[int] | None = None,
 ) -> OrganizationSetupOperationResult:
+    """
+    Import organization structure from Excel.
+
+    IMPORTANT IMPORT BEHAVIOR
+    -------------------------
+    - Creates missing Directories
+    - Creates missing Departments
+    - Assigns directory/department role holders when AGM matches
+    - Creates membership assignments for matched personnel into the department
+    """
     if file_storage is None or not getattr(file_storage, "filename", ""):
         return OrganizationSetupOperationResult(
             ok=False,
@@ -793,6 +1058,7 @@ def _execute_import_organization_structure(
 
     created_directories = 0
     created_departments = 0
+    created_memberships = 0
     assigned_directors = 0
     assigned_managers = 0
     assigned_deputies = 0
@@ -879,6 +1145,22 @@ def _execute_import_organization_structure(
                     if getattr(department, "head_personnel_id", None) != manager_personnel_id:
                         department.head_personnel_id = manager_personnel_id
                         assigned_managers += 1
+
+                    membership_exists = PersonnelDepartmentAssignment.query.filter_by(
+                        personnel_id=manager_personnel_id,
+                        department_id=department.id,
+                    ).first()
+                    if membership_exists is None:
+                        db.session.add(
+                            PersonnelDepartmentAssignment(
+                                personnel_id=manager_personnel_id,
+                                service_unit_id=unit.id,
+                                directory_id=directory.id,
+                                department_id=department.id,
+                                is_primary=True,
+                            )
+                        )
+                        created_memberships += 1
                 else:
                     skipped_role_assignments += 1
 
@@ -894,6 +1176,22 @@ def _execute_import_organization_structure(
                     if getattr(department, "assistant_personnel_id", None) != deputy_personnel_id:
                         department.assistant_personnel_id = deputy_personnel_id
                         assigned_deputies += 1
+
+                    membership_exists = PersonnelDepartmentAssignment.query.filter_by(
+                        personnel_id=deputy_personnel_id,
+                        department_id=department.id,
+                    ).first()
+                    if membership_exists is None:
+                        db.session.add(
+                            PersonnelDepartmentAssignment(
+                                personnel_id=deputy_personnel_id,
+                                service_unit_id=unit.id,
+                                directory_id=directory.id,
+                                department_id=department.id,
+                                is_primary=False,
+                            )
+                        )
+                        created_memberships += 1
                 else:
                     skipped_role_assignments += 1
 
@@ -911,6 +1209,7 @@ def _execute_import_organization_structure(
         f"Το import ολοκληρώθηκε. "
         f"Νέες Διευθύνσεις: {created_directories}, "
         f"Νέα Τμήματα: {created_departments}, "
+        f"Νέες συμμετοχές προσωπικού: {created_memberships}, "
         f"Διευθυντές: {assigned_directors}, "
         f"Προϊστάμενοι: {assigned_managers}, "
         f"Βοηθοί: {assigned_deputies}."

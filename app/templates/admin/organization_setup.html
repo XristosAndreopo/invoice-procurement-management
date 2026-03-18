@@ -6,7 +6,7 @@
     <h1 class="h4 fw-bold mb-1">Οργάνωση Υπηρεσίας</h1>
     <div class="text-muted small">
       Κεντρική διαχείριση οργανωτικής δομής και ρόλων ανά Υπηρεσία:
-      Διευθύνσεις, Τμήματα, Διευθυντές, Προϊστάμενοι και Βοηθοί.
+      Διευθύνσεις, Τμήματα, Διευθυντές, Προϊστάμενοι, Βοηθοί και μέλη Τμημάτων.
     </div>
   </div>
 
@@ -134,8 +134,8 @@
 
           <div class="form-text mb-3">
             Αν κάποια Διεύθυνση ή Τμήμα δεν υπάρχει, δημιουργείται αυτόματα.
-            Αν δεν ταιριάζει κάποιο ΑΓΜ με ενεργό προσωπικό της ίδιας Υπηρεσίας,
-            το αντίστοιχο role assignment παραλείπεται.
+            Αν βρεθεί ΑΓΜ ενεργού προσωπικού της ίδιας Υπηρεσίας, δημιουργείται και
+            η αντίστοιχη συμμετοχή του στο Τμήμα.
           </div>
 
           <form method="post" enctype="multipart/form-data" class="d-flex gap-2">
@@ -151,13 +151,11 @@
   </div>
 
 <div class="row g-3">
-  <!-- FULL WIDTH: STRUCTURE -->
   <div class="col-12">
     <div class="card glass-card shadow-sm border-0">
       <div class="card-body">
         <h2 class="h6 fw-bold mb-3">Οργανωτική Δομή</h2>
 
-        <!-- Create Directory -->
         <div class="card bg-light border-0 mb-3">
           <div class="card-body">
             <div class="fw-semibold mb-2">Νέα Διεύθυνση</div>
@@ -176,7 +174,6 @@
           </div>
         </div>
 
-        <!-- Create Department -->
         <div class="card bg-light border-0 mb-3">
           <div class="card-body">
             <div class="fw-semibold mb-2">Νέο Τμήμα</div>
@@ -205,7 +202,6 @@
           </div>
         </div>
 
-        <!-- Directories Table -->
         <div class="mb-4">
           <div class="fw-semibold mb-2">Διευθύνσεις</div>
           {% if directories %}
@@ -254,7 +250,6 @@
           {% endif %}
         </div>
 
-        <!-- Departments Table -->
         <div>
           <div class="fw-semibold mb-2">Τμήματα</div>
           {% if departments %}
@@ -315,6 +310,67 @@
                         </form>
                       </td>
                     </tr>
+
+                    <tr>
+                      <td></td>
+                      <td colspan="3">
+                        <div class="border rounded p-2 bg-light-subtle">
+                          <div class="fw-semibold small mb-2">Μέλη Τμήματος</div>
+
+                          <form method="post" class="row g-2 mb-2">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="action" value="add_department_member">
+                            <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                            <input type="hidden" name="department_id" value="{{ dep.id }}">
+
+                            <div class="col-12 col-md-9">
+                              <select name="personnel_id" class="form-select form-select-sm js-personnel-select" required>
+                                <option value=""></option>
+                                {% for p in personnel_list %}
+                                  <option value="{{ p.id }}">{{ p.display_option_label() }}</option>
+                                {% endfor %}
+                              </select>
+                            </div>
+
+                            <div class="col-12 col-md-3">
+                              <button class="btn btn-sm btn-outline-primary w-100">Προσθήκη Μέλους</button>
+                            </div>
+                          </form>
+
+                          {% set dep_members = department_memberships.get(dep.id, []) %}
+                          {% if dep_members %}
+                            <div class="table-responsive">
+                              <table class="table table-sm mb-0">
+                                <thead>
+                                  <tr>
+                                    <th>Προσωπικό</th>
+                                    <th class="text-end">Ενέργεια</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {% for assignment in dep_members %}
+                                    <tr>
+                                      <td class="small">{{ assignment.personnel.display_option_label() }}</td>
+                                      <td class="text-end">
+                                        <form method="post" class="d-inline" onsubmit="return confirm('Να αφαιρεθεί το μέλος από το Τμήμα;');">
+                                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                          <input type="hidden" name="action" value="remove_department_member">
+                                          <input type="hidden" name="service_unit_id" value="{{ unit.id }}">
+                                          <input type="hidden" name="assignment_id" value="{{ assignment.id }}">
+                                          <button class="btn btn-sm btn-outline-danger">Αφαίρεση</button>
+                                        </form>
+                                      </td>
+                                    </tr>
+                                  {% endfor %}
+                                </tbody>
+                              </table>
+                            </div>
+                          {% else %}
+                            <div class="small text-muted">Δεν υπάρχουν μέλη στο συγκεκριμένο Τμήμα.</div>
+                          {% endif %}
+                        </div>
+                      </td>
+                    </tr>
                   {% endfor %}
                 </tbody>
               </table>
@@ -327,7 +383,6 @@
     </div>
   </div>
 
-  <!-- FULL WIDTH: ROLE ASSIGNMENTS -->
   <div class="col-12">
     <div class="card glass-card shadow-sm border-0">
       <div class="card-body">
@@ -446,56 +501,48 @@
   </div>
 </div>
 
-  <script>
-  /**
-   * Select2 rendering for personnel and standard selects.
-   *
-   * UI only:
-   * - Personnel dropdown keeps full option label in results.
-   * - Selected value strips the trailing "(ΑΕΜ ... ΑΓΜ)" block.
-   * - Server-side validation remains the source of truth.
-   */
-  (function() {
-    if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
+<script>
+(function() {
+  if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
 
-    function stripParen(text) {
-      if (!text) return text;
-      return String(text).replace(/\s*\([^)]*\)\s*$/, "").trim();
-    }
+  function stripParen(text) {
+    if (!text) return text;
+    return String(text).replace(/\s*\([^)]*\)\s*$/, "").trim();
+  }
 
-    jQuery(".js-personnel-select").each(function() {
-      const $el = jQuery(this);
-      if ($el.data("select2")) return;
+  jQuery(".js-personnel-select").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
 
-      $el.select2({
-        theme: "bootstrap-5",
-        width: "100%",
-        allowClear: true,
-        placeholder: "(αναζήτηση...)",
-        templateResult: function(state) {
-          if (!state || !state.text) return state.text;
-          return state.text;
-        },
-        templateSelection: function(state) {
-          if (!state || !state.text) return state.text;
-          return stripParen(state.text);
-        }
-      });
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: "(αναζήτηση...)",
+      templateResult: function(state) {
+        if (!state || !state.text) return state.text;
+        return state.text;
+      },
+      templateSelection: function(state) {
+        if (!state || !state.text) return state.text;
+        return stripParen(state.text);
+      }
     });
+  });
 
-    jQuery(".js-select2").each(function() {
-      const $el = jQuery(this);
-      if ($el.data("select2")) return;
+  jQuery(".js-select2").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
 
-      $el.select2({
-        theme: "bootstrap-5",
-        width: "100%",
-        allowClear: true,
-        placeholder: $el.data("placeholder") || "(αναζήτηση...)"
-      });
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: $el.data("placeholder") || "(αναζήτηση...)"
     });
-  })();
-  </script>
+  });
+})();
+</script>
 
 {% else %}
   <div class="alert alert-info">
@@ -508,4 +555,3 @@
 {% endif %}
 
 {% endblock %}
-

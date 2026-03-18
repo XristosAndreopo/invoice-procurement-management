@@ -48,7 +48,7 @@ from ...models import IncomeTaxRule, Procurement, ProcurementCommittee, Withhold
 from ..master_data_service import get_active_option_values
 from ..shared.operation_results import FlashMessage, OperationResult
 from ..shared.parsing import parse_decimal, parse_optional_date, parse_optional_int
-from ..procurement_service import (
+from .reference_data import (
     active_income_tax_rules,
     active_withholding_profiles,
     committees_for_service_unit,
@@ -83,6 +83,12 @@ def execute_implementation_procurement_update(
 ) -> OperationResult:
     """
     Execute the POST workflow for the implementation-phase procurement page.
+
+    NOTE
+    ----
+    Handler selection is intentionally not edited here.
+    The implementation page keeps the handler context read-only and only updates
+    implementation-phase fields.
     """
     before_snapshot = serialize_model(procurement)
 
@@ -218,4 +224,3 @@ def execute_implementation_procurement_update(
         ok=True,
         flashes=tuple(flashes),
     )
-

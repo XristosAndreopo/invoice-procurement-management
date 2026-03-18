@@ -133,20 +133,26 @@
           </div>
 
           <div class="mb-2 row align-items-center">
-            <label class="col-4 col-form-label col-form-label-sm">Χειριστής (Προσωπικό)</label>
+            <label class="col-4 col-form-label col-form-label-sm">Χειριστής</label>
             <div class="col-8">
               <select
-                name="handler_personnel_id"
-                class="form-select form-select-sm js-personnel-select"
+                name="handler_assignment_id"
+                class="form-select form-select-sm js-handler-assignment-select"
                 data-placeholder="Αναζήτηση Χειριστή..."
               >
                 <option value=""></option>
-                {% for p in handler_candidates %}
-                  <option value="{{ p.id }}">{{ p.display_option_label() }}</option>
+                {% for a in handler_assignments %}
+                  <option
+                    value="{{ a.id }}"
+                    data-selected-label="{{ a.display_selected_label() }}"
+                  >
+                    {{ a.display_option_label() }}
+                  </option>
                 {% endfor %}
               </select>
               <div class="form-text">
-                Εμφανίζεται μόνο ενεργό προσωπικό της υπηρεσίας.
+                Αναζήτηση με μορφή: ΒΑΘΜΟΣ ΕΙΔΙΚΟΤΗΤΑ ΟΝΟΜΑ ΕΠΩΝΥΜΟ / ΤΜΗΜΑ / ΔΙΕΥΘΥΝΣΗ.
+                Μετά την επιλογή εμφανίζεται: ΒΑΘΜΟΣ ΕΙΔΙΚΟΤΗΤΑ ΟΝΟΜΑ ΕΠΩΝΥΜΟ / ΤΜΗΜΑ.
               </div>
             </div>
           </div>
@@ -278,45 +284,6 @@
 </div>
 
 <script>
-/**
- * Personnel Select2 rendering:
- * - Dropdown results: full option label with IDs
- * - Selected value: compact selected label without IDs
- *
- * SECURITY:
- * - Display only. Real validation is server-side.
- */
-(function() {
-  if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
-
-  function stripIds(text) {
-    if (!text) return text;
-    return String(text).replace(/\s*\([^)]*\)\s*$/, "").trim();
-  }
-
-  jQuery(".js-personnel-select").each(function() {
-    const $el = jQuery(this);
-    if ($el.data("select2")) return;
-
-    $el.select2({
-      theme: "bootstrap-5",
-      width: "100%",
-      allowClear: true,
-      placeholder: $el.data("placeholder") || "(αναζήτηση...)",
-      templateResult: function(state) {
-        if (!state || !state.text) return state.text;
-        return state.text;
-      },
-      templateSelection: function(state) {
-        if (!state || !state.text) return state.text;
-        return stripIds(state.text);
-      }
-    });
-  });
-})();
-</script>
-
-<script>
 (function() {
   if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
 
@@ -339,8 +306,26 @@
       }
     });
   });
+
+  jQuery(".js-handler-assignment-select").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
+
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: $el.data("placeholder") || "(αναζήτηση...)",
+      templateResult: function(state) {
+        if (!state || !state.text) return state.text;
+        return state.text;
+      },
+      templateSelection: function(state) {
+        if (!state || !state.element) return state.text;
+        return state.element.getAttribute("data-selected-label") || state.text;
+      }
+    });
+  });
 })();
 </script>
-
 {% endblock %}
-

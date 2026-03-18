@@ -2,67 +2,6 @@
 app/models/procurement.py
 
 Procurement workflow models.
-
-CONTAINS
---------
-- ProcurementCommittee
-- Procurement
-- ProcurementSupplier
-- MaterialLine
-
-WHY THESE MODELS LIVE TOGETHER
-------------------------------
-These entities form the transactional procurement domain:
-
-- ProcurementCommittee:
-    service-unit-scoped committee metadata used by procurements
-
-- Procurement:
-    main workflow / document / financial aggregate root
-
-- ProcurementSupplier:
-    supplier participation rows under a procurement
-
-- MaterialLine:
-    line items that drive totals and classifications
-
-These models are tightly related by foreign keys, workflow usage, and UI flows,
-so keeping them together in one module is appropriate at this stage.
-
-IMPORTANT ARCHITECTURAL BOUNDARY
---------------------------------
-This module defines:
-- persistence schema
-- relationships
-- lightweight display helpers
-- small entity-local convenience methods
-- delegation hooks into calculation services
-
-This module must NOT become the place for:
-- route flow
-- complex query orchestration
-- list filtering / eager-loading strategy
-- form parsing
-- authorization logic
-- heavy financial calculation logic
-
-Those responsibilities belong in:
-- app.services.procurement_service
-- app.services.procurement_calculations
-- app.security
-- route/service layers
-
-DESIGN NOTE
------------
-Heavy procurement calculations are intentionally delegated to the service layer.
-
-This keeps the ORM model focused on:
-- persistence
-- relationships
-- lightweight convenience behavior
-
-while complex numeric domain logic remains testable and reusable outside the
-SQLAlchemy model class.
 """
 
 from __future__ import annotations
@@ -79,22 +18,6 @@ if TYPE_CHECKING:
 
 
 class ProcurementCommittee(db.Model):
-    """
-    Procurement committee scoped to a ServiceUnit.
-
-    ACCESS / OWNERSHIP
-    ------------------
-    Managed by:
-    - admins for all service units
-    - managers / deputies for their own service unit
-
-    IMPORTANT
-    ---------
-    Membership validation cannot be enforced purely by foreign keys.
-    Routes/services must still ensure that selected committee members belong to
-    the correct organizational scope.
-    """
-
     __tablename__ = "procurement_committees"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -150,15 +73,9 @@ class ProcurementCommittee(db.Model):
 
     @property
     def display_name(self) -> str:
-        """
-        Preferred human-readable committee label.
-        """
         return (self.description or "").strip()
 
     def members_display(self) -> str:
-        """
-        Return a one-line committee summary for UI use.
-        """
         parts = []
 
         if self.president:
@@ -177,28 +94,6 @@ class ProcurementCommittee(db.Model):
 
 
 class Procurement(db.Model):
-    """
-    Main procurement aggregate.
-
-    RESPONSIBILITIES
-    ----------------
-    Stores:
-    - workflow metadata
-    - owning service unit
-    - selected tax / withholding / committee references
-    - supplier participation links
-    - material/service lines
-    - invitation / award / contract / invoice / protocol fields
-
-    CALCULATION BOUNDARY
-    --------------------
-    This model delegates heavy financial logic to:
-        app.services.procurement_calculations.ProcurementCalculationService
-
-    That keeps the model light and avoids embedding large business-calculation
-    rules directly in the ORM layer.
-    """
-
     __tablename__ = "procurements"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -222,7 +117,6 @@ class Procurement(db.Model):
     status = db.Column(db.String(80), index=True)
     stage = db.Column(db.String(80), index=True)
 
-    # Legacy text field retained for compatibility with older records / flows.
     handler = db.Column(db.String(255), index=True)
 
     handler_personnel_id = db.Column(
@@ -232,6 +126,17 @@ class Procurement(db.Model):
         index=True,
     )
     handler_personnel = db.relationship("Personnel", foreign_keys=[handler_personnel_id])
+
+    handler_assignment_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel_department_assignments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    handler_assignment = db.relationship(
+        "PersonnelDepartmentAssignment",
+        foreign_keys=[handler_assignment_id],
+    )
 
     income_tax_rule_id = db.Column(
         db.Integer,
@@ -282,18 +187,15 @@ class Procurement(db.Model):
     adam_aay = db.Column(db.String(100), nullable=True, index=True)
     ada_aay = db.Column(db.String(100), nullable=True, index=True)
 
-    # Invitation document fields
     identity_prosklisis = db.Column(db.String(255), nullable=True)
     adam_prosklisis = db.Column(db.String(100), nullable=True, index=True)
 
-    # Award decision fields
     identity_apofasis_anathesis = db.Column(db.String(255), nullable=True)
     adam_apofasis_anathesis = db.Column(db.String(100), nullable=True, index=True)
 
     contract_number = db.Column(db.String(100), nullable=True, index=True)
     adam_contract = db.Column(db.String(100), nullable=True, index=True)
 
-    # Invoice / receipt fields
     invoice_number = db.Column(db.String(100), nullable=True, index=True)
     invoice_date = db.Column(db.Date, nullable=True, index=True)
     materials_receipt_date = db.Column(db.Date, nullable=True, index=True)
@@ -329,9 +231,6 @@ class Procurement(db.Model):
 
     @property
     def display_name(self) -> str:
-        """
-        Preferred human-readable procurement label.
-        """
         serial_no = (self.serial_no or "").strip()
         description = (self.description or "").strip()
 
@@ -341,9 +240,6 @@ class Procurement(db.Model):
 
     @property
     def winner_link(self) -> ProcurementSupplier | None:
-        """
-        Return the winner association row, if any.
-        """
         for link in self.supplies_links or []:
             if link.is_winner:
                 return link
@@ -351,9 +247,6 @@ class Procurement(db.Model):
 
     @property
     def winner_supplier_display(self) -> str | None:
-        """
-        Legacy display helper: 'AFM - Name' for the winning supplier.
-        """
         winner_link = self.winner_link
         if not winner_link or not winner_link.supplier:
             return None
@@ -363,9 +256,6 @@ class Procurement(db.Model):
 
     @property
     def winner_supplier_afm(self) -> str | None:
-        """
-        Return the winning supplier AFM, if any.
-        """
         winner_link = self.winner_link
         if winner_link and winner_link.supplier:
             return winner_link.supplier.afm
@@ -373,18 +263,12 @@ class Procurement(db.Model):
 
     @property
     def winner_supplier_name(self) -> str | None:
-        """
-        Return the winning supplier name, if any.
-        """
         winner_link = self.winner_link
         if winner_link and winner_link.supplier:
             return winner_link.supplier.name
         return None
 
     def winner_supplier_obj(self) -> Supplier | None:
-        """
-        Return the Supplier entity for the winning supplier, if any.
-        """
         winner_link = self.winner_link
         if winner_link and winner_link.supplier:
             return winner_link.supplier
@@ -392,107 +276,69 @@ class Procurement(db.Model):
 
     @property
     def handler_display(self) -> str | None:
-        """
-        Display the handler name using linked Personnel first, then legacy text.
-        """
         if self.handler_personnel:
             return self.handler_personnel.full_name()
         return self.handler or None
 
     @property
+    def handler_directory_name(self) -> str | None:
+        if self.handler_assignment and self.handler_assignment.directory:
+            return self.handler_assignment.directory.name
+        return None
+
+    @property
+    def handler_department_name(self) -> str | None:
+        if self.handler_assignment and self.handler_assignment.department:
+            return self.handler_assignment.department.name
+        return None
+
+    @property
     def aa2_description(self) -> str | None:
-        """
-        Backward-compatible accessor for procurement type description.
-        """
         if self.income_tax_rule and self.income_tax_rule.description:
             return self.income_tax_rule.description
         return None
 
     @property
     def requested_amount_money(self) -> Decimal:
-        """
-        Requested amount rounded to standard money precision.
-        """
         return _money(_to_decimal(self.requested_amount))
 
     @property
     def approved_amount_money(self) -> Decimal:
-        """
-        Approved amount rounded to standard money precision.
-        """
         return _money(_to_decimal(self.approved_amount))
 
     @property
     def sum_total_money(self) -> Decimal:
-        """
-        Stored pre-VAT total rounded to standard money precision.
-        """
         return _money(_to_decimal(self.sum_total))
 
     @property
     def vat_amount_money(self) -> Decimal:
-        """
-        Stored VAT amount rounded to standard money precision.
-        """
         return _money(_to_decimal(self.vat_amount))
 
     @property
     def grand_total_money(self) -> Decimal:
-        """
-        Stored grand total rounded to standard money precision.
-        """
         return _money(_to_decimal(self.grand_total))
 
     @property
     def materials_total_pre_vat(self) -> Decimal:
-        """
-        Sum line totals from material/service lines.
-
-        NOTE
-        ----
-        This is a lightweight convenience property for display/comparison.
-        Canonical recalculation logic still belongs to the calculation service.
-        """
         total = Decimal("0.00")
         for line in self.materials or []:
             total += _to_decimal(line.total_pre_vat)
         return _money(total)
 
     def recalc_totals(self) -> None:
-        """
-        Recalculate sum_total, vat_amount, and grand_total.
-
-        IMPLEMENTATION NOTE
-        -------------------
-        Delegates to the procurement calculation service so the model does not
-        own heavy numeric logic directly.
-        """
         from ..services.procurement_calculations import ProcurementCalculationService
-
         ProcurementCalculationService.recalc_totals(self)
 
     def compute_public_withholdings(self) -> dict:
-        """
-        Compute public withholding breakdown using the selected profile.
-        """
         from ..services.procurement_calculations import ProcurementCalculationService
-
         return ProcurementCalculationService.compute_public_withholdings(self)
 
     def compute_income_tax(self) -> dict:
-        """
-        Compute income tax based on current procurement state.
-        """
         from ..services.procurement_calculations import ProcurementCalculationService
-
         return ProcurementCalculationService.compute_income_tax(self)
 
     def compute_payment_analysis(self) -> dict:
-        """
-        Compute full payment analysis for UI and reports.
-        """
         from ..services.procurement_calculations import ProcurementCalculationService
-
         return ProcurementCalculationService.compute_payment_analysis(self)
 
     def __repr__(self) -> str:
@@ -500,19 +346,6 @@ class Procurement(db.Model):
 
 
 class ProcurementSupplier(db.Model):
-    """
-    Association object between Procurement and Supplier.
-
-    PURPOSE
-    -------
-    Represents supplier participation in a procurement and stores
-    procurement-specific metadata such as:
-    - offered amount
-    - result
-    - winner flag
-    - notes
-    """
-
     __tablename__ = "procurement_suppliers"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -554,16 +387,10 @@ class ProcurementSupplier(db.Model):
 
     @property
     def offered_amount_money(self) -> Decimal:
-        """
-        Offered amount rounded to standard money precision.
-        """
         return _money(_to_decimal(self.offered_amount))
 
     @property
     def display_name(self) -> str:
-        """
-        Human-readable participant label.
-        """
         if self.supplier:
             return getattr(self.supplier, "display_label", None) or self.supplier.name
         return f"SupplierLink #{self.id}"
@@ -574,20 +401,6 @@ class ProcurementSupplier(db.Model):
 
 
 class MaterialLine(db.Model):
-    """
-    Material or service line under a procurement.
-
-    PURPOSE
-    -------
-    This is the primary line-level source used to calculate pre-VAT procurement
-    totals.
-
-    IMPORTANT
-    ---------
-    Line-level totals are lightweight and local enough to remain on the model.
-    Aggregate procurement totals still belong to the calculation service.
-    """
-
     __tablename__ = "material_lines"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -615,14 +428,6 @@ class MaterialLine(db.Model):
 
     @property
     def total_pre_vat(self) -> Decimal:
-        """
-        Compute line total before VAT.
-
-        RETURNS
-        -------
-        Decimal
-            quantity * unit_price, rounded to 2 decimal places.
-        """
         quantity = _to_decimal(self.quantity)
         unit_price = _to_decimal(self.unit_price)
 
@@ -636,11 +441,7 @@ class MaterialLine(db.Model):
 
     @property
     def display_name(self) -> str:
-        """
-        Preferred human-readable line description.
-        """
         return (self.description or "").strip()
 
     def __repr__(self) -> str:
         return f"<MaterialLine {self.id}: line_no={self.line_no}>"
-

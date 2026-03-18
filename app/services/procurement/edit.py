@@ -13,20 +13,34 @@ It keeps the route thin by moving out:
 - GET page-context assembly
 - POST validation / mutation orchestration
 
-ARCHITECTURAL INTENT
---------------------
-This module is intentionally conservative.
+IMPORTANT CHANGE
+----------------
+Handler selection is assignment-based.
 
-We do NOT introduce:
-- generic command buses
-- class-heavy use-case hierarchies
-- abstract base layers
-- one-class-per-route patterns
+The selected dropdown value is the id of a PersonnelDepartmentAssignment row,
+not just a Personnel row.
 
-Instead we follow the agreed direction:
-- function-first
-- small, explicit helpers
-- shared lightweight result types where multiple services need the same shape
+This allows the procurement to retain:
+- the specific person
+- the specific department
+- the specific directory
+
+for enterprise-grade reporting consistency.
+
+CANONICAL TEMPLATE / SERVICE CONTRACT
+-------------------------------------
+The edit template expects:
+- handler_assignments
+
+The submitted handler form field is:
+- handler_assignment_id
+
+Historically, mismatches between:
+- handler_candidates vs handler_assignments
+- handler_personnel_id vs handler_assignment_id
+
+caused the handler dropdown to render empty and POST updates to ignore the
+selected value.
 
 BOUNDARY
 --------
@@ -41,21 +55,11 @@ This module MUST NOT:
 - call render_template(...)
 - call redirect(...)
 - call flash(...)
-
-SECURITY NOTE
--------------
-This module assumes route-level access control is already applied via:
-- login_required
-- procurement_access_required(load_procurement)
-
-The route should still enforce any edit-specific permission gate before
-calling the POST executor.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 from ...audit import log_action, serialize_model
 from ...extensions import db
@@ -66,23 +70,36 @@ from ..master_data_service import (
     get_active_option_values,
     validate_ale_or_none,
 )
+from ..procurement_service import opened_from_all_list
 from ..shared.operation_results import FlashMessage, OperationResult
 from ..shared.parsing import parse_decimal, parse_optional_date, parse_optional_int
-from ..procurement_service import (
+from .reference_data import (
     active_income_tax_rules,
     active_withholding_profiles,
     handler_candidate_ids,
     handler_candidates,
-    opened_from_all_list,
 )
 
 
 def build_edit_procurement_page_context(
     procurement: Procurement,
     next_url: str,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Build template context for the main procurement edit page.
+
+    RETURNS
+    -------
+    dict[str, object]
+        Context used by `procurements/edit.html`.
+
+    IMPORTANT TEMPLATE CONTRACT
+    ---------------------------
+    The template expects:
+    - handler_assignments
+
+    The underlying data still comes from `handler_candidates(...)`, but the
+    exposed context key must stay aligned with the template contract.
     """
     return {
         "procurement": procurement,
@@ -92,7 +109,7 @@ def build_edit_procurement_page_context(
         "quarterly_options": get_active_option_values("TRIMHNIAIA"),
         "status_options": get_active_option_values("KATASTASH"),
         "stage_options": get_active_option_values("STADIO"),
-        "handler_candidates": handler_candidates(procurement.service_unit_id),
+        "handler_assignments": handler_candidates(procurement.service_unit_id),
         "income_tax_rules": active_income_tax_rules(),
         "withholding_profiles": active_withholding_profiles(),
         "committees": [],
@@ -106,12 +123,24 @@ def build_edit_procurement_page_context(
 
 def execute_edit_procurement(
     procurement: Procurement,
-    form_data: Mapping[str, Any],
+    form_data: Mapping[str, object],
     *,
     is_admin: bool,
 ) -> OperationResult:
     """
     Execute the POST edit workflow for a procurement.
+
+    IMPORTANT HANDLER RULE
+    ----------------------
+    The submitted form field is:
+
+        handler_assignment_id
+
+    This value carries the selected `PersonnelDepartmentAssignment.id`.
+
+    Server-side we resolve:
+    - procurement.handler_assignment_id
+    - procurement.handler_personnel_id
     """
     before_snapshot = serialize_model(procurement)
 
@@ -226,16 +255,29 @@ def execute_edit_procurement(
 
     procurement.protocol_number = (form_data.get("protocol_number") or "").strip() or None
 
-    handler_pid = parse_optional_int(form_data.get("handler_personnel_id"))
-    if handler_pid:
+    handler_assignment_id = parse_optional_int(form_data.get("handler_assignment_id"))
+    if handler_assignment_id:
         allowed_ids = handler_candidate_ids(procurement.service_unit_id)
-        if handler_pid not in allowed_ids:
+        if handler_assignment_id not in allowed_ids:
             return OperationResult(
                 ok=False,
                 flashes=(FlashMessage("Μη έγκυρος Χειριστής για την υπηρεσία.", "danger"),),
             )
-        procurement.handler_personnel_id = handler_pid
+
+        selected_assignment = next(
+            (row for row in handler_candidates(procurement.service_unit_id) if row.id == handler_assignment_id),
+            None,
+        )
+        if selected_assignment is None:
+            return OperationResult(
+                ok=False,
+                flashes=(FlashMessage("Αδυναμία φόρτωσης του επιλεγμένου χειριστή.", "danger"),),
+            )
+
+        procurement.handler_assignment_id = selected_assignment.id
+        procurement.handler_personnel_id = selected_assignment.personnel_id
     else:
+        procurement.handler_assignment_id = None
         procurement.handler_personnel_id = None
 
     income_tax_rule_id = parse_optional_int(form_data.get("income_tax_rule_id"))
@@ -287,4 +329,3 @@ def execute_edit_procurement(
         ok=True,
         flashes=tuple(flashes),
     )
-

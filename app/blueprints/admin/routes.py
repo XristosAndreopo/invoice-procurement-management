@@ -2,46 +2,6 @@
 app/blueprints/admin/routes.py
 
 Admin Routes – Enterprise Administration Module
-
-OVERVIEW
---------
-This blueprint contains the admin-side organization management flows:
-
-1. Personnel management
-   - list
-   - Excel import
-   - create
-   - edit
-
-2. Consolidated organization setup
-   - directories
-   - departments
-   - leadership role assignments
-
-ARCHITECTURAL INTENT
---------------------
-This file is now route-focused.
-
-Routes should remain responsible only for:
-- decorators
-- request/form/file reading
-- boundary-level object loads
-- calling focused service functions
-- flashing service-returned messages
-- render/redirect responses
-
-NON-HTTP ORCHESTRATION HAS BEEN EXTRACTED TO
---------------------------------------------
-- app/services/admin_personnel_service.py
-- app/services/admin_organization_setup_service.py
-- app/security/admin_guards.py
-
-SECURITY MODEL
---------------
-- Admin: full access
-- Manager: own service unit only
-- Deputy: excluded from this blueprint's mutation flows
-- UI is never trusted
 """
 
 from __future__ import annotations
@@ -63,9 +23,9 @@ from ...services.admin.personnel import (
     build_personnel_form_page_context,
     build_personnel_list_page_context,
     execute_create_personnel,
+    execute_delete_personnel,
     execute_edit_personnel,
     execute_import_personnel,
-    execute_delete_personnel,
 )
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -75,15 +35,6 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 @login_required
 @admin_or_manager_required
 def personnel_list():
-    """
-    List organizational personnel.
-
-    Admin:
-    - sees all personnel
-
-    Manager:
-    - sees only personnel of their own ServiceUnit
-    """
     context = build_personnel_list_page_context()
     return render_template("admin/personnel_list.html", **context)
 
@@ -92,9 +43,6 @@ def personnel_list():
 @login_required
 @admin_required
 def import_personnel():
-    """
-    Import Personnel from Excel (admin-only).
-    """
     result = execute_import_personnel(request.files.get("file"))
     for item in result.flashes:
         flash(item.message, item.category)
@@ -106,15 +54,6 @@ def import_personnel():
 @login_required
 @admin_or_manager_required
 def create_personnel():
-    """
-    Create a new Personnel row.
-
-    Admin:
-    - may assign any service unit / directory / department
-
-    Manager:
-    - may assign only their own service unit
-    """
     if request.method == "POST":
         result = execute_create_personnel(
             request.form,
@@ -140,15 +79,6 @@ def create_personnel():
 @login_required
 @admin_or_manager_required
 def edit_personnel(personnel_id: int):
-    """
-    Edit an existing Personnel row.
-
-    Admin:
-    - may edit any Personnel
-
-    Manager:
-    - may edit only Personnel of their own ServiceUnit
-    """
     person = Personnel.query.get_or_404(personnel_id)
     ensure_personnel_manage_scope_or_403(person)
 
@@ -177,11 +107,11 @@ def edit_personnel(personnel_id: int):
 def organization_setup():
     if request.method == "POST":
         result = execute_organization_setup_action(
-        request.form,
-        files=request.files,
-        is_admin=getattr(current_user, "is_admin", False),
-        current_service_unit_id=getattr(current_user, "service_unit_id", None),
-    )
+            request.form,
+            files=request.files,
+            is_admin=getattr(current_user, "is_admin", False),
+            current_service_unit_id=getattr(current_user, "service_unit_id", None),
+        )
         for item in result.flashes:
             flash(item.message, item.category)
 
@@ -202,19 +132,11 @@ def organization_setup():
     )
     return render_template("admin/organization_setup.html", **context)
 
+
 @admin_bp.route("/personnel/<int:personnel_id>/delete", methods=["POST"])
 @login_required
 @admin_or_manager_required
 def delete_personnel(personnel_id: int):
-    """
-    Delete an existing Personnel row.
-
-    Admin:
-    - may delete any Personnel
-
-    Manager:
-    - may delete only Personnel of their own ServiceUnit
-    """
     person = Personnel.query.get_or_404(personnel_id)
     ensure_personnel_manage_scope_or_403(person)
 

@@ -2,61 +2,6 @@
 app/blueprints/procurements/routes.py
 
 Procurement routes – Enterprise Secured Version
-
-OVERVIEW
---------
-This blueprint contains the primary procurement workflows of the system.
-
-CURRENT RESPONSIBILITIES
-------------------------
-1. Procurement list pages
-   - inbox
-   - pending expenses
-   - all procurements
-
-2. Procurement create / edit flows
-
-3. Procurement implementation phase page
-
-4. Procurement reports
-   - Proforma Invoice (PDF)
-   - Award Decision (DOCX)
-
-5. Related entities under a procurement
-   - supplier participation rows
-   - material/service lines
-
-ARCHITECTURE NOTES
-------------------
-This file intentionally delegates repeated supporting logic to focused services:
-- list-page context builders
-- create/edit/implementation page and mutation services
-- child-entity mutation services
-- procurement-specific security guard helpers
-- report builders and shared procurement helpers
-
-That keeps this blueprint focused on:
-- request flow
-- permission flow
-- final HTTP branching
-- rendering / redirecting
-- file responses
-
-SECURITY MODEL
---------------
-The application follows these key rules:
-
-- UI is never trusted.
-- Admin has global access.
-- Non-admin access is service-isolated by Procurement.service_unit_id.
-- Mutations require admin or manager/deputy via server-side checks.
-- Submitted values are validated server-side in the called services.
-
-DESIGN NOTES
-------------
-- "next" navigation is always sanitized before redirecting.
-- Report export routes are intentionally kept as route-level orchestration
-  because they are already relatively thin and file-response oriented.
 """
 
 from __future__ import annotations
@@ -77,8 +22,6 @@ from flask import (
 )
 from flask_login import current_user, login_required
 from sqlalchemy.orm import joinedload
-
-from app.models.organization import Personnel
 
 from ...audit import log_action, serialize_model
 from ...extensions import db
@@ -121,15 +64,9 @@ from ...services.procurement_service import (
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
 
-# ---------------------------------------------------------------------
-# List pages
-# ---------------------------------------------------------------------
 @procurements_bp.route("/inbox")
 @login_required
 def inbox_procurements():
-    """
-    Inbox list: procurements in progress that have not been sent to pending expenses.
-    """
     context = build_inbox_procurements_list_context(
         request.args,
         allow_create=(current_user.is_admin or current_user.can_manage()),
@@ -140,13 +77,6 @@ def inbox_procurements():
 @procurements_bp.route("/pending-expenses")
 @login_required
 def pending_expenses():
-    """
-    Pending expenses list.
-
-    These are procurements that:
-    - are in progress
-    - have been sent to pending expenses
-    """
     context = build_pending_expenses_list_context(request.args)
     return render_template("procurements/list.html", **context)
 
@@ -154,9 +84,6 @@ def pending_expenses():
 @procurements_bp.route("/all")
 @login_required
 def all_procurements():
-    """
-    Full procurement list, including cancelled rows.
-    """
     context = build_all_procurements_list_context(request.args)
     return render_template("procurements/list.html", **context)
 
@@ -164,11 +91,6 @@ def all_procurements():
 @procurements_bp.route("/")
 @login_required
 def list_procurements():
-    """
-    Legacy procurement root route.
-
-    Redirects to inbox to preserve old links/bookmarks.
-    """
     return redirect(url_for("procurements.inbox_procurements"))
 
 
@@ -176,15 +98,6 @@ def list_procurements():
 @login_required
 @procurement_edit_required(load_procurement)
 def delete_procurement(procurement_id: int):
-    """
-    Delete a procurement.
-
-    SECURITY RULES
-    --------------
-    - Mutation permission is enforced server-side.
-    - Deletion is allowed only when triggered from the "All Procurements" page.
-    - UI is never trusted.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
 
     if not can_mutate_procurement(current_user, procurement):
@@ -206,25 +119,28 @@ def delete_procurement(procurement_id: int):
     return redirect(next_url or url_for("procurements.all_procurements"))
 
 
-# ---------------------------------------------------------------------
-# Reports
-# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/reports/proforma-invoice", methods=["GET"])
 @login_required
 @procurement_access_required(load_procurement)
 def report_proforma_invoice(procurement_id: int):
     """
-    Export 'Προτιμολόγιο' as inline PDF.
+    Render the proforma invoice PDF.
 
-    SECURITY
-    --------
-    - Protected by procurement_access_required.
-    - No data mutation occurs here.
+    IMPORTANT SQLALCHEMY NOTE
+    -------------------------
+    Loader options in modern SQLAlchemy must use class-bound attributes, not
+    string relationship names.
     """
     procurement = (
         Procurement.query.options(
             joinedload(Procurement.service_unit),
             joinedload(Procurement.handler_personnel),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.department
+            ),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.directory
+            ),
             joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
             joinedload(Procurement.materials),
             joinedload(Procurement.withholding_profile),
@@ -264,19 +180,29 @@ def report_proforma_invoice(procurement_id: int):
 @procurement_access_required(load_procurement)
 def report_award_decision_docx(procurement_id: int):
     """
-    Export 'ΑΠΟΦΑΣΗ ΑΝΑΘΕΣΗΣ' as downloadable DOCX.
+    Build and return the Award Decision DOCX.
+
+    IMPORTANT SQLALCHEMY NOTE
+    -------------------------
+    Loader options in modern SQLAlchemy must use class-bound attributes, not
+    string relationship names.
     """
     procurement = (
-    Procurement.query.options(
-        joinedload(Procurement.service_unit),
-        joinedload(Procurement.handler_personnel).joinedload(Personnel.directory),
-        joinedload(Procurement.handler_personnel).joinedload(Personnel.department),
-        joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
-        joinedload(Procurement.materials),
-        joinedload(Procurement.withholding_profile),
-        joinedload(Procurement.income_tax_rule),
-    )
-    .get_or_404(procurement_id)
+        Procurement.query.options(
+            joinedload(Procurement.service_unit),
+            joinedload(Procurement.handler_personnel),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.directory
+            ),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.department
+            ),
+            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+            joinedload(Procurement.materials),
+            joinedload(Procurement.withholding_profile),
+            joinedload(Procurement.income_tax_rule),
+        )
+        .get_or_404(procurement_id)
     )
 
     winner = procurement.winner_supplier_obj()
@@ -328,19 +254,9 @@ def report_award_decision_docx(procurement_id: int):
     )
 
 
-# ---------------------------------------------------------------------
-# Create procurement
-# ---------------------------------------------------------------------
 @procurements_bp.route("/new", methods=["GET", "POST"])
 @login_required
 def create_procurement():
-    """
-    Create a new procurement.
-
-    PERMISSIONS
-    -----------
-    Only admin / manager / deputy may create procurements.
-    """
     if not (current_user.is_admin or current_user.can_manage()):
         abort(403)
 
@@ -373,16 +289,10 @@ def create_procurement():
     return render_template("procurements/new.html", **context)
 
 
-# ---------------------------------------------------------------------
-# Edit procurement
-# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/edit", methods=["GET", "POST"])
 @login_required
 @procurement_access_required(load_procurement)
 def edit_procurement(procurement_id: int):
-    """
-    Main procurement edit page.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
     next_url = next_from_request("procurements.inbox_procurements")
 
@@ -410,16 +320,10 @@ def edit_procurement(procurement_id: int):
     return render_template("procurements/edit.html", **context)
 
 
-# ---------------------------------------------------------------------
-# Implementation phase
-# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/implementation", methods=["GET", "POST"])
 @login_required
 @procurement_access_required(load_procurement)
 def implementation_procurement(procurement_id: int):
-    """
-    Final implementation / expenses phase page.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
 
     if not is_in_implementation_phase(procurement):
@@ -451,16 +355,10 @@ def implementation_procurement(procurement_id: int):
     return render_template("procurements/implementation.html", **context)
 
 
-# ---------------------------------------------------------------------
-# Supplier participation
-# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/suppliers/add", methods=["POST"])
 @login_required
 @procurement_edit_required(load_procurement)
 def add_procurement_supplier(procurement_id: int):
-    """
-    Add a supplier participation row to a procurement.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
     next_url = next_from_request("procurements.inbox_procurements")
 
@@ -481,9 +379,6 @@ def add_procurement_supplier(procurement_id: int):
 @login_required
 @procurement_edit_required(load_procurement)
 def delete_procurement_supplier(procurement_id: int, link_id: int):
-    """
-    Delete a supplier participation row.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
     next_url = next_from_request("procurements.inbox_procurements")
 
@@ -503,16 +398,10 @@ def delete_procurement_supplier(procurement_id: int, link_id: int):
     )
 
 
-# ---------------------------------------------------------------------
-# Material / service lines
-# ---------------------------------------------------------------------
 @procurements_bp.route("/<int:procurement_id>/materials/add", methods=["POST"])
 @login_required
 @procurement_edit_required(load_procurement)
 def add_material_line(procurement_id: int):
-    """
-    Add a material/service line to a procurement.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
     next_url = next_from_request("procurements.inbox_procurements")
 
@@ -533,9 +422,6 @@ def add_material_line(procurement_id: int):
 @login_required
 @procurement_edit_required(load_procurement)
 def delete_material_line(procurement_id: int, line_id: int):
-    """
-    Delete a material/service line from a procurement.
-    """
     procurement = Procurement.query.get_or_404(procurement_id)
     next_url = next_from_request("procurements.inbox_procurements")
 
@@ -553,4 +439,3 @@ def delete_material_line(procurement_id: int, line_id: int):
             next=next_url,
         )
     )
-

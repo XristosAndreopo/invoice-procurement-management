@@ -1,8 +1,7 @@
-<!-- C:\Users\xrist\vs code projects\Invoice Management System\app\templates\procurements\implementation.html -->
 {% extends "base.html" %}
 {% block content %}
 
-{% set vat_pct = analysis["vat_percent"] if analysis and analysis.get("vat_percent") is not none else "" %}
+{% set vat_pct = analysis.get("vat_percent", "") if analysis else "" %}
 {% set back_url = next_url if next_url is defined and next_url else url_for('procurements.pending_expenses') %}
 
 <div class="d-flex align-items-center justify-content-between mb-3">
@@ -502,7 +501,6 @@
   </div>
 </div>
 
-<!-- SUPPLIERS (read-only) -->
 <div class="card glass-card shadow-sm border-0 mb-3">
   <div class="card-body">
     <h2 class="h6 fw-bold mb-3">Προμηθευτές (ως έχουν)</h2>
@@ -548,7 +546,6 @@
   </div>
 </div>
 
-<!-- MATERIALS (read-only) -->
 <div class="card glass-card shadow-sm border-0">
   <div class="card-body">
     <h2 class="h6 fw-bold mb-3">Υλικά / Υπηρεσίες (ως έχουν)</h2>
@@ -588,5 +585,22 @@
   </div>
 </div>
 
-{% endblock %}
+<script>
+(function() {
+  if (!window.jQuery || !jQuery.fn || !jQuery.fn.select2) return;
 
+  jQuery(".js-select2").each(function() {
+    const $el = jQuery(this);
+    if ($el.data("select2")) return;
+
+    $el.select2({
+      theme: "bootstrap-5",
+      width: "100%",
+      allowClear: true,
+      placeholder: $el.data("placeholder") || "(αναζήτηση...)"
+    });
+  });
+})();
+</script>
+
+{% endblock %}

@@ -5,71 +5,81 @@ Focused personnel page/use-case services for the admin blueprint.
 
 PURPOSE
 -------
-This module extracts non-HTTP orchestration from the admin personnel routes:
+This module contains person-centric administration services for:
+- listing Personnel
+- importing Personnel from Excel
+- creating Personnel
+- editing Personnel
+- deleting Personnel
 
-- /admin/personnel
-- /admin/personnel/import
-- /admin/personnel/new
-- /admin/personnel/<id>/edit
+IMPORTANT DOMAIN RULE
+---------------------
+Directory/Department assignment must NOT be edited from the Personnel form page.
 
-It keeps the blueprint focused on:
-- request reading
-- route guards
-- flashing
-- redirect/render decisions
+Organizational placement is managed centrally only from:
+    /admin/organization-setup
 
-ARCHITECTURAL INTENT
---------------------
-This module follows the agreed project direction:
-- function-first
-- explicit small helpers
-- no unnecessary class hierarchy
-- no generic command bus
+Therefore:
+- create/edit/import personnel must not accept or persist directory_id
+- create/edit/import personnel must not accept or persist department_id
+- the Personnel page remains person-centric
+- directory/department placement belongs to the separate
+  `PersonnelDepartmentAssignment` model
 
-BOUNDARY
---------
+MODEL-COMPATIBILITY NOTE
+------------------------
+The actual `Personnel` ORM model supports:
+- agm
+- aem
+- rank
+- specialty
+- first_name
+- last_name
+- is_active
+- service_unit_id
+
+It does NOT support:
+- directory_id
+- department_id
+
+This module must stay aligned with that schema. Passing unsupported keyword
+arguments to `Personnel(...)` or assigning missing attributes on an existing
+`Personnel` instance will raise runtime errors.
+
+ARCHITECTURAL BOUNDARY
+----------------------
 This module MAY:
-- build template context dictionaries
-- validate personnel form submissions
-- orchestrate ORM mutations
-- perform audit logging and commit
-- parse Excel uploads for personnel import
+- query ORM rows
+- validate submitted form/import data
+- create/update/delete Personnel rows
+- flush/commit DB state
+- emit structured service results
 
 This module MUST NOT:
-- define routes
-- call render_template(...)
-- call redirect(...)
-- call flash(...)
-
-SECURITY NOTE
--------------
-Route-level authentication/authorization must already be applied.
-This module accepts only the minimum current-user scope facts it needs:
-- is_admin
-- current_service_unit_id
+- render templates
+- redirect
+- flash directly
+- implement organization placement orchestration that belongs elsewhere
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from sqlalchemy.exc import IntegrityError
 from typing import Any
+
+from sqlalchemy.exc import IntegrityError
 
 from ...audit import log_action, serialize_model
 from ...extensions import db
 from ...models import Personnel
-from ..shared.excel_imports import build_header_index, cell_at, safe_cell_str
-from ..shared.operation_results import FlashMessage, OperationResult
 from ..organization import (
-    departments_for_dropdown,
-    directories_for_dropdown,
     effective_scope_service_unit_id_for_manager_or_none,
     match_service_unit_from_text,
     service_units_for_dropdown,
-    validate_department_for_directory_and_service_unit,
-    validate_directory_for_service_unit,
     validate_service_unit_required,
 )
+from ..shared.excel_imports import build_header_index, cell_at, safe_cell_str
+from ..shared.operation_results import FlashMessage, OperationResult
 from ..shared.parsing import parse_optional_int
 
 
@@ -80,12 +90,15 @@ def build_personnel_list_page_context() -> dict[str, Any]:
     RETURNS
     -------
     dict[str, Any]
-        Template context containing the filtered personnel rows.
+        Template payload containing the visible Personnel rows.
+
+    SCOPE RULE
+    ----------
+    - admins may see all Personnel
+    - managers are restricted to their effective service-unit scope
     """
     query = Personnel.query.options(
         db.joinedload(Personnel.service_unit),
-        db.joinedload(Personnel.directory),
-        db.joinedload(Personnel.department),
     )
 
     scope_service_unit_id = effective_scope_service_unit_id_for_manager_or_none()
@@ -112,13 +125,28 @@ def build_personnel_form_page_context(
 ) -> dict[str, Any]:
     """
     Build template context for both create/edit personnel forms.
+
+    PARAMETERS
+    ----------
+    person:
+        Existing Personnel row for edit mode, or None for create mode.
+    form_title:
+        Page/form title to render.
+
+    RETURNS
+    -------
+    dict[str, Any]
+        Template context for the personnel form page.
+
+    IMPORTANT
+    ---------
+    Directory / Department are no longer edited here.
+    They are managed only from Organization Setup.
     """
     return {
         "person": person,
         "form_title": form_title,
         "service_units": service_units_for_dropdown(),
-        "directories": directories_for_dropdown(),
-        "departments": departments_for_dropdown(),
     }
 
 
@@ -129,12 +157,32 @@ def execute_import_personnel(file_storage: Any) -> OperationResult:
     PARAMETERS
     ----------
     file_storage:
-        Uploaded file object from Flask/Werkzeug.
+        Uploaded Flask file object.
 
     RETURNS
     -------
     OperationResult
-        Success/failure with flash-style messages.
+        Import outcome, including summary flash text.
+
+    REQUIRED EXCEL COLUMNS
+    ----------------------
+    The first row must contain headers that map to:
+    - ΑΓΜ
+    - ΟΝΟΜΑ
+    - ΕΠΩΝΥΜΟ
+
+    OPTIONAL COLUMNS
+    ----------------
+    - ΑΕΜ
+    - ΒΑΘΜΟΣ
+    - ΕΙΔΙΚΟΤΗΤΑ
+    - ΥΠΗΡΕΣΙΑ
+
+    IMPORTANT DOMAIN RULE
+    ---------------------
+    This import is person-centric only.
+    It may assign `service_unit_id` if a valid ServiceUnit match is found,
+    but it must NOT attempt to assign directory/department fields on Personnel.
     """
     if not file_storage or not getattr(file_storage, "filename", None):
         return OperationResult(
@@ -217,6 +265,10 @@ def execute_import_personnel(file_storage: Any) -> OperationResult:
                     continue
                 service_unit_id = service_unit.id
 
+        # IMPORTANT:
+        # Create Personnel only with fields that actually exist on the model.
+        # Directory/Department placement is intentionally excluded from this
+        # page/use-case and belongs to PersonnelDepartmentAssignment.
         person = Personnel(
             agm=agm,
             aem=safe_cell_str(cell_at(row, aem_idx)) or None,
@@ -226,8 +278,6 @@ def execute_import_personnel(file_storage: Any) -> OperationResult:
             last_name=last_name,
             is_active=True,
             service_unit_id=service_unit_id,
-            directory_id=None,
-            department_id=None,
         )
         db.session.add(person)
         inserted_people.append(person)
@@ -244,8 +294,10 @@ def execute_import_personnel(file_storage: Any) -> OperationResult:
         )
 
     db.session.flush()
+
     for person in inserted_people:
         log_action(person, "CREATE", before=None, after=serialize_model(person))
+
     db.session.commit()
 
     return OperationResult(
@@ -272,6 +324,24 @@ def execute_create_personnel(
 ) -> OperationResult:
     """
     Validate and create a Personnel row.
+
+    PARAMETERS
+    ----------
+    form_data:
+        Submitted form mapping.
+    is_admin:
+        True when the acting user is admin.
+    current_service_unit_id:
+        Current acting user's service-unit scope for manager-restricted create.
+
+    RETURNS
+    -------
+    OperationResult
+        Creation outcome.
+
+    IMPORTANT
+    ---------
+    Directory / Department are no longer set from this form.
     """
     agm = (form_data.get("agm") or "").strip()
     aem = (form_data.get("aem") or "").strip()
@@ -279,9 +349,6 @@ def execute_create_personnel(
     specialty = (form_data.get("specialty") or "").strip()
     first_name = (form_data.get("first_name") or "").strip()
     last_name = (form_data.get("last_name") or "").strip()
-
-    directory_id = parse_optional_int(form_data.get("directory_id"))
-    department_id = parse_optional_int(form_data.get("department_id"))
 
     if is_admin:
         service_unit_id = parse_optional_int(form_data.get("service_unit_id"))
@@ -306,22 +373,8 @@ def execute_create_personnel(
             flashes=(FlashMessage("Η Υπηρεσία είναι υποχρεωτική και πρέπει να είναι έγκυρη.", "danger"),),
         )
 
-    if not validate_directory_for_service_unit(directory_id, service_unit_id):
-        return OperationResult(
-            ok=False,
-            flashes=(FlashMessage("Μη έγκυρη Διεύθυνση για την επιλεγμένη Υπηρεσία.", "danger"),),
-        )
-
-    if not validate_department_for_directory_and_service_unit(
-        department_id,
-        directory_id,
-        service_unit_id,
-    ):
-        return OperationResult(
-            ok=False,
-            flashes=(FlashMessage("Μη έγκυρο Τμήμα για την επιλεγμένη Διεύθυνση/Υπηρεσία.", "danger"),),
-        )
-
+    # IMPORTANT:
+    # Personnel is person-centric. Only persist actual model fields here.
     person = Personnel(
         agm=agm,
         aem=aem or None,
@@ -331,8 +384,6 @@ def execute_create_personnel(
         last_name=last_name,
         is_active=True,
         service_unit_id=service_unit_id,
-        directory_id=directory_id,
-        department_id=department_id,
     )
 
     db.session.add(person)
@@ -356,6 +407,31 @@ def execute_edit_personnel(
 ) -> OperationResult:
     """
     Validate and update an existing Personnel row.
+
+    PARAMETERS
+    ----------
+    person:
+        Existing Personnel row to update.
+    form_data:
+        Submitted form mapping.
+    is_admin:
+        True when the acting user is admin.
+    current_service_unit_id:
+        Current acting user's service-unit scope for manager-restricted edit.
+
+    RETURNS
+    -------
+    OperationResult
+        Update outcome.
+
+    IMPORTANT
+    ---------
+    Directory / Department are no longer edited here.
+
+    MODEL RULE
+    ----------
+    Since `Personnel` does not define `directory_id` / `department_id`, this
+    service must not assign those attributes at all.
     """
     before_snapshot = serialize_model(person)
 
@@ -365,9 +441,6 @@ def execute_edit_personnel(
     specialty = (form_data.get("specialty") or "").strip()
     first_name = (form_data.get("first_name") or "").strip()
     last_name = (form_data.get("last_name") or "").strip()
-
-    directory_id = parse_optional_int(form_data.get("directory_id"))
-    department_id = parse_optional_int(form_data.get("department_id"))
 
     if is_admin:
         service_unit_id = parse_optional_int(form_data.get("service_unit_id"))
@@ -398,22 +471,6 @@ def execute_edit_personnel(
             flashes=(FlashMessage("Η Υπηρεσία είναι υποχρεωτική και πρέπει να είναι έγκυρη.", "danger"),),
         )
 
-    if not validate_directory_for_service_unit(directory_id, service_unit_id):
-        return OperationResult(
-            ok=False,
-            flashes=(FlashMessage("Μη έγκυρη Διεύθυνση για την επιλεγμένη Υπηρεσία.", "danger"),),
-        )
-
-    if not validate_department_for_directory_and_service_unit(
-        department_id,
-        directory_id,
-        service_unit_id,
-    ):
-        return OperationResult(
-            ok=False,
-            flashes=(FlashMessage("Μη έγκυρο Τμήμα για την επιλεγμένη Διεύθυνση/Υπηρεσία.", "danger"),),
-        )
-
     person.agm = agm
     person.aem = aem or None
     person.rank = rank or None
@@ -421,9 +478,12 @@ def execute_edit_personnel(
     person.first_name = first_name
     person.last_name = last_name
     person.service_unit_id = service_unit_id
-    person.directory_id = directory_id
-    person.department_id = department_id
     person.is_active = is_active
+
+    # IMPORTANT:
+    # Do not touch directory/department placement here.
+    # Placement is managed centrally through organization setup and
+    # PersonnelDepartmentAssignment, not via inline Personnel fields.
 
     db.session.flush()
     log_action(person, "UPDATE", before=before_snapshot, after=serialize_model(person))
@@ -435,7 +495,26 @@ def execute_edit_personnel(
         entity_id=person.id,
     )
 
+
 def execute_delete_personnel(person: Personnel) -> OperationResult:
+    """
+    Delete a Personnel row if no blocking references exist.
+
+    PARAMETERS
+    ----------
+    person:
+        Target Personnel row.
+
+    RETURNS
+    -------
+    OperationResult
+        Deletion outcome.
+
+    FAILURE MODE
+    ------------
+    If the row is already referenced elsewhere, the delete is rolled back and a
+    user-facing error message is returned.
+    """
     before = serialize_model(person)
 
     try:

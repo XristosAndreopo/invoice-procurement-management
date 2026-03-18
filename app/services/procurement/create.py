@@ -22,6 +22,42 @@ This module follows the agreed project direction:
 - no unnecessary service classes
 - shared lightweight result types where multiple services need the same shape
 
+IMPORTANT CHANGE
+----------------
+Handler selection is assignment-based, not just person-based.
+
+That means the procurement form stores:
+- handler_personnel_id: who the handler is
+- handler_assignment_id: the exact organizational assignment selected
+  (Directory + Department)
+
+WHY THIS CHANGE EXISTS
+----------------------
+A single person may belong to multiple Departments / Directories.
+The procurement must therefore store the exact organizational context selected
+at the time of assignment, so reports (e.g. Award Decision) can render the
+correct:
+- Department
+- Directory
+
+CANONICAL TEMPLATE / SERVICE CONTRACT
+-------------------------------------
+The UI field name for handler selection is:
+
+- handler_assignment_id
+
+The page context collection exposed to templates is:
+
+- handler_assignments
+
+This module must stay aligned with the templates. Historically, a mismatch
+between:
+- handler_candidates vs handler_assignments
+- handler_personnel_id vs handler_assignment_id
+
+caused the handler dropdown to render empty and the submitted value not to be
+read correctly on POST.
+
 BOUNDARY
 --------
 This module MAY:
@@ -40,11 +76,15 @@ This module MUST NOT:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 from ...audit import log_action, serialize_model
 from ...extensions import db
-from ...models import IncomeTaxRule, Procurement, ServiceUnit, WithholdingProfile
+from ...models import (
+    IncomeTaxRule,
+    Procurement,
+    ServiceUnit,
+    WithholdingProfile,
+)
 from ..master_data_service import (
     active_ale_rows,
     get_active_option_values,
@@ -52,7 +92,7 @@ from ..master_data_service import (
 )
 from ..shared.operation_results import FlashMessage, OperationResult
 from ..shared.parsing import parse_decimal, parse_optional_int
-from ..procurement_service import (
+from .reference_data import (
     active_income_tax_rules,
     active_withholding_profiles,
     handler_candidate_ids,
@@ -64,9 +104,31 @@ def build_create_procurement_page_context(
     *,
     is_admin: bool,
     current_service_unit_id: int | None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Build template context for the procurement creation page.
+
+    BEHAVIOR
+    --------
+    - Admin may choose service unit first, so handler list starts empty.
+    - Non-admin is scoped to one service unit, so assignment-based handler
+      candidates are loaded immediately.
+
+    RETURNS
+    -------
+    dict[str, object]
+        Context for `procurements/new.html`.
+
+    IMPORTANT TEMPLATE CONTRACT
+    ---------------------------
+    The template expects:
+    - handler_assignments
+
+    and not:
+    - handler_candidates
+
+    The list contents are still produced by `handler_candidates(...)`, but the
+    exposed template key must remain stable and aligned with the form template.
     """
     handler_list = []
     if not is_admin and current_service_unit_id:
@@ -78,7 +140,7 @@ def build_create_procurement_page_context(
         "quarterly_options": get_active_option_values("TRIMHNIAIA"),
         "status_options": get_active_option_values("KATASTASH"),
         "stage_options": get_active_option_values("STADIO"),
-        "handler_candidates": handler_list,
+        "handler_assignments": handler_list,
         "income_tax_rules": active_income_tax_rules(),
         "withholding_profiles": active_withholding_profiles(),
         "committees": [],
@@ -87,13 +149,37 @@ def build_create_procurement_page_context(
 
 
 def execute_create_procurement(
-    form_data: Mapping[str, Any],
+    form_data: Mapping[str, object],
     *,
     is_admin: bool,
     current_service_unit_id: int | None,
 ) -> OperationResult:
     """
     Execute the POST workflow for procurement creation.
+
+    SECURITY / VALIDATION
+    ---------------------
+    - ServiceUnit is validated server-side.
+    - Handler selection is validated against the assignment ids that belong
+      to the selected ServiceUnit.
+    - UI-submitted values are never trusted.
+
+    IMPORTANT HANDLER RULE
+    ----------------------
+    The submitted form field is:
+
+        handler_assignment_id
+
+    This value contains the selected `PersonnelDepartmentAssignment.id`.
+
+    From that assignment we derive:
+    - procurement.handler_assignment_id
+    - procurement.handler_personnel_id
+
+    WHY THIS MATTERS
+    ----------------
+    The procurement must preserve the exact organizational context selected by
+    the user, so later reporting can display the correct Department/Directory.
     """
     if is_admin:
         service_unit_id = parse_optional_int(form_data.get("service_unit_id"))
@@ -121,13 +207,29 @@ def execute_create_procurement(
             flashes=(FlashMessage("Η σύντομη περιγραφή είναι υποχρεωτική.", "danger"),),
         )
 
-    handler_pid = parse_optional_int(form_data.get("handler_personnel_id"))
-    if handler_pid:
+    handler_assignment_id = parse_optional_int(form_data.get("handler_assignment_id"))
+    selected_assignment = None
+    if handler_assignment_id:
         allowed_ids = handler_candidate_ids(service_unit_id)
-        if handler_pid not in allowed_ids:
+        if handler_assignment_id not in allowed_ids:
             return OperationResult(
                 ok=False,
-                flashes=(FlashMessage("Μη έγκυρος Χειριστής για την επιλεγμένη υπηρεσία.", "danger"),),
+                flashes=(
+                    FlashMessage(
+                        "Μη έγκυρος Χειριστής για την επιλεγμένη υπηρεσία.",
+                        "danger",
+                    ),
+                ),
+            )
+
+        selected_assignment = next(
+            (row for row in handler_candidates(service_unit_id) if row.id == handler_assignment_id),
+            None,
+        )
+        if selected_assignment is None:
+            return OperationResult(
+                ok=False,
+                flashes=(FlashMessage("Αδυναμία φόρτωσης του επιλεγμένου χειριστή.", "danger"),),
             )
 
     income_tax_rule_id = parse_optional_int(form_data.get("income_tax_rule_id"))
@@ -179,7 +281,12 @@ def execute_create_procurement(
         hop_approval=(form_data.get("hop_approval") or "").strip() or None,
         aay=(form_data.get("aay") or "").strip() or None,
         procurement_notes=(form_data.get("procurement_notes") or "").strip() or None,
-        handler_personnel_id=handler_pid,
+        handler_personnel_id=(
+            selected_assignment.personnel_id if selected_assignment is not None else None
+        ),
+        handler_assignment_id=(
+            selected_assignment.id if selected_assignment is not None else None
+        ),
         income_tax_rule_id=rule.id if rule else None,
         withholding_profile_id=profile.id if profile else None,
         committee_id=None,
@@ -216,4 +323,3 @@ def execute_create_procurement(
         flashes=tuple(flashes),
         entity_id=procurement.id,
     )
-

@@ -2,53 +2,6 @@
 app/models/organization.py
 
 Organizational structure models.
-
-CONTAINS
---------
-- Personnel
-- ServiceUnit
-- Directory
-- Department
-
-WHY THESE MODELS LIVE TOGETHER
-------------------------------
-These entities form the organizational hierarchy of the application:
-
-    ServiceUnit -> Directory -> Department
-                   ^
-                   |
-                Personnel assignments / leadership roles
-
-They are highly related conceptually and through foreign keys, so grouping them
-in one module improves readability more than splitting each class into its own
-file.
-
-ARCHITECTURAL BOUNDARY
-----------------------
-This module defines:
-- organizational persistence schema
-- relationships
-- lightweight display helpers
-
-This module must NOT become the place for:
-- scope validation
-- manager/admin authorization rules
-- directory/department ownership enforcement
-- cross-entity query orchestration
-
-Those responsibilities belong in:
-    app/services/organization_service.py
-
-SECURITY NOTE
--------------
-Foreign keys alone do NOT enforce all business constraints.
-
-For example:
-- a Directory director should belong to the same ServiceUnit
-- a Department head should belong to the same ServiceUnit / Directory chain
-- a Personnel assignment should be validated server-side
-
-Those rules must continue to be enforced in routes / services.
 """
 
 from __future__ import annotations
@@ -61,26 +14,6 @@ from ..extensions import db
 class Personnel(db.Model):
     """
     Organizational directory person (admin-managed).
-
-    ORGANIZATIONAL ASSIGNMENT
-    -------------------------
-    A person may be linked to:
-    - conceptually one ServiceUnit
-    - optionally one Directory
-    - optionally one Department
-
-    IMPORTANT
-    ---------
-    `service_unit_id` is nullable for historical compatibility, but in business
-    terms the person is expected to belong to a service unit.
-
-    UI DISPLAY RULES
-    ----------------
-    Dropdown option:
-        "Βαθμός Ειδικότητα Όνομα Επώνυμο (ΑΕΜ ... ΑΓΜ)"
-
-    Selected value:
-        "Βαθμός Ειδικότητα Όνομα Επώνυμο"
     """
 
     __tablename__ = "personnel"
@@ -105,23 +38,8 @@ class Personnel(db.Model):
         index=True,
     )
 
-    directory_id = db.Column(
-        db.Integer,
-        db.ForeignKey("directories.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-
-    department_id = db.Column(
-        db.Integer,
-        db.ForeignKey("departments.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
-    # 1-to-1 link to system user account
     user = db.relationship(
         "User",
         back_populates="personnel",
@@ -135,22 +53,7 @@ class Personnel(db.Model):
         backref=db.backref("personnel_members", lazy=True),
     )
 
-    directory = db.relationship("Directory", foreign_keys=[directory_id])
-    department = db.relationship("Department", foreign_keys=[department_id])
-
     def full_name(self) -> str:
-        """
-        Return a compact legacy display name.
-
-        FORMAT
-        ------
-        "Βαθμός Επώνυμο Όνομα"
-
-        NOTE
-        ----
-        This method is preserved for backward compatibility because other parts
-        of the application may already depend on this formatting.
-        """
         parts = []
         if self.rank:
             parts.append(str(self.rank).strip())
@@ -161,14 +64,6 @@ class Personnel(db.Model):
         return " ".join([p for p in parts if p]).strip()
 
     def _name_core(self) -> str:
-        """
-        Build the main display label without AEM / AGM metadata.
-
-        RETURNS
-        -------
-        str
-            "Βαθμός Ειδικότητα Όνομα Επώνυμο"
-        """
         parts = []
         if self.rank:
             parts.append(str(self.rank).strip())
@@ -182,27 +77,12 @@ class Personnel(db.Model):
 
     @property
     def display_name(self) -> str:
-        """
-        Canonical display name for already-selected UI contexts.
-
-        This is the most useful general-purpose read-only label for templates,
-        reports, and dropdown-selected values.
-        """
         return self.display_selected_label()
 
     def display_selected_label(self) -> str:
-        """
-        Label used when the person is already selected in the UI.
-        """
         return self._name_core() or self.full_name()
 
     def display_option_label(self) -> str:
-        """
-        Label used in dropdown options.
-
-        Includes identifying metadata to help distinguish people with similar
-        names.
-        """
         base = self._name_core() or self.full_name()
 
         extra_parts = []
@@ -221,19 +101,6 @@ class Personnel(db.Model):
 class ServiceUnit(db.Model):
     """
     Organizational service / unit.
-
-    This is a top-level organizational entity that can own:
-    - personnel
-    - users
-    - directories
-    - departments
-    - committees
-    - procurements
-
-    LEADERSHIP
-    ----------
-    Manager and deputy are selected from Personnel, but same-service validation
-    must still be enforced server-side.
     """
 
     __tablename__ = "service_units"
@@ -249,7 +116,6 @@ class ServiceUnit(db.Model):
     curator = db.Column(db.String(255))
     supply_officer = db.Column(db.String(255))
 
-    # Report header / contact fields
     address = db.Column(db.String(255), nullable=True)
     phone = db.Column(db.String(50), nullable=True)
 
@@ -289,11 +155,22 @@ class ServiceUnit(db.Model):
         cascade="all, delete-orphan",
     )
 
+    directories = db.relationship(
+        "Directory",
+        back_populates="service_unit",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
+
+    departments = db.relationship(
+        "Department",
+        back_populates="service_unit",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
+
     @property
     def display_name(self) -> str:
-        """
-        Preferred human-readable label for UI use.
-        """
         return (self.short_name or self.description or "").strip()
 
     def __repr__(self) -> str:
@@ -303,16 +180,6 @@ class ServiceUnit(db.Model):
 class Directory(db.Model):
     """
     Directory / Διεύθυνση under a ServiceUnit.
-
-    ROLE
-    ----
-    `director_personnel_id` represents:
-        "Τμηματάρχης/Διευθυντής"
-
-    SECURITY NOTE
-    -------------
-    Server-side logic must verify the selected director belongs to the same
-    ServiceUnit.
     """
 
     __tablename__ = "directories"
@@ -338,11 +205,15 @@ class Directory(db.Model):
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
-    service_unit = db.relationship(
-        "ServiceUnit",
-        backref=db.backref("directories", lazy=True, cascade="all, delete-orphan"),
-    )
+    service_unit = db.relationship("ServiceUnit", back_populates="directories")
     director = db.relationship("Personnel", foreign_keys=[director_personnel_id])
+
+    departments = db.relationship(
+        "Department",
+        back_populates="directory",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
 
     __table_args__ = (
         db.UniqueConstraint("service_unit_id", "name", name="uq_directory_serviceunit_name"),
@@ -350,9 +221,6 @@ class Directory(db.Model):
 
     @property
     def display_name(self) -> str:
-        """
-        Preferred human-readable directory label.
-        """
         return (self.name or "").strip()
 
     def __repr__(self) -> str:
@@ -362,19 +230,6 @@ class Directory(db.Model):
 class Department(db.Model):
     """
     Department / Τμήμα under a Directory.
-
-    ROLE FIELDS
-    -----------
-    - head_personnel_id:
-        "Προϊστάμενος/Αξιωματικός"
-
-    - assistant_personnel_id:
-        optional helper / future UI support
-
-    SECURITY NOTE
-    -------------
-    Server-side logic must ensure head / assistant belong to the proper
-    ServiceUnit / Directory scope.
     """
 
     __tablename__ = "departments"
@@ -414,17 +269,18 @@ class Department(db.Model):
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
-    directory = db.relationship(
-        "Directory",
-        backref=db.backref("departments", lazy=True, cascade="all, delete-orphan"),
-    )
-    service_unit = db.relationship(
-        "ServiceUnit",
-        backref=db.backref("departments", lazy=True, cascade="all, delete-orphan"),
-    )
+    directory = db.relationship("Directory", back_populates="departments")
+    service_unit = db.relationship("ServiceUnit", back_populates="departments")
 
     head = db.relationship("Personnel", foreign_keys=[head_personnel_id])
     assistant = db.relationship("Personnel", foreign_keys=[assistant_personnel_id])
+
+    assignments = db.relationship(
+        "PersonnelDepartmentAssignment",
+        back_populates="department",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
 
     __table_args__ = (
         db.UniqueConstraint("directory_id", "name", name="uq_department_directory_name"),
@@ -432,11 +288,153 @@ class Department(db.Model):
 
     @property
     def display_name(self) -> str:
-        """
-        Preferred human-readable department label.
-        """
         return (self.name or "").strip()
 
     def __repr__(self) -> str:
         return f"<Department {self.id}: {self.display_name}>"
 
+
+class PersonnelDepartmentAssignment(db.Model):
+    """
+    Membership/assignment of a person to a department.
+
+    PURPOSE
+    -------
+    A person may belong to multiple departments and, by extension,
+    multiple directories within the same service unit.
+
+    UI / REPORTING ROLE
+    -------------------
+    This model is also the canonical procurement-handler selection unit.
+
+    That means one assignment row represents:
+    - one specific person
+    - one specific department
+    - one specific directory
+
+    The procurement UI stores the selected assignment id so downstream reports
+    can render the exact organizational context used for that procurement.
+    """
+
+    __tablename__ = "personnel_department_assignments"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    personnel_id = db.Column(
+        db.Integer,
+        db.ForeignKey("personnel.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    service_unit_id = db.Column(
+        db.Integer,
+        db.ForeignKey("service_units.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    directory_id = db.Column(
+        db.Integer,
+        db.ForeignKey("directories.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    department_id = db.Column(
+        db.Integer,
+        db.ForeignKey("departments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    is_primary = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    personnel = db.relationship(
+        "Personnel",
+        backref=db.backref(
+            "department_assignments",
+            lazy=True,
+            cascade="all, delete-orphan",
+        ),
+    )
+    service_unit = db.relationship("ServiceUnit")
+    directory = db.relationship("Directory")
+    department = db.relationship("Department", back_populates="assignments")
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "personnel_id",
+            "department_id",
+            name="uq_personnel_department_assignment",
+        ),
+    )
+
+    def _person_label(self) -> str:
+        """
+        Return the most useful person-centric label available.
+
+        Falls back safely if the linked Personnel row is missing.
+        """
+        if not self.personnel:
+            return "—"
+
+        display_selected = getattr(self.personnel, "display_selected_label", None)
+        if callable(display_selected):
+            value = display_selected()
+            if value:
+                return value
+
+        display_name = getattr(self.personnel, "display_name", None)
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name.strip()
+
+        full_name = getattr(self.personnel, "full_name", None)
+        if callable(full_name):
+            value = full_name()
+            if value:
+                return value
+
+        return "—"
+
+    def display_selected_label(self) -> str:
+        """
+        Label used after selection in procurement handler dropdowns.
+
+        FORMAT
+        ------
+        PERSON / ΤΜΗΜΑ
+        """
+        person_label = self._person_label()
+        department_name = (self.department.name or "").strip() if self.department else ""
+        if department_name:
+            return f"{person_label} / {department_name}"
+        return person_label
+
+    def display_option_label(self) -> str:
+        """
+        Full searchable label used inside procurement handler dropdown options.
+
+        FORMAT
+        ------
+        PERSON / ΤΜΗΜΑ / ΔΙΕΥΘΥΝΣΗ
+        """
+        person_label = self._person_label()
+        department_name = (self.department.name or "").strip() if self.department else ""
+        directory_name = (self.directory.name or "").strip() if self.directory else ""
+
+        parts = [person_label]
+        if department_name:
+            parts.append(department_name)
+        if directory_name:
+            parts.append(directory_name)
+
+        return " / ".join([p for p in parts if p]).strip()
+
+    @property
+    def display_name(self) -> str:
+        return self.display_option_label()
+
+    def __repr__(self) -> str:
+        return f"<PersonnelDepartmentAssignment {self.id}: personnel={self.personnel_id} dept={self.department_id}>"

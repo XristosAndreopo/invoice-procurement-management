@@ -58,6 +58,19 @@ SECURITY NOTES
 - Login result only returns a validated authenticated `User`; the route remains
   responsible for actually calling `login_user(...)`.
 - The bootstrap admin flow is self-locking once any `User` exists.
+
+IMPORTANT MODEL-COMPATIBILITY NOTE
+----------------------------------
+The bootstrap Personnel row must match the actual `Personnel` ORM schema.
+
+According to the provided source-of-truth and actual model implementation:
+- `Personnel` includes `service_unit_id`
+- `Personnel` does NOT include `directory_id`
+- `Personnel` does NOT include `department_id`
+
+Directory/Department placement belongs to the separate
+`PersonnelDepartmentAssignment` model and must not be passed into the
+`Personnel(...)` constructor.
 """
 
 from __future__ import annotations
@@ -157,7 +170,6 @@ def build_login_page_context(raw_next: str | None) -> dict[str, Any]:
     }
 
 
-
 def execute_login(form_data: Mapping[str, Any], raw_next: str | None) -> AuthLoginResult:
     """
     Validate login credentials and resolve the post-login redirect target.
@@ -237,7 +249,6 @@ def should_block_seed_admin() -> bool:
     return User.query.count() > 0
 
 
-
 def build_seed_admin_page_context() -> dict[str, Any]:
     """
     Build template context for the bootstrap admin page.
@@ -250,7 +261,6 @@ def build_seed_admin_page_context() -> dict[str, Any]:
     return SeedAdminPageContext(
         bootstrap_blocked=should_block_seed_admin(),
     ).as_template_context()
-
 
 
 def execute_seed_admin(form_data: Mapping[str, Any]) -> OperationResult:
@@ -279,6 +289,29 @@ def execute_seed_admin(form_data: Mapping[str, Any]) -> OperationResult:
     --------------------
     This function owns the transaction boundary for the bootstrap creation and
     commits on success.
+
+    MODEL COMPATIBILITY
+    -------------------
+    The bootstrap Personnel row must be created using only fields that actually
+    exist on the `Personnel` model.
+
+    The current schema supports:
+    - agm
+    - aem
+    - rank
+    - specialty
+    - first_name
+    - last_name
+    - is_active
+    - service_unit_id
+
+    It does NOT support:
+    - directory_id
+    - department_id
+
+    If future bootstrap requirements need directory/department placement, that
+    must be implemented through `PersonnelDepartmentAssignment` in a separate
+    step after the `Personnel` row exists.
     """
     if should_block_seed_admin():
         return OperationResult(
@@ -314,6 +347,18 @@ def execute_seed_admin(form_data: Mapping[str, Any]) -> OperationResult:
             ),
         )
 
+    # ------------------------------------------------------------------
+    # IMPORTANT:
+    # Create only with fields that actually exist in the Personnel model.
+    #
+    # DO NOT pass directory_id / department_id here.
+    # Those fields are not defined on Personnel and would raise:
+    # TypeError: '<field>' is an invalid keyword argument for Personnel
+    #
+    # Organizational membership to Directory/Department belongs to the
+    # PersonnelDepartmentAssignment model and is not part of the bootstrap
+    # seed-admin responsibility in the current provided source-of-truth.
+    # ------------------------------------------------------------------
     personnel = Personnel(
         agm="SYS-ADMIN-001",
         aem=None,
@@ -323,8 +368,6 @@ def execute_seed_admin(form_data: Mapping[str, Any]) -> OperationResult:
         last_name="Administrator",
         is_active=True,
         service_unit_id=None,
-        directory_id=None,
-        department_id=None,
     )
     db.session.add(personnel)
     db.session.flush()
@@ -357,4 +400,3 @@ __all__ = [
     "build_seed_admin_page_context",
     "execute_seed_admin",
 ]
-
