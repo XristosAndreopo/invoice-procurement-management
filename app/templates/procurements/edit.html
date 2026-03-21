@@ -55,9 +55,15 @@
       <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
         ΚΠΔ
       </button>
-      <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
-        ΔΙΑΒΙΒΑΣΤΙΚΟ
-      </button>
+
+      <a
+        class="btn btn-sm btn-outline-primary"
+        href="{{ url_for('procurements.report_expense_transmittal_docx', procurement_id=procurement.id) }}"
+        title="Λήψη Διαβιβαστικού Δαπάνης (DOCX)"
+      >
+        Διαβιβαστικό Δαπάνης
+      </a>
+      
     {% endif %}
 
     <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">
