@@ -32,6 +32,11 @@ from ...reports.expense_transmittal_docx import (
     build_expense_transmittal_docx,
     build_expense_transmittal_filename,
 )
+from ...reports.invitation_docx import (
+    InvitationConstants,
+    build_invitation_docx,
+    build_invitation_filename,
+)
 from ...reports.proforma_invoice import ProformaConstants, build_proforma_invoice_pdf
 from ...security import procurement_access_required, procurement_edit_required
 from ...security.procurement_guards import can_mutate_procurement
@@ -175,6 +180,70 @@ def report_proforma_invoice(procurement_id: int):
     response.headers["Content-Type"] = "application/pdf"
     response.headers["Content-Disposition"] = f'inline; filename="proforma_{procurement.id}.pdf"'
     return response
+
+
+@procurements_bp.route("/<int:procurement_id>/reports/invitation", methods=["GET"])
+@login_required
+@procurement_access_required(load_procurement)
+def report_invitation_docx(procurement_id: int):
+    """
+    Build and return the Invitation DOCX.
+
+    REQUIRED RELATIONSHIPS
+    ----------------------
+    This report needs:
+    - service_unit
+    - handler_assignment.directory
+    - winner supplier
+    - materials
+    """
+    procurement = (
+        Procurement.query.options(
+            joinedload(Procurement.service_unit),
+            joinedload(Procurement.handler_personnel),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.directory
+            ),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.department
+            ),
+            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+            joinedload(Procurement.materials),
+            joinedload(Procurement.withholding_profile),
+            joinedload(Procurement.income_tax_rule),
+        )
+        .get_or_404(procurement_id)
+    )
+
+    winner = procurement.winner_supplier_obj()
+    analysis = procurement.compute_payment_analysis()
+
+    docx_bytes = build_invitation_docx(
+        procurement=procurement,
+        service_unit=procurement.service_unit,
+        winner=winner,
+        analysis=analysis,
+        constants=InvitationConstants(),
+    )
+
+    filename = build_invitation_filename(
+        procurement=procurement,
+        winner=winner,
+    )
+    filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+    if not filename.lower().endswith(".docx"):
+        filename = f"{filename}.docx"
+
+    buffer = BytesIO(docx_bytes)
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        max_age=0,
+    )
 
 
 @procurements_bp.route("/<int:procurement_id>/reports/award-decision", methods=["GET"])

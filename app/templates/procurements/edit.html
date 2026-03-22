@@ -20,9 +20,13 @@
     <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
       Δέσμευση
     </button>
-    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+    <a
+      class="btn btn-sm btn-outline-primary"
+      href="{{ url_for('procurements.report_invitation_docx', procurement_id=procurement.id) }}"
+      title="Λήψη Πρόσκλησης (DOCX)"
+    >
       Πρόσκληση
-    </button>
+    </a>
     <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
       Προέγκριση
     </button>
