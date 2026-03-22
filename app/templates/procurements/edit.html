@@ -63,7 +63,7 @@
       >
         Διαβιβαστικό Δαπάνης
       </a>
-      
+
     {% endif %}
 
     <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">
@@ -631,41 +631,113 @@
         <table class="table table-sm align-middle mb-0">
           <thead>
             <tr>
-              <th>Προμηθευτής</th>
-              <th>Προσφορά</th>
-              <th>Μειοδότης</th>
-              <th>Παρατηρήσεις</th>
-              <th></th>
+              <th style="min-width: 280px;">Προμηθευτής</th>
+              <th style="min-width: 150px;">Προσφορά</th>
+              <th style="min-width: 120px;">Μειοδότης</th>
+              <th style="min-width: 260px;">Παρατηρήσεις</th>
+              <th class="text-end" style="min-width: 170px;">Ενέργειες</th>
             </tr>
           </thead>
           <tbody>
             {% for link in procurement.supplies_links %}
+              {% if can_edit %}
+                <form id="supplier-edit-{{ link.id }}"
+                      method="post"
+                      action="{{ url_for('procurements.update_procurement_supplier',
+                        procurement_id=procurement.id, link_id=link.id, next=back_url) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="next" value="{{ back_url }}">
+                </form>
+              {% endif %}
+
               <tr>
-                <td class="small">{{ link.supplier.afm }} - {{ link.supplier.name }}</td>
                 <td class="small">
-                  {% if link.offered_amount is not none %}
-                    {{ "{:,.2f}".format(link.offered_amount) }} €
+                  {% if can_edit %}
+                    <select name="supplier_id" form="supplier-edit-{{ link.id }}" class="form-select form-select-sm" required>
+                      <option value="">(επιλέξτε)</option>
+                      {% for s in suppliers %}
+                        <option value="{{ s.id }}" {% if link.supplier_id == s.id %}selected{% endif %}>
+                          {{ s.afm }} - {{ s.name }}
+                        </option>
+                      {% endfor %}
+                    </select>
                   {% else %}
-                    —
+                    {{ link.supplier.afm }} - {{ link.supplier.name }}
                   {% endif %}
                 </td>
+
                 <td class="small">
-                  {% if link.is_winner %}
-                    <span class="badge bg-success">ΝΑΙ</span>
+                  {% if can_edit %}
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="offered_amount"
+                      form="supplier-edit-{{ link.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ link.offered_amount if link.offered_amount is not none else '' }}"
+                    >
                   {% else %}
-                    —
+                    {% if link.offered_amount is not none %}
+                      {{ "{:,.2f}".format(link.offered_amount) }} €
+                    {% else %}
+                      —
+                    {% endif %}
                   {% endif %}
                 </td>
-                <td class="small text-break" style="max-width: 320px;">{{ link.notes or '—' }}</td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <div class="form-check">
+                      <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="is_winner"
+                        id="supplier_is_winner_{{ link.id }}"
+                        form="supplier-edit-{{ link.id }}"
+                        {% if link.is_winner %}checked{% endif %}
+                      >
+                      <label class="form-check-label small" for="supplier_is_winner_{{ link.id }}">
+                        Μειοδότης
+                      </label>
+                    </div>
+                  {% else %}
+                    {% if link.is_winner %}
+                      <span class="badge bg-success">ΝΑΙ</span>
+                    {% else %}
+                      —
+                    {% endif %}
+                  {% endif %}
+                </td>
+
+                <td class="small text-break" style="max-width: 320px;">
+                  {% if can_edit %}
+                    <textarea
+                      name="notes"
+                      form="supplier-edit-{{ link.id }}"
+                      class="form-control form-control-sm"
+                      rows="2"
+                    >{{ link.notes or '' }}</textarea>
+                  {% else %}
+                    {{ link.notes or '—' }}
+                  {% endif %}
+                </td>
+
                 <td class="text-end">
                   {% if can_edit %}
-                    <form method="post"
-                          action="{{ url_for('procurements.delete_procurement_supplier',
-                            procurement_id=procurement.id, link_id=link.id, next=back_url) }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="next" value="{{ back_url }}">
-                      <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                    </form>
+                    <div class="d-flex justify-content-end gap-2">
+                      <button class="btn btn-sm btn-outline-primary" form="supplier-edit-{{ link.id }}">
+                        Αποθήκευση
+                      </button>
+
+                      <form method="post"
+                            action="{{ url_for('procurements.delete_procurement_supplier',
+                              procurement_id=procurement.id, link_id=link.id, next=back_url) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="next" value="{{ back_url }}">
+                        <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
+                      </form>
+                    </div>
                   {% endif %}
                 </td>
               </tr>
@@ -731,35 +803,139 @@
         <table class="table table-sm align-middle mb-0">
           <thead>
             <tr>
-              <th>Περιγραφή</th>
-              <th>CPV</th>
-              <th>NSN</th>
-              <th>Μονάδα</th>
-              <th class="text-end">Ποσότητα</th>
-              <th class="text-end">Τιμή</th>
-              <th class="text-end">Σύνολο</th>
-              <th></th>
+              <th style="min-width: 250px;">Περιγραφή</th>
+              <th style="min-width: 240px;">CPV</th>
+              <th style="min-width: 140px;">NSN</th>
+              <th style="min-width: 120px;">Μονάδα</th>
+              <th class="text-end" style="min-width: 120px;">Ποσότητα</th>
+              <th class="text-end" style="min-width: 120px;">Τιμή</th>
+              <th class="text-end" style="min-width: 130px;">Σύνολο</th>
+              <th class="text-end" style="min-width: 170px;">Ενέργειες</th>
             </tr>
           </thead>
           <tbody>
             {% for line in procurement.materials %}
+              {% if can_edit %}
+                <form id="material-edit-{{ line.id }}"
+                      method="post"
+                      action="{{ url_for('procurements.update_material_line',
+                        procurement_id=procurement.id, line_id=line.id, next=back_url) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="next" value="{{ back_url }}">
+                </form>
+              {% endif %}
+
               <tr>
-                <td class="small">{{ line.description }}</td>
-                <td class="small">{{ line.cpv or '—' }}</td>
-                <td class="small">{{ line.nsn or '—' }}</td>
-                <td class="small">{{ line.unit or '—' }}</td>
-                <td class="small text-end">{{ line.quantity }}</td>
-                <td class="small text-end">{{ line.unit_price }}</td>
+                <td class="small">
+                  {% if can_edit %}
+                    <input
+                      name="description"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ line.description }}"
+                      required
+                    >
+                  {% else %}
+                    {{ line.description }}
+                  {% endif %}
+                </td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <select
+                      name="cpv"
+                      form="material-edit-{{ line.id }}"
+                      class="form-select form-select-sm js-select2"
+                      data-placeholder="Αναζήτηση CPV..."
+                      title="CPV"
+                    >
+                      <option value=""></option>
+                      {% for r in (cpv_rows or []) %}
+                        <option value="{{ r.cpv }}" {% if line.cpv == r.cpv %}selected{% endif %}>
+                          {{ r.cpv }}{% if r.description %} — {{ r.description }}{% endif %}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  {% else %}
+                    {{ line.cpv or '—' }}
+                  {% endif %}
+                </td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <input
+                      name="nsn"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ line.nsn or '' }}"
+                    >
+                  {% else %}
+                    {{ line.nsn or '—' }}
+                  {% endif %}
+                </td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <input
+                      name="unit"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ line.unit or '' }}"
+                    >
+                  {% else %}
+                    {{ line.unit or '—' }}
+                  {% endif %}
+                </td>
+
+                <td class="small text-end">
+                  {% if can_edit %}
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="quantity"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm text-end"
+                      value="{{ line.quantity if line.quantity is not none else '' }}"
+                    >
+                  {% else %}
+                    {{ line.quantity }}
+                  {% endif %}
+                </td>
+
+                <td class="small text-end">
+                  {% if can_edit %}
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="unit_price"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm text-end"
+                      value="{{ line.unit_price if line.unit_price is not none else '' }}"
+                    >
+                  {% else %}
+                    {{ line.unit_price }}
+                  {% endif %}
+                </td>
+
                 <td class="small text-end">{{ "{:,.2f}".format(line.total_pre_vat) }} €</td>
+
                 <td class="text-end">
                   {% if can_edit %}
-                    <form method="post"
-                          action="{{ url_for('procurements.delete_material_line',
-                            procurement_id=procurement.id, line_id=line.id, next=back_url) }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="next" value="{{ back_url }}">
-                      <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                    </form>
+                    <div class="d-flex justify-content-end gap-2">
+                      <button class="btn btn-sm btn-outline-primary" form="material-edit-{{ line.id }}">
+                        Αποθήκευση
+                      </button>
+
+                      <form method="post"
+                            action="{{ url_for('procurements.delete_material_line',
+                              procurement_id=procurement.id, line_id=line.id, next=back_url) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="next" value="{{ back_url }}">
+                        <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
+                      </form>
+                    </div>
                   {% endif %}
                 </td>
               </tr>

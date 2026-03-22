@@ -58,6 +58,8 @@ from ...services.procurement.related_entities import (
     execute_add_procurement_supplier,
     execute_delete_material_line,
     execute_delete_procurement_supplier,
+    execute_update_material_line,
+    execute_update_procurement_supplier,
 )
 from ...services.procurement_service import (
     is_in_implementation_phase,
@@ -447,6 +449,29 @@ def add_procurement_supplier(procurement_id: int):
     )
 
 
+@procurements_bp.route("/<int:procurement_id>/suppliers/<int:link_id>/update", methods=["POST"])
+@login_required
+@procurement_edit_required(load_procurement)
+def update_procurement_supplier(procurement_id: int, link_id: int):
+    procurement = Procurement.query.get_or_404(procurement_id)
+    next_url = next_from_request("procurements.inbox_procurements")
+
+    result = execute_update_procurement_supplier(procurement, link_id, request.form)
+    if result.not_found:
+        abort(404)
+
+    for item in result.flashes:
+        flash(item.message, item.category)
+
+    return redirect(
+        url_for(
+            "procurements.edit_procurement",
+            procurement_id=procurement.id,
+            next=next_url,
+        )
+    )
+
+
 @procurements_bp.route("/<int:procurement_id>/suppliers/<int:link_id>/delete", methods=["POST"])
 @login_required
 @procurement_edit_required(load_procurement)
@@ -478,6 +503,29 @@ def add_material_line(procurement_id: int):
     next_url = next_from_request("procurements.inbox_procurements")
 
     result = execute_add_material_line(procurement, request.form)
+    for item in result.flashes:
+        flash(item.message, item.category)
+
+    return redirect(
+        url_for(
+            "procurements.edit_procurement",
+            procurement_id=procurement.id,
+            next=next_url,
+        )
+    )
+
+
+@procurements_bp.route("/<int:procurement_id>/materials/<int:line_id>/update", methods=["POST"])
+@login_required
+@procurement_edit_required(load_procurement)
+def update_material_line(procurement_id: int, line_id: int):
+    procurement = Procurement.query.get_or_404(procurement_id)
+    next_url = next_from_request("procurements.inbox_procurements")
+
+    result = execute_update_material_line(procurement, line_id, request.form)
+    if result.not_found:
+        abort(404)
+
     for item in result.flashes:
         flash(item.message, item.category)
 
