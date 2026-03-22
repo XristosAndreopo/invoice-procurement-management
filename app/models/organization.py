@@ -117,6 +117,11 @@ class ServiceUnit(db.Model):
     - prefecture:
       Prefecture / νομός of the service unit.
 
+    - postal_code:
+      Postal code / Τ.Κ. of the service unit.
+      Stored as text intentionally, not numeric, so leading zeroes are preserved
+      and the field remains compatible with user-entered formatting.
+
     - commander_role_type:
       Stores whether the entered person/title is "Διοικητής" or "Κυβερνήτης".
 
@@ -156,6 +161,7 @@ class ServiceUnit(db.Model):
     address = db.Column(db.String(255), nullable=True)
     region = db.Column(db.String(255), nullable=True)
     prefecture = db.Column(db.String(255), nullable=True)
+    postal_code = db.Column(db.String(20), nullable=True)
 
     phone = db.Column(db.String(50), nullable=True)
 

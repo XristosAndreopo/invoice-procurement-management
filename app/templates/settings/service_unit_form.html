@@ -164,6 +164,22 @@
           </div>
 
           <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Τ.Κ.</label>
+            <div class="col-8">
+              <input
+                type="text"
+                name="postal_code"
+                class="form-control form-control-sm"
+                placeholder="π.χ. 85400"
+                value="{{ unit.postal_code if unit and unit.postal_code is not none else '' }}"
+              >
+              <div class="form-text">
+                Αποθηκεύεται ως text ώστε να διατηρούνται leading zeroes και ακριβής μορφοποίηση.
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τηλέφωνο</label>
             <div class="col-8">
               <input
@@ -265,7 +281,7 @@
                 <li>Ο κωδικός, η περιγραφή και η συντομογραφία ελέγχονται για διπλότυπα server-side.</li>
                 <li>Οι ρόλοι Manager/Deputy ορίζονται ξεχωριστά.</li>
                 <li>Η οργανωτική δομή και οι λοιποί ρόλοι γίνονται από την ενιαία σελίδα “Οργάνωση”.</li>
-                <li>Email, διεύθυνση, περιοχή, νομός και τηλέφωνο αποθηκεύονται στα βασικά στοιχεία της Υπηρεσίας.</li>
+                <li>Email, διεύθυνση, περιοχή, νομός, Τ.Κ. και τηλέφωνο αποθηκεύονται στα βασικά στοιχεία της Υπηρεσίας.</li>
                 <li>Η «ΔΙΕΥΘΥΝΣΗ Διαχειριστή Εφαρμογής» είναι free-text και δεν γίνεται lookup από άλλον πίνακα.</li>
               </ul>
             </div>

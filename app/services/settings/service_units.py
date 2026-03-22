@@ -165,6 +165,7 @@ def execute_create_service_unit(form_data: Mapping[str, Any]) -> OperationResult
     address = (form_data.get("address") or "").strip()
     region = (form_data.get("region") or "").strip()
     prefecture = (form_data.get("prefecture") or "").strip()
+    postal_code = (form_data.get("postal_code") or "").strip()
 
     phone = (form_data.get("phone") or "").strip()
 
@@ -217,6 +218,7 @@ def execute_create_service_unit(form_data: Mapping[str, Any]) -> OperationResult
         address=address or None,
         region=region or None,
         prefecture=prefecture or None,
+        postal_code=postal_code or None,
         phone=phone or None,
         commander=commander or None,
         commander_role_type=commander_role_type,
@@ -257,6 +259,7 @@ def execute_edit_service_unit_info(
     address = (form_data.get("address") or "").strip()
     region = (form_data.get("region") or "").strip()
     prefecture = (form_data.get("prefecture") or "").strip()
+    postal_code = (form_data.get("postal_code") or "").strip()
 
     phone = (form_data.get("phone") or "").strip()
 
@@ -323,6 +326,7 @@ def execute_edit_service_unit_info(
     unit.address = address or None
     unit.region = region or None
     unit.prefecture = prefecture or None
+    unit.postal_code = postal_code or None
 
     unit.phone = phone or None
 
@@ -538,6 +542,7 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
     - Διεύθυνση / address
     - Περιοχή / region
     - Νομός / prefecture
+    - Τ.Κ. / postal code / postal_code / ταχυδρομικός κώδικας
     - Τηλέφωνο / phone
 
     - Διοικητής/Κυβερνήτης / commander
@@ -613,6 +618,13 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
     address_idx = idx_map.get("διευθυνση", idx_map.get("address"))
     region_idx = idx_map.get("περιοχη", idx_map.get("region"))
     prefecture_idx = idx_map.get("νομος", idx_map.get("prefecture"))
+    postal_code_idx = idx_map.get(
+        "τ.κ.",
+        idx_map.get(
+            "ταχυδρομικος κωδικας",
+            idx_map.get("postal code", idx_map.get("postal_code")),
+        ),
+    )
 
     phone_idx = idx_map.get("τηλεφωνο", idx_map.get("phone"))
 
@@ -705,6 +717,7 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
             address=safe_cell_str(cell_at(row, address_idx)) or None,
             region=safe_cell_str(cell_at(row, region_idx)) or None,
             prefecture=safe_cell_str(cell_at(row, prefecture_idx)) or None,
+            postal_code=safe_cell_str(cell_at(row, postal_code_idx)) or None,
             phone=safe_cell_str(cell_at(row, phone_idx)) or None,
             commander=safe_cell_str(cell_at(row, commander_idx)) or None,
             commander_role_type=commander_role_type,
