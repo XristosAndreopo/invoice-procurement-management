@@ -50,6 +50,9 @@ from ..shared.excel_imports import build_header_index, cell_at, safe_cell_str
 from ..shared.operation_results import FlashMessage, OperationResult
 
 
+VALID_COMMANDER_ROLE_TYPES = {"Διοικητής", "Κυβερνήτης"}
+
+
 def _active_personnel_for_dropdown() -> list[Personnel]:
     """
     Return all active Personnel ordered for dropdown usage.
@@ -62,6 +65,43 @@ def _active_personnel_for_dropdown() -> list[Personnel]:
         .order_by(Personnel.last_name.asc(), Personnel.first_name.asc())
         .all()
     )
+
+
+def _normalize_nullable_text(value: Any) -> str | None:
+    """
+    Normalize any input to trimmed nullable text.
+
+    Empty strings become None.
+    Non-string values are converted to string and stripped.
+    """
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_commander_role_type(value: Any) -> str | None:
+    """
+    Normalize the commander/governor role type.
+
+    Allowed persisted values:
+    - Διοικητής
+    - Κυβερνήτης
+
+    Empty input becomes None.
+
+    Raises:
+        ValueError: if a non-empty value is provided but is not valid.
+    """
+    normalized = _normalize_nullable_text(value)
+    if normalized is None:
+        return None
+
+    if normalized not in VALID_COMMANDER_ROLE_TYPES:
+        raise ValueError("Μη έγκυρος τύπος Διοικητή/Κυβερνήτη.")
+
+    return normalized
 
 
 def build_service_units_list_page_context() -> dict[str, Any]:
@@ -93,6 +133,7 @@ def build_service_unit_form_page_context(
         "unit": unit,
         "form_title": form_title,
         "is_create": is_create,
+        "commander_role_type_options": ("Διοικητής", "Κυβερνήτης"),
     }
 
 
@@ -119,16 +160,34 @@ def execute_create_service_unit(form_data: Mapping[str, Any]) -> OperationResult
     code = (form_data.get("code") or "").strip()
     short_name = (form_data.get("short_name") or "").strip()
     aahit = (form_data.get("aahit") or "").strip()
+
+    email = (form_data.get("email") or "").strip()
     address = (form_data.get("address") or "").strip()
+    region = (form_data.get("region") or "").strip()
+    prefecture = (form_data.get("prefecture") or "").strip()
+
     phone = (form_data.get("phone") or "").strip()
+
     commander = (form_data.get("commander") or "").strip()
-    curator = (form_data.get("curator") or "").strip()
+    commander_role_type_raw = form_data.get("commander_role_type")
+
+    application_administrator = (form_data.get("curator") or "").strip()
+    application_admin_directory = (form_data.get("application_admin_directory") or "").strip()
+
     supply_officer = (form_data.get("supply_officer") or "").strip()
 
     if not description:
         return OperationResult(
             ok=False,
             flashes=(FlashMessage("Η περιγραφή Υπηρεσίας είναι υποχρεωτική.", "danger"),),
+        )
+
+    try:
+        commander_role_type = _normalize_commander_role_type(commander_role_type_raw)
+    except ValueError as exc:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage(str(exc), "danger"),),
         )
 
     if ServiceUnit.query.filter_by(description=description).first():
@@ -154,10 +213,15 @@ def execute_create_service_unit(form_data: Mapping[str, Any]) -> OperationResult
         code=code or None,
         short_name=short_name or None,
         aahit=aahit or None,
+        email=email or None,
         address=address or None,
+        region=region or None,
+        prefecture=prefecture or None,
         phone=phone or None,
         commander=commander or None,
-        curator=curator or None,
+        commander_role_type=commander_role_type,
+        curator=application_administrator or None,
+        application_admin_directory=application_admin_directory or None,
         supply_officer=supply_officer or None,
         manager_personnel_id=None,
         deputy_personnel_id=None,
@@ -188,16 +252,34 @@ def execute_edit_service_unit_info(
     code = (form_data.get("code") or "").strip()
     short_name = (form_data.get("short_name") or "").strip()
     aahit = (form_data.get("aahit") or "").strip()
+
+    email = (form_data.get("email") or "").strip()
     address = (form_data.get("address") or "").strip()
+    region = (form_data.get("region") or "").strip()
+    prefecture = (form_data.get("prefecture") or "").strip()
+
     phone = (form_data.get("phone") or "").strip()
+
     commander = (form_data.get("commander") or "").strip()
-    curator = (form_data.get("curator") or "").strip()
+    commander_role_type_raw = form_data.get("commander_role_type")
+
+    application_administrator = (form_data.get("curator") or "").strip()
+    application_admin_directory = (form_data.get("application_admin_directory") or "").strip()
+
     supply_officer = (form_data.get("supply_officer") or "").strip()
 
     if not description:
         return OperationResult(
             ok=False,
             flashes=(FlashMessage("Η περιγραφή Υπηρεσίας είναι υποχρεωτική.", "danger"),),
+        )
+
+    try:
+        commander_role_type = _normalize_commander_role_type(commander_role_type_raw)
+    except ValueError as exc:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage(str(exc), "danger"),),
         )
 
     duplicate_desc = ServiceUnit.query.filter(
@@ -236,10 +318,22 @@ def execute_edit_service_unit_info(
     unit.code = code or None
     unit.short_name = short_name or None
     unit.aahit = aahit or None
+
+    unit.email = email or None
     unit.address = address or None
+    unit.region = region or None
+    unit.prefecture = prefecture or None
+
     unit.phone = phone or None
+
     unit.commander = commander or None
-    unit.curator = curator or None
+    unit.commander_role_type = commander_role_type
+
+    # Business label: "Διαχειριστής Εφαρμογής"
+    # Persisted storage: existing `curator` column retained intentionally.
+    unit.curator = application_administrator or None
+    unit.application_admin_directory = application_admin_directory or None
+
     unit.supply_officer = supply_officer or None
 
     db.session.flush()
@@ -251,6 +345,7 @@ def execute_edit_service_unit_info(
         flashes=(FlashMessage("Η Υπηρεσία ενημερώθηκε.", "success"),),
         entity_id=unit.id,
     )
+
 
 def execute_assign_service_unit_roles(
     unit: ServiceUnit,
@@ -347,6 +442,7 @@ def execute_assign_service_unit_roles(
         entity_id=unit.id,
     )
 
+
 def execute_delete_service_unit(unit: ServiceUnit) -> OperationResult:
     """
     Delete a ServiceUnit using a defensive, SQLite-safe strategy.
@@ -366,6 +462,12 @@ def execute_delete_service_unit(unit: ServiceUnit) -> OperationResult:
     5. Clear manager/deputy references on the ServiceUnit itself
     6. Abort if Procurements still point to the ServiceUnit
     7. Delete the ServiceUnit
+
+    IMPORTANT
+    ---------
+    The provided Personnel model contains only `service_unit_id` among the
+    service-unit-scoped nullable references. Therefore we clear only that field
+    here, avoiding references to non-existent columns.
     """
     before = serialize_model(unit)
 
@@ -379,7 +481,7 @@ def execute_delete_service_unit(unit: ServiceUnit) -> OperationResult:
 
     # Clear Personnel references that are nullable and scoped to this ServiceUnit.
     Personnel.query.filter_by(service_unit_id=unit.id).update(
-        {"service_unit_id": None, "directory_id": None, "department_id": None},
+        {"service_unit_id": None},
         synchronize_session=False,
     )
 
@@ -431,11 +533,38 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
     - Κωδικός / code
     - Συντομογραφία / short_name
     - ΑΑΗΤ / aahit
+
+    - Email / email / e-mail / υπηρεσιακό email
     - Διεύθυνση / address
+    - Περιοχή / region
+    - Νομός / prefecture
     - Τηλέφωνο / phone
+
+    - Διοικητής/Κυβερνήτης / commander
     - Διοικητής / commander
+    - Κυβερνήτης / commander
+
+    - Τύπος Διοικητή/Κυβερνήτη / commander_role_type
+    - Τύπος Διοικητή - Κυβερνήτη / commander_role_type
+    - commander role type
+
+    - Διαχειριστής Εφαρμογής / curator
     - Επιμελητής / curator
+      (retained for backward-compatible import support)
+
+    - ΔΙΕΥΘΥΝΣΗ Διαχειριστή Εφαρμογής / application_admin_directory
+    - Διεύθυνση Διαχειριστή Εφαρμογής / application_admin_directory
+    - application_admin_directory
+
     - Υπόλογος Εφοδιασμού / supply_officer
+
+    IMPORT POLICY
+    -------------
+    - Only .xlsx is accepted.
+    - Description remains required.
+    - Duplicate checks remain:
+      description, code, short_name.
+    - commander_role_type is validated if provided.
     """
     if not file_storage or not getattr(file_storage, "filename", None):
         return OperationResult(
@@ -475,10 +604,57 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
     code_idx = idx_map.get("κωδικος", idx_map.get("code"))
     short_idx = idx_map.get("συντομογραφια", idx_map.get("short name", idx_map.get("short_name")))
     aahit_idx = idx_map.get("ααητ", idx_map.get("aahit"))
+
+    email_idx = idx_map.get(
+        "email",
+        idx_map.get("e-mail", idx_map.get("υπηρεσιακο email", idx_map.get("υπηρεσιακο e-mail"))),
+    )
+
     address_idx = idx_map.get("διευθυνση", idx_map.get("address"))
+    region_idx = idx_map.get("περιοχη", idx_map.get("region"))
+    prefecture_idx = idx_map.get("νομος", idx_map.get("prefecture"))
+
     phone_idx = idx_map.get("τηλεφωνο", idx_map.get("phone"))
-    commander_idx = idx_map.get("διοικητης", idx_map.get("commander"))
-    curator_idx = idx_map.get("επιμελητης", idx_map.get("curator"))
+
+    commander_idx = idx_map.get(
+        "διοικητης/κυβερνητης",
+        idx_map.get(
+            "διοικητης",
+            idx_map.get("κυβερνητης", idx_map.get("commander")),
+        ),
+    )
+
+    commander_role_type_idx = idx_map.get(
+        "τυπος διοικητη/κυβερνητη",
+        idx_map.get(
+            "τυπος διοικητη - κυβερνητη",
+            idx_map.get(
+                "τυπος διοικητη κυ-βερνητη",
+                idx_map.get("commander_role_type", idx_map.get("commander role type")),
+            ),
+        ),
+    )
+
+    curator_idx = idx_map.get(
+        "διαχειριστης εφαρμογης",
+        idx_map.get("curator", idx_map.get("επιμελητης")),
+    )
+
+    application_admin_directory_idx = idx_map.get(
+        "διευθυνση διαχειριστη εφαρμογης",
+        idx_map.get(
+            "διευθυνση διαχειριστη εφαρμογης",
+            idx_map.get(
+                "application_admin_directory",
+                idx_map.get("διευθυνση διαχειριστη εφαρμογης"),
+            ),
+        ),
+    )
+
+    # Support also uppercase business-style heading "ΔΙΕΥΘΥΝΣΗ Διαχειριστή Εφαρμογής"
+    if application_admin_directory_idx is None:
+        application_admin_directory_idx = idx_map.get("διευθυνση διαχειριστη εφαρμογης")
+
     supply_officer_idx = idx_map.get("υπολογος εφοδιασμου", idx_map.get("supply_officer"))
 
     if desc_idx is None:
@@ -490,6 +666,7 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
     inserted_units: list[ServiceUnit] = []
     skipped_missing = 0
     skipped_duplicate = 0
+    skipped_invalid_role_type = 0
 
     for row in worksheet.iter_rows(min_row=2, values_only=True):
         description = safe_cell_str(cell_at(row, desc_idx))
@@ -512,15 +689,27 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
             skipped_duplicate += 1
             continue
 
+        commander_role_type_raw = safe_cell_str(cell_at(row, commander_role_type_idx)) or None
+        try:
+            commander_role_type = _normalize_commander_role_type(commander_role_type_raw)
+        except ValueError:
+            skipped_invalid_role_type += 1
+            continue
+
         unit = ServiceUnit(
             description=description,
             code=code,
             short_name=short_name,
             aahit=safe_cell_str(cell_at(row, aahit_idx)) or None,
+            email=safe_cell_str(cell_at(row, email_idx)) or None,
             address=safe_cell_str(cell_at(row, address_idx)) or None,
+            region=safe_cell_str(cell_at(row, region_idx)) or None,
+            prefecture=safe_cell_str(cell_at(row, prefecture_idx)) or None,
             phone=safe_cell_str(cell_at(row, phone_idx)) or None,
             commander=safe_cell_str(cell_at(row, commander_idx)) or None,
+            commander_role_type=commander_role_type,
             curator=safe_cell_str(cell_at(row, curator_idx)) or None,
+            application_admin_directory=safe_cell_str(cell_at(row, application_admin_directory_idx)) or None,
             supply_officer=safe_cell_str(cell_at(row, supply_officer_idx)) or None,
             manager_personnel_id=None,
             deputy_personnel_id=None,
@@ -529,9 +718,18 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
         inserted_units.append(unit)
 
     if not inserted_units:
+        details = []
+        if skipped_missing:
+            details.append(f"{skipped_missing} ελλιπείς")
+        if skipped_duplicate:
+            details.append(f"{skipped_duplicate} διπλότυπες")
+        if skipped_invalid_role_type:
+            details.append(f"{skipped_invalid_role_type} με μη έγκυρο τύπο Διοικητή/Κυβερνήτη")
+
+        details_text = ", ".join(details) if details else "χωρίς έγκυρες εγγραφές"
         return OperationResult(
             ok=False,
-            flashes=(FlashMessage("Δεν εισήχθησαν εγγραφές. Ελέγξτε required πεδία/διπλότυπα.", "warning"),),
+            flashes=(FlashMessage(f"Δεν εισήχθησαν εγγραφές. Έλεγχος αρχείου: {details_text}.", "warning"),),
         )
 
     db.session.flush()
@@ -545,9 +743,9 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
             FlashMessage(
                 f"Εισαγωγή ολοκληρώθηκε: {len(inserted_units)} νέες Υπηρεσίες. "
                 f"Παραλείφθηκαν: {skipped_missing} (ελλιπή), "
-                f"{skipped_duplicate} (διπλότυπα).",
+                f"{skipped_duplicate} (διπλότυπα), "
+                f"{skipped_invalid_role_type} (μη έγκυρος τύπος Διοικητή/Κυβερνήτη).",
                 "success",
             ),
         ),
     )
-

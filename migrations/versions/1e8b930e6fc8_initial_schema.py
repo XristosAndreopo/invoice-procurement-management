@@ -1,8 +1,8 @@
-"""initial fresh schema after organization assignment refactor
+"""initial schema
 
-Revision ID: 2532f79230b4
+Revision ID: 1e8b930e6fc8
 Revises: 
-Create Date: 2026-03-18 21:37:02.429717
+Create Date: 2026-03-22 12:46:39.994049
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '2532f79230b4'
+revision = '1e8b930e6fc8'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -110,10 +110,15 @@ def upgrade():
     sa.Column('description', sa.String(length=255), nullable=False),
     sa.Column('short_name', sa.String(length=100), nullable=True),
     sa.Column('aahit', sa.String(length=100), nullable=True),
+    sa.Column('email', sa.String(length=255), nullable=True),
     sa.Column('commander', sa.String(length=255), nullable=True),
+    sa.Column('commander_role_type', sa.String(length=50), nullable=True),
     sa.Column('curator', sa.String(length=255), nullable=True),
+    sa.Column('application_admin_directory', sa.String(length=255), nullable=True),
     sa.Column('supply_officer', sa.String(length=255), nullable=True),
     sa.Column('address', sa.String(length=255), nullable=True),
+    sa.Column('region', sa.String(length=255), nullable=True),
+    sa.Column('prefecture', sa.String(length=255), nullable=True),
     sa.Column('phone', sa.String(length=50), nullable=True),
     sa.Column('manager_personnel_id', sa.Integer(), nullable=True),
     sa.Column('deputy_personnel_id', sa.Integer(), nullable=True),

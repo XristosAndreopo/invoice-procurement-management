@@ -6,30 +6,29 @@ and placeholder replacement.
 
 SOURCE OF TRUTH
 ---------------
-This implementation is aligned strictly to the provided `combined_project.md`.
+This implementation is aligned strictly to the provided current template and
+the current ServiceUnit / Procurement contract.
 
 IMPORTANT FIELD MAPPING RULES
 -----------------------------
-The uploaded DOCX contains legacy placeholders that do not match the current
-Procurement / ServiceUnit model contract. This module intentionally maps the
-document to the current source of truth only.
+The uploaded DOCX contains placeholders that must be resolved from the current
+domain objects only.
 
 Current source-of-truth fields used:
 - procurement.hop_approval
 - procurement.hop_preapproval
 - procurement.aay
 - procurement.protocol_number
-- procurement.committee.description
+- procurement.committee.identity_text
 - procurement.invoice_number
 - procurement.invoice_date
-- procurement.materials_receipt_date
 - procurement.invoice_receipt_date
 - procurement.identity_prosklisis
-- procurement.identity_apofasis_anathesis
-- procurement.contract_number
 - service_unit.description
 - service_unit.phone
-- service_unit.supply_officer
+- service_unit.region
+- service_unit.curator                     -> APPLICATION_ADMIN
+- service_unit.application_admin_directory -> APPLICATION_ADMIN_DIRECTORY
 
 IMPORTANT RENDERING RULES
 -------------------------
@@ -39,13 +38,15 @@ IMPORTANT RENDERING RULES
 4. Each generated line must begin with exactly two tab characters.
 5. Paragraph tab stops / paragraph properties are cloned from paragraph 'ζ.'.
 6. Placeholder replacement must work even when placeholders are split across runs.
+7. Run-level formatting in the template must be preserved as much as possible.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -91,11 +92,21 @@ def _money_plain(value: Any) -> str:
     return text.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def _upper_no_accents(value: Any, default: str = "—") -> str:
+    """
+    Return uppercase Greek/Latin text without accents/diacritics.
+    """
+    text = _safe(value, default=default)
+    normalized = unicodedata.normalize("NFD", text)
+    no_marks = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return unicodedata.normalize("NFC", no_marks).upper()
+
+
 def _upper_service_name(name: str) -> str:
     """
-    Uppercase service name for official document styling.
+    Uppercase service name without accents for official document styling.
     """
-    return (name or "").strip().upper() or "—"
+    return _upper_no_accents(name)
 
 
 def _format_date(value: Any, default: str = "—") -> str:
@@ -113,6 +124,188 @@ def _format_date(value: Any, default: str = "—") -> str:
     except Exception:
         text = str(value).strip()
         return text if text else default
+
+
+def _short_date_el(value: Any | None = None) -> str:
+    """
+    Return date in Greek short format: DD Mon YY.
+
+    Examples:
+    - 07 Μαρ 26
+    - 22 Μαρ 26
+    """
+    months = {
+        1: "Ιαν",
+        2: "Φεβ",
+        3: "Μαρ",
+        4: "Απρ",
+        5: "Μαϊ",
+        6: "Ιουν",
+        7: "Ιουλ",
+        8: "Αυγ",
+        9: "Σεπ",
+        10: "Οκτ",
+        11: "Νοε",
+        12: "Δεκ",
+    }
+
+    dt = value or datetime.now()
+
+    try:
+        day = int(dt.day)
+        month = int(dt.month)
+        year_2d = int(dt.year) % 100
+    except Exception:
+        dt = datetime.now()
+        day = dt.day
+        month = dt.month
+        year_2d = dt.year % 100
+
+    month_label = months.get(month, "")
+    return f"{day:02d} {month_label} {year_2d:02d}".strip()
+
+
+def _int_to_greek_words_genitive(n: int) -> str:
+    """
+    Convert a non-negative integer to Greek words in genitive case,
+    suitable for phrases like:
+
+    - συνολικής αξίας ...
+    - ποσού ...
+
+    Examples:
+    1755 -> χιλίων επτακοσίων πενήντα πέντε
+    20   -> είκοσι
+    200  -> διακοσίων
+    """
+    if n < 0:
+        raise ValueError("Negative values are not supported.")
+    if n == 0:
+        return "μηδενός"
+
+    units = {
+        0: "",
+        1: "ενός",
+        2: "δύο",
+        3: "τριών",
+        4: "τεσσάρων",
+        5: "πέντε",
+        6: "έξι",
+        7: "επτά",
+        8: "οκτώ",
+        9: "εννέα",
+    }
+
+    teens = {
+        10: "δέκα",
+        11: "έντεκα",
+        12: "δώδεκα",
+        13: "δεκατριών",
+        14: "δεκατεσσάρων",
+        15: "δεκαπέντε",
+        16: "δεκαέξι",
+        17: "δεκαεπτά",
+        18: "δεκαοκτώ",
+        19: "δεκαεννέα",
+    }
+
+    tens = {
+        2: "είκοσι",
+        3: "τριάντα",
+        4: "σαράντα",
+        5: "πενήντα",
+        6: "εξήντα",
+        7: "εβδομήντα",
+        8: "ογδόντα",
+        9: "ενενήντα",
+    }
+
+    hundreds = {
+        1: "εκατόν",
+        2: "διακοσίων",
+        3: "τριακοσίων",
+        4: "τετρακοσίων",
+        5: "πεντακοσίων",
+        6: "εξακοσίων",
+        7: "επτακοσίων",
+        8: "οκτακοσίων",
+        9: "εννιακοσίων",
+    }
+
+    def two_digits(num: int) -> str:
+        if num < 10:
+            return units[num]
+        if 10 <= num <= 19:
+            return teens[num]
+
+        t = num // 10
+        u = num % 10
+        if u == 0:
+            return tens[t]
+        return f"{tens[t]} {units[u]}".strip()
+
+    def three_digits(num: int) -> str:
+        if num < 100:
+            return two_digits(num)
+
+        h = num // 100
+        rem = num % 100
+
+        if rem == 0:
+            if h == 1:
+                return "εκατό"
+            return hundreds[h]
+
+        return f"{hundreds[h]} {two_digits(rem)}".strip()
+
+    parts: list[str] = []
+
+    millions = n // 1_000_000
+    remainder = n % 1_000_000
+
+    thousands = remainder // 1_000
+    below_thousand = remainder % 1_000
+
+    if millions:
+        if millions == 1:
+            parts.append("ενός εκατομμυρίου")
+        else:
+            parts.append(f"{three_digits(millions)} εκατομμυρίων")
+
+    if thousands:
+        if thousands == 1:
+            parts.append("χιλίων")
+        else:
+            parts.append(f"{three_digits(thousands)} χιλιάδων")
+
+    if below_thousand:
+        parts.append(three_digits(below_thousand))
+
+    return " ".join(p for p in parts if p).strip()
+
+
+def _money_words_el(value: Any) -> str:
+    """
+    Convert a numeric amount to Greek words in genitive case, suitable for:
+    'συνολικής αξίας ...' or 'ποσού ...'
+
+    Examples:
+    1755.00 -> χιλίων επτακοσίων πενήντα πέντε ευρώ
+    1755.20 -> χιλίων επτακοσίων πενήντα πέντε ευρώ και είκοσι λεπτών
+    12.40   -> δώδεκα ευρώ και σαράντα λεπτών
+    """
+    amount = _to_decimal(value).quantize(Decimal("0.01"))
+
+    euros = int(amount)
+    cents = int((amount - Decimal(euros)) * 100)
+
+    euro_words = _int_to_greek_words_genitive(euros)
+
+    if cents == 0:
+        return f"{euro_words} ευρώ"
+
+    cents_words = _int_to_greek_words_genitive(cents)
+    return f"{euro_words} ευρώ και {cents_words} λεπτών"
 
 
 def _template_path() -> Path:
@@ -157,6 +350,11 @@ def _copy_run_style(src_run, dst_run) -> None:
     try:
         if src_run.font.color is not None and src_run.font.color.rgb is not None:
             dst_run.font.color.rgb = src_run.font.color.rgb
+    except Exception:
+        pass
+
+    try:
+        dst_run.font.highlight_color = src_run.font.highlight_color
     except Exception:
         pass
 
@@ -319,6 +517,22 @@ def _resolve_document_total(procurement: Any, analysis: dict[str, Any]) -> str:
     return _money_plain(analysis.get("sum_total", 0))
 
 
+def _resolve_document_total_value(procurement: Any, analysis: dict[str, Any]) -> Any:
+    """
+    Resolve the numeric total value shown in the transmittal document
+    for both numeric and text rendering.
+    """
+    grand_total = getattr(procurement, "grand_total", None)
+    if grand_total is not None:
+        return grand_total
+
+    payable_total = analysis.get("payable_total")
+    if payable_total is not None:
+        return payable_total
+
+    return analysis.get("sum_total", 0)
+
+
 def _resolve_analysis_total(procurement: Any, analysis: dict[str, Any]) -> Decimal:
     """
     Resolve the amount threshold used for supporting-documents visibility.
@@ -396,22 +610,30 @@ def _resolve_committee_description(procurement: Any) -> str:
         return "—"
     return _safe(getattr(committee, "identity_text", None))
 
-def _resolve_supply_officer(service_unit: Any) -> str:
+
+def _resolve_application_admin(service_unit: Any) -> str:
     """
-    Resolve the handling officer text for the final paragraph.
+    Resolve application administrator text.
 
     SOURCE OF TRUTH
     ---------------
-    The user requested that:
-    "Χειριστής Θέματος" must show the Επιμελητής της Υπηρεσίας.
-
     In the current ServiceUnit model:
-    - curator = Επιμελητής
-    - supply_officer = Υπόλογος Εφοδιασμού
-
-    Therefore this report field must use `curator`.
+    - curator = Διαχειριστής Εφαρμογής
     """
     return _safe(getattr(service_unit, "curator", None))
+
+
+def _resolve_application_admin_directory(service_unit: Any) -> str:
+    """
+    Resolve the free-text application-admin directory field.
+
+    SOURCE OF TRUTH
+    ---------------
+    In the current ServiceUnit model:
+    - application_admin_directory = free-text ΔΙΕΥΘΥΝΣΗ
+    """
+    return _safe(getattr(service_unit, "application_admin_directory", None))
+
 
 def _greek_enumeration_labels() -> list[str]:
     """
@@ -442,8 +664,6 @@ def _build_supporting_document_items(procurement: Any, analysis: dict[str, Any])
 
     full_items = [
         f"Πρόσκληση Υποβολής Προσφοράς με {_safe(getattr(procurement, 'identity_prosklisis', None))}.",
-        f"Απόφαση Ανάθεσης Παροχής Υπηρεσιών με {_safe(getattr(procurement, 'identity_apofasis_anathesis', None))}.",
-        f"Σύμβαση Παροχής Υπηρεσιών υπ’ αριθμόν {_safe(getattr(procurement, 'contract_number', None))}.",
         "Βεβαίωση ΙΒΑΝ.",
         "Υπεύθυνη δήλωση στοιχείων επικοινωνίας και τραπεζικών στοιχείων.",
         "Πιστοποιητικό Εκπροσώπησης.",
@@ -598,52 +818,47 @@ def build_expense_transmittal_docx(
     proc_type = _resolve_proc_type(procurement)
     winner_line = _winner_supplier_line(winner)
     ml_total = _resolve_document_total(procurement, analysis)
+    ml_total_words = _money_words_el(_resolve_document_total_value(procurement, analysis))
     committee_description = _resolve_committee_description(procurement)
-    supply_officer = _resolve_supply_officer(service_unit)
+    application_admin = _resolve_application_admin(service_unit)
+    application_admin_directory = _resolve_application_admin_directory(service_unit)
     supporting_items = _build_supporting_document_items(procurement, analysis)
 
     invoice_number = _safe(getattr(procurement, "invoice_number", None))
     invoice_date = _format_date(getattr(procurement, "invoice_date", None))
-    materials_receipt_date = _format_date(getattr(procurement, "materials_receipt_date", None))
     invoice_receipt_date = _format_date(getattr(procurement, "invoice_receipt_date", None))
     identity_prosklisis = _safe(getattr(procurement, "identity_prosklisis", None))
-    identity_apofasis_anathesis = _safe(getattr(procurement, "identity_apofasis_anathesis", None))
-    contract_number = _safe(getattr(procurement, "contract_number", None))
 
     mapping: dict[str, str] = {
-        # Canonical placeholders
         "{{SERVICE_UNIT_NAME}}": _upper_service_name(
             _safe(getattr(service_unit, "description", None), default="—")
         ),
+        "{{APPLICATION_ADMIN_DIRECTORY}}": application_admin_directory,
+        "{{APPLICATION_ADMIN}}": application_admin,
         "{{SERVICE_UNIT_PHONE}}": _safe(getattr(service_unit, "phone", None)),
+        "{{SERVICE_UNIT_REGION}}": _safe(getattr(service_unit, "region", None)),
+        "{{SHORT_DATE}}": _short_date_el(),
         "{{PROC_TYPE}}": proc_type,
         "{{procurement.hop_approval}}": _safe(getattr(procurement, "hop_approval", None)),
         "{{procurement.hop_preapproval}}": _safe(getattr(procurement, "hop_preapproval", None)),
+        "{{procurement. hop_preapproval}}": _safe(getattr(procurement, "hop_preapproval", None)),
         "{{procurement.aay}}": _safe(getattr(procurement, "aay", None)),
         "{{procurement.protocol_number}}": _safe(getattr(procurement, "protocol_number", None)),
+        "{{procurement. protocol_number}}": _safe(getattr(procurement, "protocol_number", None)),
         "{{procurement.committee_description}}": committee_description,
         "{{WINNER_SUPPLIER_LINE}}": winner_line,
         "{{procurement.invoice_number}}": invoice_number,
         "{{procurement.invoice_date}}": invoice_date,
         "{{ML_TOTAL}}": ml_total,
-        "{{procurement.materials_receipt_date}}": materials_receipt_date,
+        "{{ML_TOTAL_WORDS}}": ml_total_words,
         "{{procurement.invoice_receipt_date}}": invoice_receipt_date,
         "{{procurement.identity_prosklisis}}": identity_prosklisis,
-        "{{procurement.identity_apofasis_anathesis}}": identity_apofasis_anathesis,
-        "{{procurement.contract_number}}": contract_number,
-        "{{SERVICE_UNIT_SUPPLY_OFFICER}}": supply_officer,
 
-        # Legacy placeholders from uploaded template
+        # Legacy placeholders retained defensively
         "{{ProcurementCommittee.description}}": committee_description,
         "{{procurement.invoice}}": invoice_number,
-        "{{procurement.date}}": materials_receipt_date,
-        "{{MANAGER_SERVICE}}": supply_officer,
-
-        # Legacy placeholders with accidental spaces
-        "{{procurement. hop_preapproval}}": _safe(getattr(procurement, "hop_preapproval", None)),
-        "{{procurement. protocol_number}}": _safe(getattr(procurement, "protocol_number", None)),
-        "{{procurement. identity_apofasis_anathesis}}": identity_apofasis_anathesis,
-        "{{procurement. contract_number}}": contract_number,
+        "{{procurement.date}}": invoice_date,
+        "{{MANAGER_SERVICE}}": application_admin,
     }
 
     _replace_placeholders_everywhere(doc, mapping)

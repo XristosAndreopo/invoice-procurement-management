@@ -101,6 +101,36 @@ class Personnel(db.Model):
 class ServiceUnit(db.Model):
     """
     Organizational service / unit.
+
+    NOTES ABOUT THE NEW FIELDS
+    --------------------------
+    This model now stores additional service-unit metadata required by the
+    Settings > Service Unit form and the Excel import flow.
+
+    Added fields:
+    - email:
+      Contact email of the service unit.
+
+    - region:
+      Region / περιοχή of the service unit.
+
+    - prefecture:
+      Prefecture / νομός of the service unit.
+
+    - commander_role_type:
+      Stores whether the entered person/title is "Διοικητής" or "Κυβερνήτης".
+
+    - application_admin_directory:
+      Free-text field storing the ΔΙΕΥΘΥΝΣΗ to which the
+      "Διαχειριστής Εφαρμογής" belongs.
+
+    BACKWARD-COMPATIBLE STORAGE DECISION
+    ------------------------------------
+    The existing `curator` column is preserved and remains the persisted string
+    field for the business label "Διαχειριστής Εφαρμογής".
+
+    This is intentional to minimize breakage in existing code paths and database
+    installations, while fully changing the UI/business meaning.
     """
 
     __tablename__ = "service_units"
@@ -112,11 +142,21 @@ class ServiceUnit(db.Model):
     short_name = db.Column(db.String(100))
 
     aahit = db.Column(db.String(100))
+
+    email = db.Column(db.String(255), nullable=True)
+
     commander = db.Column(db.String(255))
+    commander_role_type = db.Column(db.String(50), nullable=True)
+
     curator = db.Column(db.String(255))
+    application_admin_directory = db.Column(db.String(255), nullable=True)
+
     supply_officer = db.Column(db.String(255))
 
     address = db.Column(db.String(255), nullable=True)
+    region = db.Column(db.String(255), nullable=True)
+    prefecture = db.Column(db.String(255), nullable=True)
+
     phone = db.Column(db.String(50), nullable=True)
 
     manager_personnel_id = db.Column(

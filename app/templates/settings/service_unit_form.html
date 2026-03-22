@@ -106,6 +106,22 @@
           </div>
 
           <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Email</label>
+            <div class="col-8">
+              <input
+                type="email"
+                name="email"
+                class="form-control form-control-sm"
+                placeholder="π.χ. unit@example.mil.gr"
+                value="{{ unit.email if unit and unit.email is not none else '' }}"
+              >
+              <div class="form-text">
+                Αποθηκεύεται ως email Υπηρεσίας.
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Διεύθυνση</label>
             <div class="col-8">
               <input
@@ -118,6 +134,32 @@
               <div class="form-text">
                 Χρησιμοποιείται σε reports και σε βασική ταυτοποίηση της Υπηρεσίας.
               </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Περιοχή</label>
+            <div class="col-8">
+              <input
+                type="text"
+                name="region"
+                class="form-control form-control-sm"
+                placeholder="Περιοχή Υπηρεσίας"
+                value="{{ unit.region if unit and unit.region is not none else '' }}"
+              >
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Νομός</label>
+            <div class="col-8">
+              <input
+                type="text"
+                name="prefecture"
+                class="form-control form-control-sm"
+                placeholder="Νομός Υπηρεσίας"
+                value="{{ unit.prefecture if unit and unit.prefecture is not none else '' }}"
+              >
             </div>
           </div>
 
@@ -138,7 +180,7 @@
           </div>
 
           <div class="mb-2 row align-items-center">
-            <label class="col-4 col-form-label col-form-label-sm">Διοικητής</label>
+            <label class="col-4 col-form-label col-form-label-sm">Διοικητής/Κυβερνήτης</label>
             <div class="col-8">
               <input
                 type="text"
@@ -150,7 +192,30 @@
           </div>
 
           <div class="mb-2 row align-items-center">
-            <label class="col-4 col-form-label col-form-label-sm">Επιμελητής</label>
+            <label class="col-4 col-form-label col-form-label-sm">Τύπος Διοικητή/Κυβερνήτη</label>
+            <div class="col-8">
+              <select
+                name="commander_role_type"
+                class="form-select form-select-sm"
+              >
+                <option value="">-- Επιλογή --</option>
+                {% for option in commander_role_type_options %}
+                  <option
+                    value="{{ option }}"
+                    {% if unit and unit.commander_role_type == option %}selected{% endif %}
+                  >
+                    {{ option }}
+                  </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                Επιλέγεις αν το πρόσωπο/ρόλος είναι Διοικητής ή Κυβερνήτης.
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Διαχειριστής Εφαρμογής</label>
             <div class="col-8">
               <input
                 type="text"
@@ -158,6 +223,22 @@
                 class="form-control form-control-sm"
                 value="{{ unit.curator if unit and unit.curator is not none else '' }}"
               >
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">ΔΙΕΥΘΥΝΣΗ Διαχειριστή Εφαρμογής</label>
+            <div class="col-8">
+              <input
+                type="text"
+                name="application_admin_directory"
+                class="form-control form-control-sm"
+                placeholder="Ελεύθερο κείμενο - δεν τραβάει δεδομένα από αλλού"
+                value="{{ unit.application_admin_directory if unit and unit.application_admin_directory is not none else '' }}"
+              >
+              <div class="form-text">
+                Αποθηκεύεται αυτούσιο ως απλό text.
+              </div>
             </div>
           </div>
 
@@ -184,7 +265,8 @@
                 <li>Ο κωδικός, η περιγραφή και η συντομογραφία ελέγχονται για διπλότυπα server-side.</li>
                 <li>Οι ρόλοι Manager/Deputy ορίζονται ξεχωριστά.</li>
                 <li>Η οργανωτική δομή και οι λοιποί ρόλοι γίνονται από την ενιαία σελίδα “Οργάνωση”.</li>
-                <li>Διεύθυνση και τηλέφωνο χρειάζονται στα reports.</li>
+                <li>Email, διεύθυνση, περιοχή, νομός και τηλέφωνο αποθηκεύονται στα βασικά στοιχεία της Υπηρεσίας.</li>
+                <li>Η «ΔΙΕΥΘΥΝΣΗ Διαχειριστή Εφαρμογής» είναι free-text και δεν γίνεται lookup από άλλον πίνακα.</li>
               </ul>
             </div>
           </div>
@@ -204,4 +286,3 @@
   </div>
 </div>
 {% endblock %}
-

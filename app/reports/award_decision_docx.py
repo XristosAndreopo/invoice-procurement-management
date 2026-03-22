@@ -27,10 +27,28 @@ It does not store:
 
 Therefore this report must look up the ALE master row explicitly through the
 shared master-data service.
+
+TEMPLATE ALIGNMENT
+------------------
+This implementation is aligned to the current final award decision DOCX template.
+
+Confirmed placeholders present in the template include:
+- {{SHORT_DATE}}
+- {{SERVICE_UNIT_NAME}}
+- {{SERVICE_UNIT_PHONE}}
+- {{SERVICE_UNIT_REGION}}
+- {{COMMANDER_ROLE_TYPE}}
+- {{service.commander}}
+- {{WINNER_SUPPLIER_LINE}}
+- {{HANDLER_DIRECTORY}}
+- {{HANDLER_DEPARTMENT}}
+- {{ML_TOTAL_WORDS}}
+- cost-analysis placeholders
 """
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -76,8 +94,222 @@ def _percent(v: Any) -> str:
     return s
 
 
+def _upper_no_accents(value: Any, default: str = "—") -> str:
+    """
+    Return uppercase Greek/Latin text without accents/diacritics.
+
+    Example:
+    Υπηρεσία Ναυτικών Τεχνικών Εγκαταστάσεων Λέρου
+    -> ΥΠΗΡΕΣΙΑ ΝΑΥΤΙΚΩΝ ΤΕΧΝΙΚΩΝ ΕΓΚΑΤΑΣΤΑΣΕΩΝ ΛΕΡΟΥ
+    """
+    text = _safe(value, default=default)
+
+    normalized = unicodedata.normalize("NFD", text)
+    no_marks = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return unicodedata.normalize("NFC", no_marks).upper()
+
+
 def _upper_service_name(name: str) -> str:
-    return (name or "").strip().upper() or "—"
+    """
+    Return service-unit display name in uppercase without accents.
+
+    This intentionally matches the report requirement for all-caps Greek text
+    without tonos/diacritics.
+    """
+    return _upper_no_accents(name)
+
+
+def _short_date_el(value: Any | None = None) -> str:
+    """
+    Return date in Greek short format: DD Mon YY.
+
+    Examples:
+    - 07 Μαρ 26
+    - 22 Μαρ 26
+
+    Accepted inputs:
+    - datetime
+    - date-like object with day/month/year attrs
+    - None -> datetime.now()
+    """
+    months = {
+        1: "Ιαν",
+        2: "Φεβ",
+        3: "Μαρ",
+        4: "Απρ",
+        5: "Μαϊ",
+        6: "Ιουν",
+        7: "Ιουλ",
+        8: "Αυγ",
+        9: "Σεπ",
+        10: "Οκτ",
+        11: "Νοε",
+        12: "Δεκ",
+    }
+
+    dt = value or datetime.now()
+
+    try:
+        day = int(dt.day)
+        month = int(dt.month)
+        year_2d = int(dt.year) % 100
+    except Exception:
+        dt = datetime.now()
+        day = dt.day
+        month = dt.month
+        year_2d = dt.year % 100
+
+    month_label = months.get(month, "")
+    return f"{day:02d} {month_label} {year_2d:02d}".strip()
+
+
+def _int_to_greek_words_genitive(n: int) -> str:
+    """
+    Convert a non-negative integer to Greek words in genitive case,
+    suitable for phrases like:
+
+    - συνολικής αξίας ...
+    - ποσού ...
+
+    Examples:
+    1755 -> χιλίων επτακοσίων πενήντα πέντε
+    20   -> είκοσι
+    200  -> διακοσίων
+
+    Supported range:
+    0 <= n <= 999_999_999
+    """
+    if n < 0:
+        raise ValueError("Negative values are not supported.")
+    if n == 0:
+        return "μηδενός"
+
+    units = {
+        0: "",
+        1: "ενός",
+        2: "δύο",
+        3: "τριών",
+        4: "τεσσάρων",
+        5: "πέντε",
+        6: "έξι",
+        7: "επτά",
+        8: "οκτώ",
+        9: "εννέα",
+    }
+
+    teens = {
+        10: "δέκα",
+        11: "έντεκα",
+        12: "δώδεκα",
+        13: "δεκατριών",
+        14: "δεκατεσσάρων",
+        15: "δεκαπέντε",
+        16: "δεκαέξι",
+        17: "δεκαεπτά",
+        18: "δεκαοκτώ",
+        19: "δεκαεννέα",
+    }
+
+    tens = {
+        2: "είκοσι",
+        3: "τριάντα",
+        4: "σαράντα",
+        5: "πενήντα",
+        6: "εξήντα",
+        7: "εβδομήντα",
+        8: "ογδόντα",
+        9: "ενενήντα",
+    }
+
+    hundreds = {
+        1: "εκατόν",
+        2: "διακοσίων",
+        3: "τριακοσίων",
+        4: "τετρακοσίων",
+        5: "πεντακοσίων",
+        6: "εξακοσίων",
+        7: "επτακοσίων",
+        8: "οκτακοσίων",
+        9: "εννιακοσίων",
+    }
+
+    def two_digits(num: int) -> str:
+        if num < 10:
+            return units[num]
+        if 10 <= num <= 19:
+            return teens[num]
+
+        t = num // 10
+        u = num % 10
+        if u == 0:
+            return tens[t]
+        return f"{tens[t]} {units[u]}".strip()
+
+    def three_digits(num: int) -> str:
+        if num < 100:
+            return two_digits(num)
+
+        h = num // 100
+        rem = num % 100
+
+        if rem == 0:
+            # For exact hundreds in amount phrasing:
+            # 100 -> εκατό
+            # 200 -> διακοσίων
+            if h == 1:
+                return "εκατό"
+            return hundreds[h]
+
+        return f"{hundreds[h]} {two_digits(rem)}".strip()
+
+    parts: list[str] = []
+
+    millions = n // 1_000_000
+    remainder = n % 1_000_000
+
+    thousands = remainder // 1_000
+    below_thousand = remainder % 1_000
+
+    if millions:
+        if millions == 1:
+            parts.append("ενός εκατομμυρίου")
+        else:
+            parts.append(f"{three_digits(millions)} εκατομμυρίων")
+
+    if thousands:
+        if thousands == 1:
+            parts.append("χιλίων")
+        else:
+            parts.append(f"{three_digits(thousands)} χιλιάδων")
+
+    if below_thousand:
+        parts.append(three_digits(below_thousand))
+
+    return " ".join(p for p in parts if p).strip()
+
+
+def _money_words_el(v: Any) -> str:
+    """
+    Convert a numeric amount to Greek words in genitive case, suitable for:
+    'συνολικής αξίας ...' or 'ποσού ...'
+
+    Examples:
+    1755.00 -> χιλίων επτακοσίων πενήντα πέντε ευρώ
+    1755.20 -> χιλίων επτακοσίων πενήντα πέντε ευρώ και είκοσι λεπτών
+    2000.00 -> δύο χιλιάδων ευρώ
+    """
+    amount = _to_decimal(v).quantize(Decimal("0.01"))
+
+    euros = int(amount)
+    cents = int((amount - Decimal(euros)) * 100)
+
+    euro_words = _int_to_greek_words_genitive(euros)
+
+    if cents == 0:
+        return f"{euro_words} ευρώ"
+
+    cents_words = _int_to_greek_words_genitive(cents)
+    return f"{euro_words} ευρώ και {cents_words} λεπτών"
 
 
 def _template_path() -> Path:
@@ -142,6 +374,13 @@ def _replace_everywhere(doc: Document, mapping: dict[str, str]) -> None:
 
 
 def _find_items_table(doc: Document):
+    """
+    Find the materials/items table in the template.
+
+    Current template contract:
+    - 5 columns
+    - header includes CPV and ΠΕΡΙΓΡΑΦΗ
+    """
     for table in doc.tables:
         if len(table.columns) != 5 or not table.rows:
             continue
@@ -154,6 +393,13 @@ def _find_items_table(doc: Document):
 
 
 def _find_cost_table(doc: Document):
+    """
+    Find the pricing/cost table in the template.
+
+    Current template contract:
+    - 6 columns
+    - header includes ΤΙΜΗ, ΜΟΝ, ΣΥΝΟΛΟ
+    """
     for table in doc.tables:
         if len(table.columns) != 6 or not table.rows:
             continue
@@ -345,6 +591,22 @@ def _resolve_document_total(procurement: Any, analysis: dict[str, Any]) -> str:
     return _money_plain(analysis.get("sum_total", 0))
 
 
+def _resolve_document_total_value(procurement: Any, analysis: dict[str, Any]) -> Any:
+    """
+    Resolve the numeric total value that should be displayed in the document
+    both numerically and in words.
+    """
+    grand_total = getattr(procurement, "grand_total", None)
+    if grand_total is not None:
+        return grand_total
+
+    payable_total = analysis.get("payable_total")
+    if payable_total is not None:
+        return payable_total
+
+    return analysis.get("sum_total", 0)
+
+
 def _apply_award_paragraph_vat_text(doc: Document, proc_type: str, vat_percent: Any) -> None:
     vat_is_zero = _to_decimal(vat_percent).quantize(Decimal("0.01")) == Decimal("0.00")
     replacement_tail = ", άνευ ΦΠΑ." if vat_is_zero else " και ΦΠΑ."
@@ -454,19 +716,22 @@ def build_award_decision_docx(
     winner_name = _safe(getattr(winner, "name", None), default="—")
     winner_afm = _safe(getattr(winner, "afm", None), default="—")
     winner_line = _winner_supplier_line(winner) if winner is not None else "—"
+
     commander = _safe(getattr(service_unit, "commander", None), default="—")
+    commander_role_type = _safe(getattr(service_unit, "commander_role_type", None))
+    service_unit_region = _safe(getattr(service_unit, "region", None))
+
     document_total_plain = _resolve_document_total(procurement, analysis)
+    document_total_value = _resolve_document_total_value(procurement, analysis)
 
     mapping: dict[str, str] = {
+        "{{SHORT_DATE}}": _short_date_el(),
         "{{PROC_TYPE}}": proc_type,
         "{{SERVICE_UNIT_NAME}}": _upper_service_name(
             _safe(getattr(service_unit, "description", None), default="—")
         ),
         "{{SERVICE_UNIT_PHONE}}": _safe(getattr(service_unit, "phone", None)),
-        "{{SERVICE_UNIT_LOCATION}}": _safe(
-            getattr(service_unit, "address", None),
-            default="Τοποθεσία",
-        ),
+        "{{SERVICE_UNIT_REGION}}": service_unit_region,
         "{{procurement.aay}}": aay,
         "{{procurement.adam_aay}}": adam_aay,
         "{{procurement.identity_prosklisis}}": identity_prosklisis,
@@ -479,21 +744,20 @@ def build_award_decision_docx(
         "{{WINNER_SUPPLIER_LINE}}": winner_line,
         "{{supplier.name}}": winner_name,
         "{{supplier.afm}}": winner_afm,
-        "{{RECIPIENTS_ACTION}}": f"«{winner_line}»" if winner is not None else "—",
         "{{RECIPIENTS_INFO}}": _format_recipients(other_suppliers),
         "{{service.commander}}": commander,
+        "{{COMMANDER_ROLE_TYPE}}": commander_role_type,
         "{{AN_PUBLIC_WITHHOLD_PERCENT}}": f" ({public_pct}%)",
-        "{{AN_PUBLIC_WITHHOLD_AMOUNT}}": _money_plain(public_withholdings.get("total_amount", 0)),
         "{{AN_PUBLIC_WITHHOLD_TOTAL}}": _money_plain(public_withholdings.get("total_amount", 0)),
         "{{AN_INCOME_TAX_RATE}}": f" ({income_tax_pct}%)",
-        "{{AN_INCOME_TAX_AMOUNT}}": _money_plain(income_tax.get("amount", 0)),
         "{{AN_INCOME_TAX_TOTAL}}": _money_plain(income_tax.get("amount", 0)),
         "{{AN_VAT_PERCENT}}": vat_pct,
         "{{AN_VAT_AMOUNT}}": _money_plain(analysis.get("vat_amount", 0)),
         "{{AN_SUM_TOTAL}}": _money_plain(analysis.get("sum_total", 0)),
         "{{AN_PAYABLE_TOTAL}}": _money_plain(analysis.get("payable_total", 0)),
         "{{ML_TOTAL}}": document_total_plain,
-        "{{HANDLER_DIRECTORY}}": _resolve_handler_directory(procurement),
+        "{{ML_TOTAL_WORDS}}": _money_words_el(document_total_value),
+        "{{HANDLER_DIRECTORY}}": _upper_no_accents(_resolve_handler_directory(procurement)),
         "{{HANDLER_DEPARTMENT}}": _resolve_handler_department(procurement),
     }
 
