@@ -918,6 +918,11 @@ from ...reports.expense_transmittal_docx import (
     build_expense_transmittal_docx,
     build_expense_transmittal_filename,
 )
+from ...reports.invitation_docx import (
+    InvitationConstants,
+    build_invitation_docx,
+    build_invitation_filename,
+)
 from ...reports.proforma_invoice import ProformaConstants, build_proforma_invoice_pdf
 from ...security import procurement_access_required, procurement_edit_required
 from ...security.procurement_guards import can_mutate_procurement
@@ -944,6 +949,8 @@ from ...services.procurement.related_entities import (
     execute_add_procurement_supplier,
     execute_delete_material_line,
     execute_delete_procurement_supplier,
+    execute_update_material_line,
+    execute_update_procurement_supplier,
 )
 from ...services.procurement_service import (
     is_in_implementation_phase,
@@ -1059,6 +1066,70 @@ def report_proforma_invoice(procurement_id: int):
     response.headers["Content-Type"] = "application/pdf"
     response.headers["Content-Disposition"] = f'inline; filename="proforma_{procurement.id}.pdf"'
     return response
+
+
+@procurements_bp.route("/<int:procurement_id>/reports/invitation", methods=["GET"])
+@login_required
+@procurement_access_required(load_procurement)
+def report_invitation_docx(procurement_id: int):
+    """
+    Build and return the Invitation DOCX.
+
+    REQUIRED RELATIONSHIPS
+    ----------------------
+    This report needs:
+    - service_unit
+    - handler_assignment.directory
+    - winner supplier
+    - materials
+    """
+    procurement = (
+        Procurement.query.options(
+            joinedload(Procurement.service_unit),
+            joinedload(Procurement.handler_personnel),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.directory
+            ),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.department
+            ),
+            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+            joinedload(Procurement.materials),
+            joinedload(Procurement.withholding_profile),
+            joinedload(Procurement.income_tax_rule),
+        )
+        .get_or_404(procurement_id)
+    )
+
+    winner = procurement.winner_supplier_obj()
+    analysis = procurement.compute_payment_analysis()
+
+    docx_bytes = build_invitation_docx(
+        procurement=procurement,
+        service_unit=procurement.service_unit,
+        winner=winner,
+        analysis=analysis,
+        constants=InvitationConstants(),
+    )
+
+    filename = build_invitation_filename(
+        procurement=procurement,
+        winner=winner,
+    )
+    filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+    if not filename.lower().endswith(".docx"):
+        filename = f"{filename}.docx"
+
+    buffer = BytesIO(docx_bytes)
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        max_age=0,
+    )
 
 
 @procurements_bp.route("/<int:procurement_id>/reports/award-decision", methods=["GET"])
@@ -1333,6 +1404,29 @@ def add_procurement_supplier(procurement_id: int):
     )
 
 
+@procurements_bp.route("/<int:procurement_id>/suppliers/<int:link_id>/update", methods=["POST"])
+@login_required
+@procurement_edit_required(load_procurement)
+def update_procurement_supplier(procurement_id: int, link_id: int):
+    procurement = Procurement.query.get_or_404(procurement_id)
+    next_url = next_from_request("procurements.inbox_procurements")
+
+    result = execute_update_procurement_supplier(procurement, link_id, request.form)
+    if result.not_found:
+        abort(404)
+
+    for item in result.flashes:
+        flash(item.message, item.category)
+
+    return redirect(
+        url_for(
+            "procurements.edit_procurement",
+            procurement_id=procurement.id,
+            next=next_url,
+        )
+    )
+
+
 @procurements_bp.route("/<int:procurement_id>/suppliers/<int:link_id>/delete", methods=["POST"])
 @login_required
 @procurement_edit_required(load_procurement)
@@ -1364,6 +1458,29 @@ def add_material_line(procurement_id: int):
     next_url = next_from_request("procurements.inbox_procurements")
 
     result = execute_add_material_line(procurement, request.form)
+    for item in result.flashes:
+        flash(item.message, item.category)
+
+    return redirect(
+        url_for(
+            "procurements.edit_procurement",
+            procurement_id=procurement.id,
+            next=next_url,
+        )
+    )
+
+
+@procurements_bp.route("/<int:procurement_id>/materials/<int:line_id>/update", methods=["POST"])
+@login_required
+@procurement_edit_required(load_procurement)
+def update_material_line(procurement_id: int, line_id: int):
+    procurement = Procurement.query.get_or_404(procurement_id)
+    next_url = next_from_request("procurements.inbox_procurements")
+
+    result = execute_update_material_line(procurement, line_id, request.form)
+    if result.not_found:
+        abort(404)
+
     for item in result.flashes:
         flash(item.message, item.category)
 
@@ -3905,6 +4022,11 @@ class ServiceUnit(db.Model):
     - prefecture:
       Prefecture / νομός of the service unit.
 
+    - postal_code:
+      Postal code / Τ.Κ. of the service unit.
+      Stored as text intentionally, not numeric, so leading zeroes are preserved
+      and the field remains compatible with user-entered formatting.
+
     - commander_role_type:
       Stores whether the entered person/title is "Διοικητής" or "Κυβερνήτης".
 
@@ -3944,6 +4066,7 @@ class ServiceUnit(db.Model):
     address = db.Column(db.String(255), nullable=True)
     region = db.Column(db.String(255), nullable=True)
     prefecture = db.Column(db.String(255), nullable=True)
+    postal_code = db.Column(db.String(20), nullable=True)
 
     phone = db.Column(db.String(50), nullable=True)
 
@@ -7112,6 +7235,419 @@ def build_expense_transmittal_filename(
 
     total_str = _money_plain(grand_total)
     return f"Διαβιβαστικό Δαπάνης {supplier_name} {total_str}.docx"
+
+```
+
+FILE: .\app\reports\invitation_docx.py
+```python
+"""
+app/reports/invitation_docx.py
+
+Generate "ΠΡΟΣΚΛΗΣΗ" as DOCX bytes using a Word template and placeholder
+replacement.
+"""
+
+from __future__ import annotations
+
+import unicodedata
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Optional
+
+from docx import Document
+from docx.shared import Pt
+
+
+def _safe(value: Any, default: str = "—") -> str:
+    text = ("" if value is None else str(value)).strip()
+    return text if text else default
+
+
+def _to_decimal(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value or "0"))
+    except Exception:
+        return Decimal("0.00")
+
+
+def _money_plain(value: Any) -> str:
+    amount = _to_decimal(value).quantize(Decimal("0.01"))
+    text = f"{amount:,.2f}"
+    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _upper_no_accents(value: Any, default: str = "—") -> str:
+    text = _safe(value, default=default)
+    normalized = unicodedata.normalize("NFD", text)
+    no_marks = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return unicodedata.normalize("NFC", no_marks).upper()
+
+
+def _lower_preserve_accents(value: Any, default: str = "—") -> str:
+    """
+    Return lowercase text while preserving accents/diacritics.
+    """
+    text = _safe(value, default=default)
+    return text.lower()
+
+
+def _format_date(value: Any, default: str = "—") -> str:
+    if value is None:
+        return default
+
+    if isinstance(value, date):
+        return value.strftime("%d/%m/%Y")
+
+    try:
+        return value.strftime("%d/%m/%Y")
+    except Exception:
+        text = str(value).strip()
+        return text if text else default
+
+
+def _short_date_el(value: Any | None = None) -> str:
+    months = {
+        1: "Ιαν",
+        2: "Φεβ",
+        3: "Μαρ",
+        4: "Απρ",
+        5: "Μαϊ",
+        6: "Ιουν",
+        7: "Ιουλ",
+        8: "Αυγ",
+        9: "Σεπ",
+        10: "Οκτ",
+        11: "Νοε",
+        12: "Δεκ",
+    }
+
+    dt = value or datetime.now()
+
+    try:
+        day = int(dt.day)
+        month = int(dt.month)
+        year_2d = int(dt.year) % 100
+    except Exception:
+        dt = datetime.now()
+        day = dt.day
+        month = dt.month
+        year_2d = dt.year % 100
+
+    month_label = months.get(month, "")
+    return f"{day:02d} {month_label} {year_2d:02d}".strip()
+
+
+def _template_path() -> Path:
+    app_dir = Path(__file__).resolve().parents[1]
+    return app_dir / "templates" / "docx" / "invitation_template.docx"
+
+
+def _set_global_font_arial_12(doc: Document) -> None:
+    try:
+        style = doc.styles["Normal"]
+        style.font.name = "Arial"
+        style.font.size = Pt(12)
+    except Exception:
+        pass
+
+
+def _paragraph_runs_text(paragraph) -> tuple[str, list[tuple[int, int, int]]]:
+    pieces: list[str] = []
+    positions: list[tuple[int, int, int]] = []
+
+    cursor = 0
+    for idx, run in enumerate(paragraph.runs):
+        text = run.text or ""
+        pieces.append(text)
+        start = cursor
+        end = start + len(text)
+        positions.append((idx, start, end))
+        cursor = end
+
+    return "".join(pieces), positions
+
+
+def _find_run_index_at_offset(positions: list[tuple[int, int, int]], offset: int) -> int:
+    for run_index, start, end in positions:
+        if start <= offset < end:
+            return run_index
+
+    if positions and offset == positions[-1][2]:
+        return positions[-1][0]
+
+    return -1
+
+
+def _replace_placeholder_once_in_paragraph(paragraph, placeholder: str, replacement: str) -> bool:
+    full_text, positions = _paragraph_runs_text(paragraph)
+    if not full_text or placeholder not in full_text:
+        return False
+
+    start = full_text.find(placeholder)
+    end = start + len(placeholder)
+
+    start_run_idx = _find_run_index_at_offset(positions, start)
+    end_run_idx = _find_run_index_at_offset(positions, end - 1)
+
+    if start_run_idx < 0 or end_run_idx < 0:
+        return False
+
+    start_run = paragraph.runs[start_run_idx]
+    end_run = paragraph.runs[end_run_idx]
+
+    start_run_global_start = positions[start_run_idx][1]
+    end_run_global_start = positions[end_run_idx][1]
+
+    prefix = start_run.text[: start - start_run_global_start]
+    suffix = end_run.text[(end - end_run_global_start):]
+
+    start_run.text = f"{prefix}{replacement}{suffix}"
+
+    for idx in range(start_run_idx + 1, end_run_idx + 1):
+        paragraph.runs[idx].text = ""
+
+    return True
+
+
+def _replace_placeholder_all_in_paragraph(paragraph, placeholder: str, replacement: str) -> None:
+    while _replace_placeholder_once_in_paragraph(paragraph, placeholder, replacement):
+        pass
+
+
+def _replace_placeholders_everywhere(doc: Document, mapping: dict[str, str]) -> None:
+    for paragraph in doc.paragraphs:
+        for placeholder, replacement in mapping.items():
+            _replace_placeholder_all_in_paragraph(paragraph, placeholder, replacement)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    for placeholder, replacement in mapping.items():
+                        _replace_placeholder_all_in_paragraph(paragraph, placeholder, replacement)
+
+
+def _resolve_proc_type(procurement: Any) -> str:
+    materials = list(getattr(procurement, "materials", []) or [])
+    is_services = any(bool(getattr(line, "is_service", False)) for line in materials)
+    return "παροχή υπηρεσιών" if is_services else "προμήθεια υλικών"
+
+
+def _resolve_handler_directory(procurement: Any) -> str:
+    assignment = getattr(procurement, "handler_assignment", None)
+    directory = getattr(assignment, "directory", None)
+    return _upper_no_accents(getattr(directory, "name", None))
+
+
+def _resolve_service_unit_place(service_unit: Any) -> str:
+    return "—"
+
+
+def _participating_supplier_objects(procurement: Any) -> list[Any]:
+    suppliers: list[Any] = []
+
+    for link in list(getattr(procurement, "supplies_links", []) or []):
+        supplier = getattr(link, "supplier", None)
+        if supplier is not None:
+            suppliers.append(supplier)
+
+    return suppliers
+
+
+def _economic_operator_label(procurement: Any) -> str:
+    """
+    - 1 supplier  -> στον οικονομικό φορέα
+    - many        -> στους οικονομικούς φορείς
+    """
+    suppliers = _participating_supplier_objects(procurement)
+    if len(suppliers) == 1:
+        return "στον οικονομικό φορέα"
+    return "στους οικονομικούς φορείς"
+
+
+def _supplier_full_info(supplier: Any) -> str:
+    """
+    Requested format:
+    NAME, ΑΦΜ: XXXXXXXXX, Διεύθυνση: ..., τηλέφωνο: ..., email
+    """
+    if supplier is None:
+        return "—"
+
+    parts: list[str] = []
+
+    name = _safe(getattr(supplier, "name", None), default="")
+    afm = _safe(getattr(supplier, "afm", None), default="")
+    address = _safe(getattr(supplier, "address", None), default="")
+    city = _safe(getattr(supplier, "city", None), default="")
+    phone = _safe(getattr(supplier, "phone", None), default="")
+    email = _safe(getattr(supplier, "email", None), default="")
+
+    if name:
+        parts.append(name)
+    if afm:
+        parts.append(f"ΑΦΜ: {afm}")
+
+    address_parts: list[str] = []
+    if address:
+        address_parts.append(address)
+    if city:
+        address_parts.append(city)
+
+    if address_parts:
+        parts.append(f"Διεύθυνση: {', '.join(address_parts)}")
+
+    if phone:
+        parts.append(f"τηλέφωνο: {phone}")
+    if email:
+        parts.append(email)
+
+    return ", ".join(parts).strip() or "—"
+
+
+def _invited_suppliers_inline(procurement: Any) -> str:
+    """
+    Inline sentence version:
+    «supplier1 ...», «supplier2 ...»
+    """
+    suppliers = _participating_supplier_objects(procurement)
+    if not suppliers:
+        return "—"
+
+    return ", ".join(f"«{_supplier_full_info(supplier)}»" for supplier in suppliers)
+
+
+def _recipients_block(procurement: Any) -> str:
+    """
+    Recipients section version:
+    one supplier per line
+    """
+    suppliers = _participating_supplier_objects(procurement)
+    if not suppliers:
+        return "—"
+
+    return "\n".join(f"«{_supplier_full_info(supplier)}»" for supplier in suppliers)
+
+
+def _material_lines_block(procurement: Any) -> dict[str, str]:
+    lines = list(getattr(procurement, "materials", []) or [])
+    if not lines:
+        return {
+            "{{ML_NO}}": "—",
+            "{{ML_DESC}}": "—",
+            "{{ML_UNIT}}": "—",
+            "{{ML_QTY}}": "—",
+            "{{ML_CPV}}": "—",
+        }
+
+    nos: list[str] = []
+    descs: list[str] = []
+    units: list[str] = []
+    qtys: list[str] = []
+    cpvs: list[str] = []
+
+    for idx, line in enumerate(lines, start=1):
+        nos.append(str(idx))
+        descs.append(_safe(getattr(line, "description", None)))
+        units.append(_safe(getattr(line, "unit", None)))
+        qty_value = getattr(line, "quantity", None)
+        qtys.append(_money_plain(qty_value) if qty_value is not None else "—")
+        cpvs.append(_safe(getattr(line, "cpv", None)))
+
+    return {
+        "{{ML_NO}}": "\n".join(nos),
+        "{{ML_DESC}}": "\n".join(descs),
+        "{{ML_UNIT}}": "\n".join(units),
+        "{{ML_QTY}}": "\n".join(qtys),
+        "{{ML_CPV}}": "\n".join(cpvs),
+    }
+
+
+@dataclass(frozen=True)
+class InvitationConstants:
+    pass
+
+
+def build_invitation_docx(
+    *,
+    procurement: Any,
+    service_unit: Any,
+    winner: Optional[Any],
+    analysis: dict[str, Any],
+    constants: Optional[InvitationConstants] = None,
+) -> bytes:
+    _ = winner
+    _ = analysis
+    _ = constants
+
+    template_path = _template_path()
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path}")
+
+    doc = Document(str(template_path))
+
+    materials_mapping = _material_lines_block(procurement)
+    invited_suppliers_inline = _invited_suppliers_inline(procurement)
+    recipients_info = _recipients_block(procurement)
+
+    mapping: dict[str, str] = {
+        "{{SERVICE_UNIT_NAME}}": _upper_no_accents(getattr(service_unit, "description", None)),
+        "{{SERVICE_UNIT_DESCRIPTION}}": _safe(getattr(service_unit, "description", None)),
+        "{{PROCUREMENT_SHORT_DESCRIPTION}}": _lower_preserve_accents(
+            getattr(procurement, "description", None)
+        ),
+        "{{HANDLER_DIRECTORY}}": _resolve_handler_directory(procurement),
+        "{{SERVICE_UNIT_PHONE}}": _safe(getattr(service_unit, "phone", None)),
+        "{{ SERVICE_UNIT_PHONE}}": _safe(getattr(service_unit, "phone", None)),
+        "{{SERVICE_UNIT_REGION}}": _safe(getattr(service_unit, "region", None)),
+        "{{SHORT_DATE}}": _short_date_el(),
+        "{{PROC_TYPE}}": _resolve_proc_type(procurement),
+        "{{ECONOMIC_OPERATOR_LABEL}}": _economic_operator_label(procurement),
+        "{{procurement.aay}}": _safe(getattr(procurement, "aay", None)),
+        "{{procurement.adam_aay}}": _safe(getattr(procurement, "adam_aay", None)),
+        "{{procurement hop_approval_commitment}}": _safe(
+            getattr(procurement, "hop_approval_commitment", None)
+        ),
+        "{{INVITED_SUPPLIERS_INLINE}}": invited_suppliers_inline,
+        "{{RECIPIENTS_INFO}}": recipients_info,
+
+        # Backward compatibility
+        "{{WINNER_SUPPLIER_LINE}}": invited_suppliers_inline,
+
+        "{{SERVICE_UNIT_ADRESS}}": _safe(getattr(service_unit, "address", None)),
+        "{{ SERVICE_UNIT_ADRESS}}": _safe(getattr(service_unit, "address", None)),
+        "{{SERVICE_UNIT_PLACE}}": _resolve_service_unit_place(service_unit),
+        "{{SERVICE_UNIT_POSTAL_CODE}}": _safe(getattr(service_unit, "postal_code", None)),
+        "{{ SERVICE_UNIT_EMAIL}}": _safe(getattr(service_unit, "email", None)),
+        "{{SERVICE_UNIT_EMAIL}}": _safe(getattr(service_unit, "email", None)),
+        "{{service.commander}}": _safe(getattr(service_unit, "commander", None)),
+        "{{COMMANDER_ROLE_TYPE}}": _safe(getattr(service_unit, "commander_role_type", None)),
+    }
+
+    mapping.update(materials_mapping)
+
+    _replace_placeholders_everywhere(doc, mapping)
+    _set_global_font_arial_12(doc)
+
+    output = BytesIO()
+    doc.save(output)
+    return output.getvalue()
+
+
+def build_invitation_filename(
+    *,
+    procurement: Any,
+    winner: Optional[Any],
+) -> str:
+    _ = winner
+
+    description = _safe(
+        getattr(procurement, "description", None),
+        default=f"Προμήθεια #{getattr(procurement, 'id', '—')}",
+    )
+    return f"Πρόσκληση Υποβολής Προσφοράς για την {description}.docx"
 
 ```
 
@@ -14177,6 +14713,16 @@ This module MUST NOT:
 - call render_template(...)
 - call redirect(...)
 - call flash(...)
+
+IMPORTANT EDIT SUPPORT
+----------------------
+This file now supports both CREATE/DELETE and UPDATE for:
+
+- ProcurementSupplier rows
+- MaterialLine rows
+
+The edit page can therefore mutate existing rows in-place without forcing the
+user to delete and recreate them.
 """
 
 from __future__ import annotations
@@ -14194,6 +14740,54 @@ from ..shared.operation_results import FlashMessage, OperationResult
 from ..shared.parsing import parse_decimal, parse_optional_int
 
 
+def _normalize_supplier_form(
+    form_data: Mapping[str, object],
+) -> tuple[int | None, Decimal | None, bool, str | None]:
+    """
+    Normalize supplier-row form data.
+
+    Returns
+    -------
+    tuple
+        (
+            supplier_id,
+            offered_amount,
+            is_winner,
+            notes,
+        )
+    """
+    supplier_id = parse_optional_int(form_data.get("supplier_id"))
+    offered_amount = parse_decimal(form_data.get("offered_amount"))
+    is_winner = bool(form_data.get("is_winner"))
+    notes = (form_data.get("notes") or "").strip() or None
+    return supplier_id, offered_amount, is_winner, notes
+
+
+def _normalize_material_line_form(
+    form_data: Mapping[str, object],
+) -> tuple[str, Decimal, Decimal, str | None, str | None, str | None]:
+    """
+    Normalize material/service line form data.
+
+    Raises
+    ------
+    ValueError
+        If the CPV is provided but invalid.
+    """
+    description = (form_data.get("description") or "").strip()
+    quantity = parse_decimal(form_data.get("quantity")) or Decimal("0")
+    unit_price = parse_decimal(form_data.get("unit_price")) or Decimal("0")
+
+    cpv_raw = (form_data.get("cpv") or "").strip()
+    cpv_value = validate_cpv_or_none(cpv_raw)
+    if cpv_raw and cpv_value is None:
+        raise ValueError("Μη έγκυρο CPV (δεν υπάρχει στη λίστα CPV).")
+
+    nsn = (form_data.get("nsn") or "").strip() or None
+    unit = (form_data.get("unit") or "").strip() or None
+    return description, quantity, unit_price, cpv_value, nsn, unit
+
+
 def execute_add_procurement_supplier(
     procurement: Procurement,
     form_data: Mapping[str, object],
@@ -14201,7 +14795,7 @@ def execute_add_procurement_supplier(
     """
     Add a supplier participation row to a procurement.
     """
-    supplier_id = parse_optional_int(form_data.get("supplier_id"))
+    supplier_id, offered_amount, is_winner, notes = _normalize_supplier_form(form_data)
     if not supplier_id:
         return OperationResult(
             ok=False,
@@ -14224,10 +14818,6 @@ def execute_add_procurement_supplier(
             ok=False,
             flashes=(FlashMessage("Ο συγκεκριμένος προμηθευτής έχει ήδη προστεθεί σε αυτή την προμήθεια.", "warning"),),
         )
-
-    offered_amount = parse_decimal(form_data.get("offered_amount"))
-    is_winner = bool(form_data.get("is_winner"))
-    notes = (form_data.get("notes") or "").strip() or None
 
     if is_winner:
         for link in procurement.supplies_links:
@@ -14259,6 +14849,86 @@ def execute_add_procurement_supplier(
     return OperationResult(
         ok=True,
         flashes=(FlashMessage("Ο προμηθευτής προστέθηκε.", "success"),),
+    )
+
+
+def execute_update_procurement_supplier(
+    procurement: Procurement,
+    link_id: int,
+    form_data: Mapping[str, object],
+) -> OperationResult:
+    """
+    Update an existing supplier participation row.
+
+    Editable fields
+    ---------------
+    - supplier_id
+    - offered_amount
+    - is_winner
+    - notes
+    """
+    link = ProcurementSupplier.query.get(link_id)
+    if link is None or link.procurement_id != procurement.id:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage("Η συμμετοχή προμηθευτή δεν βρέθηκε.", "danger"),),
+            not_found=True,
+        )
+
+    supplier_id, offered_amount, is_winner, notes = _normalize_supplier_form(form_data)
+    if not supplier_id:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage("Μη έγκυρος προμηθευτής.", "danger"),),
+        )
+
+    supplier = Supplier.query.get(supplier_id)
+    if not supplier:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage("Ο προμηθευτής δεν βρέθηκε.", "danger"),),
+        )
+
+    duplicate = ProcurementSupplier.query.filter(
+        ProcurementSupplier.procurement_id == procurement.id,
+        ProcurementSupplier.supplier_id == supplier_id,
+        ProcurementSupplier.id != link.id,
+    ).first()
+    if duplicate:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage("Ο συγκεκριμένος προμηθευτής υπάρχει ήδη σε άλλη γραμμή της ίδιας προμήθειας.", "warning"),),
+        )
+
+    before_snapshot = serialize_model(link)
+
+    if is_winner:
+        for other_link in procurement.supplies_links:
+            if other_link.id != link.id:
+                other_link.is_winner = False
+
+    link.supplier_id = supplier.id
+    link.offered_amount = offered_amount
+    link.is_winner = is_winner
+    link.notes = notes
+
+    try:
+        db.session.flush()
+    except IntegrityError:
+        db.session.rollback()
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage("Ο συγκεκριμένος προμηθευτής υπάρχει ήδη σε άλλη γραμμή της ίδιας προμήθειας.", "warning"),),
+        )
+
+    procurement.recalc_totals()
+    db.session.flush()
+    log_action(link, "UPDATE", before=before_snapshot, after=serialize_model(link))
+    db.session.commit()
+
+    return OperationResult(
+        ok=True,
+        flashes=(FlashMessage("Ο προμηθευτής ενημερώθηκε.", "success"),),
     )
 
 
@@ -14298,22 +14968,18 @@ def execute_add_material_line(
     """
     Add a material/service line to a procurement.
     """
-    description = (form_data.get("description") or "").strip()
+    try:
+        description, quantity, unit_price, cpv_value, nsn, unit = _normalize_material_line_form(form_data)
+    except ValueError as exc:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage(str(exc), "danger"),),
+        )
+
     if not description:
         return OperationResult(
             ok=False,
             flashes=(FlashMessage("Η περιγραφή γραμμής είναι υποχρεωτική.", "danger"),),
-        )
-
-    quantity = parse_decimal(form_data.get("quantity")) or Decimal("0")
-    unit_price = parse_decimal(form_data.get("unit_price")) or Decimal("0")
-
-    cpv_raw = (form_data.get("cpv") or "").strip()
-    cpv_value = validate_cpv_or_none(cpv_raw)
-    if cpv_raw and cpv_value is None:
-        return OperationResult(
-            ok=False,
-            flashes=(FlashMessage("Μη έγκυρο CPV (δεν υπάρχει στη λίστα CPV).", "danger"),),
         )
 
     line = MaterialLine(
@@ -14322,8 +14988,8 @@ def execute_add_material_line(
         quantity=quantity,
         unit_price=unit_price,
         cpv=cpv_value,
-        nsn=(form_data.get("nsn") or "").strip() or None,
-        unit=(form_data.get("unit") or "").strip() or None,
+        nsn=nsn,
+        unit=unit,
     )
 
     db.session.add(line)
@@ -14336,6 +15002,57 @@ def execute_add_material_line(
     return OperationResult(
         ok=True,
         flashes=(FlashMessage("Η γραμμή προστέθηκε.", "success"),),
+    )
+
+
+def execute_update_material_line(
+    procurement: Procurement,
+    line_id: int,
+    form_data: Mapping[str, object],
+) -> OperationResult:
+    """
+    Update an existing material/service line.
+    """
+    line = MaterialLine.query.get(line_id)
+    if line is None or line.procurement_id != procurement.id:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage("Η γραμμή δεν βρέθηκε.", "danger"),),
+            not_found=True,
+        )
+
+    try:
+        description, quantity, unit_price, cpv_value, nsn, unit = _normalize_material_line_form(form_data)
+    except ValueError as exc:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage(str(exc), "danger"),),
+        )
+
+    if not description:
+        return OperationResult(
+            ok=False,
+            flashes=(FlashMessage("Η περιγραφή γραμμής είναι υποχρεωτική.", "danger"),),
+        )
+
+    before_snapshot = serialize_model(line)
+
+    line.description = description
+    line.quantity = quantity
+    line.unit_price = unit_price
+    line.cpv = cpv_value
+    line.nsn = nsn
+    line.unit = unit
+
+    db.session.flush()
+    procurement.recalc_totals()
+    db.session.flush()
+    log_action(line, "UPDATE", before=before_snapshot, after=serialize_model(line))
+    db.session.commit()
+
+    return OperationResult(
+        ok=True,
+        flashes=(FlashMessage("Η γραμμή ενημερώθηκε.", "success"),),
     )
 
 
@@ -14366,7 +15083,6 @@ def execute_delete_material_line(
         ok=True,
         flashes=(FlashMessage("Η γραμμή διαγράφηκε.", "success"),),
     )
-
 
 ```
 
@@ -16499,6 +17215,7 @@ def execute_create_service_unit(form_data: Mapping[str, Any]) -> OperationResult
     address = (form_data.get("address") or "").strip()
     region = (form_data.get("region") or "").strip()
     prefecture = (form_data.get("prefecture") or "").strip()
+    postal_code = (form_data.get("postal_code") or "").strip()
 
     phone = (form_data.get("phone") or "").strip()
 
@@ -16551,6 +17268,7 @@ def execute_create_service_unit(form_data: Mapping[str, Any]) -> OperationResult
         address=address or None,
         region=region or None,
         prefecture=prefecture or None,
+        postal_code=postal_code or None,
         phone=phone or None,
         commander=commander or None,
         commander_role_type=commander_role_type,
@@ -16591,6 +17309,7 @@ def execute_edit_service_unit_info(
     address = (form_data.get("address") or "").strip()
     region = (form_data.get("region") or "").strip()
     prefecture = (form_data.get("prefecture") or "").strip()
+    postal_code = (form_data.get("postal_code") or "").strip()
 
     phone = (form_data.get("phone") or "").strip()
 
@@ -16657,6 +17376,7 @@ def execute_edit_service_unit_info(
     unit.address = address or None
     unit.region = region or None
     unit.prefecture = prefecture or None
+    unit.postal_code = postal_code or None
 
     unit.phone = phone or None
 
@@ -16872,6 +17592,7 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
     - Διεύθυνση / address
     - Περιοχή / region
     - Νομός / prefecture
+    - Τ.Κ. / postal code / postal_code / ταχυδρομικός κώδικας
     - Τηλέφωνο / phone
 
     - Διοικητής/Κυβερνήτης / commander
@@ -16947,6 +17668,13 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
     address_idx = idx_map.get("διευθυνση", idx_map.get("address"))
     region_idx = idx_map.get("περιοχη", idx_map.get("region"))
     prefecture_idx = idx_map.get("νομος", idx_map.get("prefecture"))
+    postal_code_idx = idx_map.get(
+        "τ.κ.",
+        idx_map.get(
+            "ταχυδρομικος κωδικας",
+            idx_map.get("postal code", idx_map.get("postal_code")),
+        ),
+    )
 
     phone_idx = idx_map.get("τηλεφωνο", idx_map.get("phone"))
 
@@ -17039,6 +17767,7 @@ def execute_import_service_units(file_storage: Any) -> OperationResult:
             address=safe_cell_str(cell_at(row, address_idx)) or None,
             region=safe_cell_str(cell_at(row, region_idx)) or None,
             prefecture=safe_cell_str(cell_at(row, prefecture_idx)) or None,
+            postal_code=safe_cell_str(cell_at(row, postal_code_idx)) or None,
             phone=safe_cell_str(cell_at(row, phone_idx)) or None,
             commander=safe_cell_str(cell_at(row, commander_idx)) or None,
             commander_role_type=commander_role_type,
@@ -20456,9 +21185,13 @@ FILE: .\app\templates\procurements\edit.html
     <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
       Δέσμευση
     </button>
-    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+    <a
+      class="btn btn-sm btn-outline-primary"
+      href="{{ url_for('procurements.report_invitation_docx', procurement_id=procurement.id) }}"
+      title="Λήψη Πρόσκλησης (DOCX)"
+    >
       Πρόσκληση
-    </button>
+    </a>
     <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
       Προέγκριση
     </button>
@@ -20499,7 +21232,7 @@ FILE: .\app\templates\procurements\edit.html
       >
         Διαβιβαστικό Δαπάνης
       </a>
-      
+
     {% endif %}
 
     <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">
@@ -21067,41 +21800,113 @@ FILE: .\app\templates\procurements\edit.html
         <table class="table table-sm align-middle mb-0">
           <thead>
             <tr>
-              <th>Προμηθευτής</th>
-              <th>Προσφορά</th>
-              <th>Μειοδότης</th>
-              <th>Παρατηρήσεις</th>
-              <th></th>
+              <th style="min-width: 280px;">Προμηθευτής</th>
+              <th style="min-width: 150px;">Προσφορά</th>
+              <th style="min-width: 120px;">Μειοδότης</th>
+              <th style="min-width: 260px;">Παρατηρήσεις</th>
+              <th class="text-end" style="min-width: 170px;">Ενέργειες</th>
             </tr>
           </thead>
           <tbody>
             {% for link in procurement.supplies_links %}
+              {% if can_edit %}
+                <form id="supplier-edit-{{ link.id }}"
+                      method="post"
+                      action="{{ url_for('procurements.update_procurement_supplier',
+                        procurement_id=procurement.id, link_id=link.id, next=back_url) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="next" value="{{ back_url }}">
+                </form>
+              {% endif %}
+
               <tr>
-                <td class="small">{{ link.supplier.afm }} - {{ link.supplier.name }}</td>
                 <td class="small">
-                  {% if link.offered_amount is not none %}
-                    {{ "{:,.2f}".format(link.offered_amount) }} €
+                  {% if can_edit %}
+                    <select name="supplier_id" form="supplier-edit-{{ link.id }}" class="form-select form-select-sm" required>
+                      <option value="">(επιλέξτε)</option>
+                      {% for s in suppliers %}
+                        <option value="{{ s.id }}" {% if link.supplier_id == s.id %}selected{% endif %}>
+                          {{ s.afm }} - {{ s.name }}
+                        </option>
+                      {% endfor %}
+                    </select>
                   {% else %}
-                    —
+                    {{ link.supplier.afm }} - {{ link.supplier.name }}
                   {% endif %}
                 </td>
+
                 <td class="small">
-                  {% if link.is_winner %}
-                    <span class="badge bg-success">ΝΑΙ</span>
+                  {% if can_edit %}
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="offered_amount"
+                      form="supplier-edit-{{ link.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ link.offered_amount if link.offered_amount is not none else '' }}"
+                    >
                   {% else %}
-                    —
+                    {% if link.offered_amount is not none %}
+                      {{ "{:,.2f}".format(link.offered_amount) }} €
+                    {% else %}
+                      —
+                    {% endif %}
                   {% endif %}
                 </td>
-                <td class="small text-break" style="max-width: 320px;">{{ link.notes or '—' }}</td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <div class="form-check">
+                      <input
+                        class="form-check-input"
+                        type="checkbox"
+                        name="is_winner"
+                        id="supplier_is_winner_{{ link.id }}"
+                        form="supplier-edit-{{ link.id }}"
+                        {% if link.is_winner %}checked{% endif %}
+                      >
+                      <label class="form-check-label small" for="supplier_is_winner_{{ link.id }}">
+                        Μειοδότης
+                      </label>
+                    </div>
+                  {% else %}
+                    {% if link.is_winner %}
+                      <span class="badge bg-success">ΝΑΙ</span>
+                    {% else %}
+                      —
+                    {% endif %}
+                  {% endif %}
+                </td>
+
+                <td class="small text-break" style="max-width: 320px;">
+                  {% if can_edit %}
+                    <textarea
+                      name="notes"
+                      form="supplier-edit-{{ link.id }}"
+                      class="form-control form-control-sm"
+                      rows="2"
+                    >{{ link.notes or '' }}</textarea>
+                  {% else %}
+                    {{ link.notes or '—' }}
+                  {% endif %}
+                </td>
+
                 <td class="text-end">
                   {% if can_edit %}
-                    <form method="post"
-                          action="{{ url_for('procurements.delete_procurement_supplier',
-                            procurement_id=procurement.id, link_id=link.id, next=back_url) }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="next" value="{{ back_url }}">
-                      <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                    </form>
+                    <div class="d-flex justify-content-end gap-2">
+                      <button class="btn btn-sm btn-outline-primary" form="supplier-edit-{{ link.id }}">
+                        Αποθήκευση
+                      </button>
+
+                      <form method="post"
+                            action="{{ url_for('procurements.delete_procurement_supplier',
+                              procurement_id=procurement.id, link_id=link.id, next=back_url) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="next" value="{{ back_url }}">
+                        <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
+                      </form>
+                    </div>
                   {% endif %}
                 </td>
               </tr>
@@ -21167,35 +21972,139 @@ FILE: .\app\templates\procurements\edit.html
         <table class="table table-sm align-middle mb-0">
           <thead>
             <tr>
-              <th>Περιγραφή</th>
-              <th>CPV</th>
-              <th>NSN</th>
-              <th>Μονάδα</th>
-              <th class="text-end">Ποσότητα</th>
-              <th class="text-end">Τιμή</th>
-              <th class="text-end">Σύνολο</th>
-              <th></th>
+              <th style="min-width: 250px;">Περιγραφή</th>
+              <th style="min-width: 240px;">CPV</th>
+              <th style="min-width: 140px;">NSN</th>
+              <th style="min-width: 120px;">Μονάδα</th>
+              <th class="text-end" style="min-width: 120px;">Ποσότητα</th>
+              <th class="text-end" style="min-width: 120px;">Τιμή</th>
+              <th class="text-end" style="min-width: 130px;">Σύνολο</th>
+              <th class="text-end" style="min-width: 170px;">Ενέργειες</th>
             </tr>
           </thead>
           <tbody>
             {% for line in procurement.materials %}
+              {% if can_edit %}
+                <form id="material-edit-{{ line.id }}"
+                      method="post"
+                      action="{{ url_for('procurements.update_material_line',
+                        procurement_id=procurement.id, line_id=line.id, next=back_url) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="next" value="{{ back_url }}">
+                </form>
+              {% endif %}
+
               <tr>
-                <td class="small">{{ line.description }}</td>
-                <td class="small">{{ line.cpv or '—' }}</td>
-                <td class="small">{{ line.nsn or '—' }}</td>
-                <td class="small">{{ line.unit or '—' }}</td>
-                <td class="small text-end">{{ line.quantity }}</td>
-                <td class="small text-end">{{ line.unit_price }}</td>
+                <td class="small">
+                  {% if can_edit %}
+                    <input
+                      name="description"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ line.description }}"
+                      required
+                    >
+                  {% else %}
+                    {{ line.description }}
+                  {% endif %}
+                </td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <select
+                      name="cpv"
+                      form="material-edit-{{ line.id }}"
+                      class="form-select form-select-sm js-select2"
+                      data-placeholder="Αναζήτηση CPV..."
+                      title="CPV"
+                    >
+                      <option value=""></option>
+                      {% for r in (cpv_rows or []) %}
+                        <option value="{{ r.cpv }}" {% if line.cpv == r.cpv %}selected{% endif %}>
+                          {{ r.cpv }}{% if r.description %} — {{ r.description }}{% endif %}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  {% else %}
+                    {{ line.cpv or '—' }}
+                  {% endif %}
+                </td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <input
+                      name="nsn"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ line.nsn or '' }}"
+                    >
+                  {% else %}
+                    {{ line.nsn or '—' }}
+                  {% endif %}
+                </td>
+
+                <td class="small">
+                  {% if can_edit %}
+                    <input
+                      name="unit"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm"
+                      value="{{ line.unit or '' }}"
+                    >
+                  {% else %}
+                    {{ line.unit or '—' }}
+                  {% endif %}
+                </td>
+
+                <td class="small text-end">
+                  {% if can_edit %}
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="quantity"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm text-end"
+                      value="{{ line.quantity if line.quantity is not none else '' }}"
+                    >
+                  {% else %}
+                    {{ line.quantity }}
+                  {% endif %}
+                </td>
+
+                <td class="small text-end">
+                  {% if can_edit %}
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="unit_price"
+                      form="material-edit-{{ line.id }}"
+                      class="form-control form-control-sm text-end"
+                      value="{{ line.unit_price if line.unit_price is not none else '' }}"
+                    >
+                  {% else %}
+                    {{ line.unit_price }}
+                  {% endif %}
+                </td>
+
                 <td class="small text-end">{{ "{:,.2f}".format(line.total_pre_vat) }} €</td>
+
                 <td class="text-end">
                   {% if can_edit %}
-                    <form method="post"
-                          action="{{ url_for('procurements.delete_material_line',
-                            procurement_id=procurement.id, line_id=line.id, next=back_url) }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="next" value="{{ back_url }}">
-                      <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
-                    </form>
+                    <div class="d-flex justify-content-end gap-2">
+                      <button class="btn btn-sm btn-outline-primary" form="material-edit-{{ line.id }}">
+                        Αποθήκευση
+                      </button>
+
+                      <form method="post"
+                            action="{{ url_for('procurements.delete_material_line',
+                              procurement_id=procurement.id, line_id=line.id, next=back_url) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="next" value="{{ back_url }}">
+                        <button class="btn btn-sm btn-outline-danger">Διαγραφή</button>
+                      </form>
+                    </div>
                   {% endif %}
                 </td>
               </tr>
@@ -23725,6 +24634,22 @@ FILE: .\app\templates\settings\service_unit_form.html
           </div>
 
           <div class="mb-2 row align-items-center">
+            <label class="col-4 col-form-label col-form-label-sm">Τ.Κ.</label>
+            <div class="col-8">
+              <input
+                type="text"
+                name="postal_code"
+                class="form-control form-control-sm"
+                placeholder="π.χ. 85400"
+                value="{{ unit.postal_code if unit and unit.postal_code is not none else '' }}"
+              >
+              <div class="form-text">
+                Αποθηκεύεται ως text ώστε να διατηρούνται leading zeroes και ακριβής μορφοποίηση.
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 row align-items-center">
             <label class="col-4 col-form-label col-form-label-sm">Τηλέφωνο</label>
             <div class="col-8">
               <input
@@ -23826,7 +24751,7 @@ FILE: .\app\templates\settings\service_unit_form.html
                 <li>Ο κωδικός, η περιγραφή και η συντομογραφία ελέγχονται για διπλότυπα server-side.</li>
                 <li>Οι ρόλοι Manager/Deputy ορίζονται ξεχωριστά.</li>
                 <li>Η οργανωτική δομή και οι λοιποί ρόλοι γίνονται από την ενιαία σελίδα “Οργάνωση”.</li>
-                <li>Email, διεύθυνση, περιοχή, νομός και τηλέφωνο αποθηκεύονται στα βασικά στοιχεία της Υπηρεσίας.</li>
+                <li>Email, διεύθυνση, περιοχή, νομός, Τ.Κ. και τηλέφωνο αποθηκεύονται στα βασικά στοιχεία της Υπηρεσίας.</li>
                 <li>Η «ΔΙΕΥΘΥΝΣΗ Διαχειριστή Εφαρμογής» είναι free-text και δεν γίνεται lookup από άλλον πίνακα.</li>
               </ul>
             </div>
