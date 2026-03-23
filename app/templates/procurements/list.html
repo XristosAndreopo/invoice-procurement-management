@@ -1,6 +1,15 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% set pager = pagination or {} %}
+{% set current_page = pager.get("page", 1) %}
+{% set current_per_page = pager.get("per_page", 25) %}
+{% set total_items = pager.get("total_items", 0) %}
+{% set total_pages = pager.get("total_pages", 1) %}
+{% set page_numbers = pager.get("page_numbers", []) %}
+{% set start_index = pager.get("start_index", 0) %}
+{% set end_index = pager.get("end_index", 0) %}
+
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
     <h1 class="h4 fw-bold mb-1">{{ page_title or "Λίστα Προμηθειών" }}</h1>
@@ -18,8 +27,29 @@
 
 <div class="card glass-card shadow-sm border-0">
   <div class="card-body">
-    <div class="table-responsive">
-      <form id="filters-form" method="get" action="{{ request.path }}" class="mb-0">
+    <form id="filters-form" method="get" action="{{ request.path }}" class="mb-3">
+      <input type="hidden" name="page" value="1">
+
+      <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-2 mb-3">
+        <div class="small text-muted">
+          {% if total_items > 0 %}
+            Εμφανίζονται εγγραφές {{ start_index }}–{{ end_index }} από {{ total_items }}.
+          {% else %}
+            Δεν υπάρχουν εγγραφές.
+          {% endif %}
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+          <label for="per_page" class="small text-muted mb-0">Ανά σελίδα</label>
+          <select id="per_page" name="per_page" class="form-select form-select-sm js-filter text-center" style="width:auto;">
+            {% for size in (pager.get("per_page_options", [25, 50, 100])) %}
+              <option value="{{ size }}" {% if current_per_page == size %}selected{% endif %}>{{ size }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="table-responsive">
         <table class="table table-sm align-middle mb-0 procurements-table">
           <thead>
             <tr class="text-center">
@@ -227,8 +257,67 @@
             {% endif %}
           </tbody>
         </table>
+      </div>
+    </form>
+
+    {% if total_pages > 1 %}
+      <form method="get" action="{{ request.path }}" class="mt-3">
+        {% for key, value in request.args.items() %}
+          {% if key != "page" %}
+            <input type="hidden" name="{{ key }}" value="{{ value }}">
+          {% endif %}
+        {% endfor %}
+
+        <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-2">
+          <div class="small text-muted">
+            Σελίδα {{ current_page }} από {{ total_pages }}
+          </div>
+
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <button type="submit"
+                    name="page"
+                    value="1"
+                    class="btn btn-sm btn-outline-secondary"
+                    {% if not pager.get("has_prev") %}disabled{% endif %}>
+              « Πρώτη
+            </button>
+
+            <button type="submit"
+                    name="page"
+                    value="{{ pager.get('prev_page', 1) }}"
+                    class="btn btn-sm btn-outline-secondary"
+                    {% if not pager.get("has_prev") %}disabled{% endif %}>
+              ‹ Προηγούμενη
+            </button>
+
+            {% for n in page_numbers %}
+              <button type="submit"
+                      name="page"
+                      value="{{ n }}"
+                      class="btn btn-sm {% if n == current_page %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+                {{ n }}
+              </button>
+            {% endfor %}
+
+            <button type="submit"
+                    name="page"
+                    value="{{ pager.get('next_page', total_pages) }}"
+                    class="btn btn-sm btn-outline-secondary"
+                    {% if not pager.get("has_next") %}disabled{% endif %}>
+              Επόμενη ›
+            </button>
+
+            <button type="submit"
+                    name="page"
+                    value="{{ total_pages }}"
+                    class="btn btn-sm btn-outline-secondary"
+                    {% if not pager.get("has_next") %}disabled{% endif %}>
+              Τελευταία »
+            </button>
+          </div>
+        </div>
       </form>
-    </div>
+    {% endif %}
   </div>
 </div>
 
@@ -245,13 +334,24 @@
     catch (e) { form.submit(); }
   }
 
+  function resetToFirstPage() {
+    const pageInput = form.querySelector('input[name="page"]');
+    if (pageInput) pageInput.value = "1";
+  }
+
   function debounceSubmit() {
     if (t) window.clearTimeout(t);
-    t = window.setTimeout(submitNow, debounceMs);
+    t = window.setTimeout(function() {
+      resetToFirstPage();
+      submitNow();
+    }, debounceMs);
   }
 
   form.querySelectorAll(".js-filter:not(.js-filter-text)").forEach(el => {
-    el.addEventListener("change", () => submitNow());
+    el.addEventListener("change", () => {
+      resetToFirstPage();
+      submitNow();
+    });
   });
 
   form.querySelectorAll(".js-filter-text").forEach(el => {
@@ -259,6 +359,7 @@
     el.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {
         ev.preventDefault();
+        resetToFirstPage();
         submitNow();
       }
     });
@@ -281,4 +382,3 @@
 })();
 </script>
 {% endblock %}
-
