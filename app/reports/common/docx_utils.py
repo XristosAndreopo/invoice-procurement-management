@@ -7,10 +7,43 @@ This module centralizes:
 - paragraph insertion/cloning
 - common font normalization
 - table cleanup / alignment helpers
+
+PERFORMANCE NOTES
+-----------------
+The DOCX report builders rely heavily on placeholder replacement.
+
+The original implementation performed a full nested traversal:
+- for every paragraph
+- for every placeholder in the mapping
+- with repeated run-aware replacement attempts
+
+That approach is functionally correct but expensive for large templates because
+most paragraphs do not contain placeholders, and the majority of placeholders do
+not exist in any given paragraph.
+
+The optimized implementation below preserves the public API and rendering
+behavior while reducing unnecessary work by:
+
+1. Quickly skipping paragraphs that do not contain the placeholder sentinel
+   `{{`.
+2. Pre-scanning each candidate paragraph to discover only the placeholders that
+   are actually present.
+3. Replacing only those discovered placeholders.
+4. Keeping the same split-run replacement logic so placeholders broken across
+   multiple runs still work exactly as before.
+
+IMPORTANT COMPATIBILITY RULE
+----------------------------
+This file is intentionally implemented as a low-risk performance patch:
+- function names stay the same
+- signatures stay the same
+- call sites do not need to change
+- split-run placeholder support is preserved
 """
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Iterable
 
@@ -19,6 +52,23 @@ from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.shared import Pt
+
+# Fast sentinel used to skip paragraphs/cells that obviously do not contain
+# placeholders.
+_PLACEHOLDER_SENTINEL = "{{"
+
+# Extract placeholder-like tokens from paragraph text.
+#
+# The current template contract uses placeholders such as:
+#   {{FIELD_NAME}}
+#
+# We intentionally keep this pattern conservative and literal so we can:
+# - avoid scanning the entire mapping for every paragraph
+# - preserve compatibility with the existing placeholder convention
+#
+# This regex matches balanced double-curly tokens that do not themselves contain
+# nested braces.
+_PLACEHOLDER_TOKEN_RE = re.compile(r"\{\{[^{}]+\}\}")
 
 
 def set_global_font_arial_12(doc: Document) -> None:
@@ -97,7 +147,10 @@ def paragraph_runs_text(paragraph) -> tuple[str, list[tuple[int, int, int]]]:
     return "".join(pieces), positions
 
 
-def find_run_index_at_offset(positions: list[tuple[int, int, int]], offset: int) -> int:
+def find_run_index_at_offset(
+    positions: list[tuple[int, int, int]],
+    offset: int,
+) -> int:
     """
     Find the run index containing the given character offset.
     """
@@ -111,12 +164,27 @@ def find_run_index_at_offset(positions: list[tuple[int, int, int]], offset: int)
     return -1
 
 
-def replace_placeholder_once_in_paragraph(paragraph, placeholder: str, replacement: str) -> bool:
+def replace_placeholder_once_in_paragraph(
+    paragraph,
+    placeholder: str,
+    replacement: str,
+) -> bool:
     """
     Replace one occurrence of a placeholder in a paragraph, even if it is split
     across multiple runs.
 
     The replacement text inherits the style of the first participating run.
+
+    BEHAVIOR NOTES
+    --------------
+    This function intentionally preserves the current low-level behavior:
+    - it replaces a single occurrence at a time
+    - it supports split-run placeholders
+    - it writes the final replacement into the first participating run
+    - it clears the following participating runs
+
+    The optimized higher-level helpers call this function fewer times by first
+    detecting which placeholders are actually present in a paragraph.
     """
     full_text, positions = paragraph_runs_text(paragraph)
     if not full_text or placeholder not in full_text:
@@ -148,37 +216,147 @@ def replace_placeholder_once_in_paragraph(paragraph, placeholder: str, replaceme
     return True
 
 
-def replace_placeholder_all_in_paragraph(paragraph, placeholder: str, replacement: str) -> None:
+def replace_placeholder_all_in_paragraph(
+    paragraph,
+    placeholder: str,
+    replacement: str,
+) -> None:
     """
-    Replace all occurrences of a placeholder in a paragraph, robustly across runs.
+    Replace all occurrences of a placeholder in a paragraph, robustly across
+    runs.
     """
     while replace_placeholder_once_in_paragraph(paragraph, placeholder, replacement):
         pass
 
 
+def _extract_present_placeholders(text: str, mapping: dict[str, str]) -> list[str]:
+    """
+    Return the placeholder keys from `mapping` that are actually present in
+    `text`.
+
+    WHY THIS EXISTS
+    ---------------
+    The original implementation looped through every mapping key for every
+    paragraph. That is the dominant cost observed in report timings.
+
+    This helper performs a lightweight paragraph-local pre-scan:
+    - skip immediately when `{{` does not exist
+    - extract only placeholder-like tokens from the paragraph text
+    - keep only tokens that actually exist in the provided mapping
+
+    ORDERING
+    --------
+    We preserve first-seen paragraph order for discovered placeholders and
+    remove duplicates. This keeps replacement stable and avoids repeated work
+    for the same placeholder token within the same paragraph discovery pass.
+    """
+    if not text or _PLACEHOLDER_SENTINEL not in text:
+        return []
+
+    tokens = _PLACEHOLDER_TOKEN_RE.findall(text)
+    if not tokens:
+        return []
+
+    seen: set[str] = set()
+    present: list[str] = []
+
+    for token in tokens:
+        if token in seen:
+            continue
+        if token not in mapping:
+            continue
+        seen.add(token)
+        present.append(token)
+
+    return present
+
+
+def _replace_present_placeholders_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
+    """
+    Replace only the placeholders that are actually present in a paragraph.
+
+    This is the main optimization entrypoint used by the shared traversal
+    helpers. It keeps the low-level split-run replacement logic unchanged while
+    drastically reducing unnecessary placeholder checks.
+    """
+    text = paragraph.text or ""
+    present_placeholders = _extract_present_placeholders(text, mapping)
+    if not present_placeholders:
+        return
+
+    for placeholder in present_placeholders:
+        replace_placeholder_all_in_paragraph(
+            paragraph,
+            placeholder,
+            str(mapping[placeholder]),
+        )
+
+
+def _replace_placeholders_in_table(table, mapping: dict[str, str]) -> None:
+    """
+    Replace placeholders in every paragraph of a table.
+
+    This includes nested traversal of rows -> cells -> paragraphs while applying
+    the same paragraph-local fast skip logic.
+    """
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                _replace_present_placeholders_in_paragraph(paragraph, mapping)
+
+
+def _replace_placeholders_in_container(container, mapping: dict[str, str]) -> None:
+    """
+    Replace placeholders in a header/footer-like container.
+
+    Supported content:
+    - direct paragraphs
+    - table cell paragraphs
+    """
+    for paragraph in container.paragraphs:
+        _replace_present_placeholders_in_paragraph(paragraph, mapping)
+
+    for table in container.tables:
+        _replace_placeholders_in_table(table, mapping)
+
+
 def replace_placeholders_everywhere(doc: Document, mapping: dict[str, str]) -> None:
     """
     Replace placeholders across all document paragraphs and table paragraphs.
+
+    OPTIMIZATION STRATEGY
+    ---------------------
+    This function keeps the same public behavior while reducing work:
+    - body paragraphs are skipped immediately when they do not contain `{{`
+    - table cell paragraphs are treated the same way
+    - only placeholders that actually exist in each paragraph are processed
     """
+    if not mapping:
+        return
+
     for paragraph in doc.paragraphs:
-        for placeholder, replacement in mapping.items():
-            replace_placeholder_all_in_paragraph(paragraph, placeholder, replacement)
+        _replace_present_placeholders_in_paragraph(paragraph, mapping)
 
     for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    for placeholder, replacement in mapping.items():
-                        replace_placeholder_all_in_paragraph(paragraph, placeholder, replacement)
+        _replace_placeholders_in_table(table, mapping)
 
 
-def replace_placeholders_in_headers_and_footers(doc: Document, mapping: dict[str, str]) -> None:
+def replace_placeholders_in_headers_and_footers(
+    doc: Document,
+    mapping: dict[str, str],
+) -> None:
     """
     Replace placeholders in all header/footer variants for every section:
     - default header/footer
     - first-page header/footer
     - even-page header/footer
+
+    The same paragraph-local optimization used in the body is applied here as
+    well.
     """
+    if not mapping:
+        return
+
     for section in doc.sections:
         containers = [
             section.header,
@@ -192,17 +370,7 @@ def replace_placeholders_in_headers_and_footers(doc: Document, mapping: dict[str
         for container in containers:
             if container is None:
                 continue
-
-            for paragraph in container.paragraphs:
-                for placeholder, replacement in mapping.items():
-                    replace_placeholder_all_in_paragraph(paragraph, placeholder, replacement)
-
-            for table in container.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for paragraph in cell.paragraphs:
-                            for placeholder, replacement in mapping.items():
-                                replace_placeholder_all_in_paragraph(paragraph, placeholder, replacement)
+            _replace_placeholders_in_container(container, mapping)
 
 
 def replace_literal_text_everywhere(doc: Document, replacements: dict[str, str]) -> None:
@@ -260,7 +428,8 @@ def set_cell_alignment(
 
 def clone_paragraph_properties(src_paragraph, dst_paragraph) -> None:
     """
-    Clone paragraph properties XML including tabs, indents, spacing and alignment.
+    Clone paragraph properties XML including tabs, indents, spacing and
+    alignment.
     """
     dst_p = dst_paragraph._p
     src_p = src_paragraph._p
@@ -318,10 +487,11 @@ def clear_paragraph_runs(paragraph) -> None:
 
 def iter_document_paragraphs(doc: Document) -> Iterable:
     """
-    Yield all body paragraphs and all table-cell paragraphs in document order blocks.
+    Yield all body paragraphs and all table-cell paragraphs in document order
+    blocks.
 
-    This helper is useful for search-style traversal where body + tables are both
-    valid search locations.
+    This helper is useful for search-style traversal where body + tables are
+    both valid search locations.
     """
     for paragraph in doc.paragraphs:
         yield paragraph
