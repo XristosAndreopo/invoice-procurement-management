@@ -3,6 +3,39 @@ app/reports/invitation_docx.py
 
 Generate "ΠΡΟΣΚΛΗΣΗ" as DOCX bytes using a Word template and placeholder
 replacement.
+
+SOURCE OF TRUTH
+---------------
+This implementation is aligned to:
+- current uploaded `invitation_template.docx`
+- current Procurement / ServiceUnit / Supplier related models
+
+IMPORTANT TABLE RULE
+--------------------
+The invitation document must render the materials/services table with:
+- one document row per procurement line
+- not multiline text packed into a single row
+
+BUSINESS RULE
+-------------
+The document switches wording dynamically between:
+- παροχή υπηρεσιών
+- προμήθεια υλικών
+
+Canonical project rule:
+- if any procurement material line has `is_service == True`
+  -> services wording
+- otherwise
+  -> goods/materials wording
+
+KNOWN MODEL LIMITATIONS
+-----------------------
+The current source-of-truth models do NOT provide dedicated fields for:
+- explicit service-unit place for signing/sending
+- richer recipient metadata beyond supplier fields already present
+
+Therefore:
+- {{SERVICE_UNIT_PLACE}} resolves conservatively to "—"
 """
 
 from __future__ import annotations
@@ -10,21 +43,28 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
 from docx import Document
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
 
+
+# ---------------------------------------------------------------------------
+# Generic helpers
+# ---------------------------------------------------------------------------
 
 def _safe(value: Any, default: str = "—") -> str:
     text = ("" if value is None else str(value)).strip()
     return text if text else default
 
 
-def _to_decimal(value: Any) -> Decimal:
+def _to_decimal(value: Any):
+    from decimal import Decimal
+
     try:
         return Decimal(str(value or "0"))
     except Exception:
@@ -32,7 +72,7 @@ def _to_decimal(value: Any) -> Decimal:
 
 
 def _money_plain(value: Any) -> str:
-    amount = _to_decimal(value).quantize(Decimal("0.01"))
+    amount = _to_decimal(value).quantize(_to_decimal("0.01"))
     text = f"{amount:,.2f}"
     return text.replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -97,6 +137,10 @@ def _short_date_el(value: Any | None = None) -> str:
     month_label = months.get(month, "")
     return f"{day:02d} {month_label} {year_2d:02d}".strip()
 
+
+# ---------------------------------------------------------------------------
+# Template helpers
+# ---------------------------------------------------------------------------
 
 def _template_path() -> Path:
     app_dir = Path(__file__).resolve().parents[1]
@@ -188,6 +232,10 @@ def _replace_placeholders_everywhere(doc: Document, mapping: dict[str, str]) -> 
                         _replace_placeholder_all_in_paragraph(paragraph, placeholder, replacement)
 
 
+# ---------------------------------------------------------------------------
+# Domain resolution helpers
+# ---------------------------------------------------------------------------
+
 def _resolve_proc_type(procurement: Any) -> str:
     materials = list(getattr(procurement, "materials", []) or [])
     is_services = any(bool(getattr(line, "is_service", False)) for line in materials)
@@ -196,11 +244,18 @@ def _resolve_proc_type(procurement: Any) -> str:
 
 def _resolve_handler_directory(procurement: Any) -> str:
     assignment = getattr(procurement, "handler_assignment", None)
-    directory = getattr(assignment, "directory", None)
+    if assignment is not None:
+        directory = getattr(assignment, "directory", None)
+        if directory is not None:
+            return _upper_no_accents(getattr(directory, "name", None))
+
+    handler = getattr(procurement, "handler_personnel", None)
+    directory = getattr(handler, "directory", None)
     return _upper_no_accents(getattr(directory, "name", None))
 
 
 def _resolve_service_unit_place(service_unit: Any) -> str:
+    _ = service_unit
     return "—"
 
 
@@ -289,39 +344,99 @@ def _recipients_block(procurement: Any) -> str:
     return "\n".join(f"«{_supplier_full_info(supplier)}»" for supplier in suppliers)
 
 
-def _material_lines_block(procurement: Any) -> dict[str, str]:
-    lines = list(getattr(procurement, "materials", []) or [])
-    if not lines:
-        return {
-            "{{ML_NO}}": "—",
-            "{{ML_DESC}}": "—",
-            "{{ML_UNIT}}": "—",
-            "{{ML_QTY}}": "—",
-            "{{ML_CPV}}": "—",
-        }
+# ---------------------------------------------------------------------------
+# Table helpers
+# ---------------------------------------------------------------------------
 
-    nos: list[str] = []
-    descs: list[str] = []
-    units: list[str] = []
-    qtys: list[str] = []
-    cpvs: list[str] = []
+def _set_cell_alignment(
+    cell,
+    *,
+    horizontal: WD_ALIGN_PARAGRAPH = WD_ALIGN_PARAGRAPH.CENTER,
+    vertical: WD_ALIGN_VERTICAL = WD_ALIGN_VERTICAL.CENTER,
+) -> None:
+    cell.vertical_alignment = vertical
+    for paragraph in cell.paragraphs:
+        paragraph.alignment = horizontal
+
+
+def _find_invitation_table(doc: Document):
+    """
+    Find the main invitation materials/services table.
+
+    Expected shape in current template:
+    - 5 columns
+    - header includes:
+      Α/Α | ΠΕΡΙΓΡΑΦΗ | ΜΟΝ. ΜΕΤ. | ΣΥΝΟΛΙΚΗ ΠΟΣΟΤΗΤΑ | CPV
+    """
+    for table in doc.tables:
+        if len(table.columns) != 5 or not table.rows:
+            continue
+
+        header = " ".join(cell.text.strip() for cell in table.rows[0].cells).upper()
+        if (
+            "Α/Α" in header
+            and "ΠΕΡΙΓΡΑΦΗ" in header
+            and "ΜΟΝ. ΜΕΤ." in header
+            and "ΣΥΝΟΛΙΚΗ ΠΟΣΟΤΗΤΑ" in header
+            and "CPV" in header
+        ):
+            return table
+
+    return None
+
+
+def _clear_table_body_keep_header(table, header_rows: int = 1) -> None:
+    while len(table.rows) > header_rows:
+        tbl = table._tbl
+        tr = table.rows[header_rows]._tr
+        tbl.remove(tr)
+
+
+def _sorted_materials(procurement: Any) -> list[Any]:
+    """
+    Preserve source ordering by default.
+    Change this function if you later want custom ordering.
+    """
+    return list(getattr(procurement, "materials", []) or [])
+
+
+def _fill_invitation_table(table, procurement: Any) -> None:
+    _clear_table_body_keep_header(table, header_rows=1)
+
+    lines = _sorted_materials(procurement)
+
+    if not lines:
+        row = table.add_row().cells
+        row[0].text = "—"
+        row[1].text = "Δεν υπάρχουν γραμμές υλικών/υπηρεσιών."
+        row[2].text = "—"
+        row[3].text = "—"
+        row[4].text = "—"
+        for cell in row:
+            _set_cell_alignment(cell)
+        return
 
     for idx, line in enumerate(lines, start=1):
-        nos.append(str(idx))
-        descs.append(_safe(getattr(line, "description", None)))
-        units.append(_safe(getattr(line, "unit", None)))
+        row = table.add_row().cells
+        row[0].text = str(idx)
+        row[1].text = _safe(getattr(line, "description", None))
+        row[2].text = _safe(getattr(line, "unit", None))
+
         qty_value = getattr(line, "quantity", None)
-        qtys.append(_money_plain(qty_value) if qty_value is not None else "—")
-        cpvs.append(_safe(getattr(line, "cpv", None)))
+        row[3].text = _money_plain(qty_value) if qty_value is not None else "—"
 
-    return {
-        "{{ML_NO}}": "\n".join(nos),
-        "{{ML_DESC}}": "\n".join(descs),
-        "{{ML_UNIT}}": "\n".join(units),
-        "{{ML_QTY}}": "\n".join(qtys),
-        "{{ML_CPV}}": "\n".join(cpvs),
-    }
+        row[4].text = _safe(getattr(line, "cpv", None))
 
+        _set_cell_alignment(row[0])
+        _set_cell_alignment(row[1], horizontal=WD_ALIGN_PARAGRAPH.CENTER)
+        _set_cell_alignment(row[2])
+        _set_cell_alignment(row[3])
+        _set_cell_alignment(row[4])
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class InvitationConstants:
@@ -346,7 +461,6 @@ def build_invitation_docx(
 
     doc = Document(str(template_path))
 
-    materials_mapping = _material_lines_block(procurement)
     invited_suppliers_inline = _invited_suppliers_inline(procurement)
     recipients_info = _recipients_block(procurement)
 
@@ -382,11 +496,22 @@ def build_invitation_docx(
         "{{SERVICE_UNIT_EMAIL}}": _safe(getattr(service_unit, "email", None)),
         "{{service.commander}}": _safe(getattr(service_unit, "commander", None)),
         "{{COMMANDER_ROLE_TYPE}}": _safe(getattr(service_unit, "commander_role_type", None)),
+
+        # Keep old material placeholders empty for backward compatibility,
+        # because the table is now populated with real rows.
+        "{{ML_NO}}": "",
+        "{{ML_DESC}}": "",
+        "{{ML_UNIT}}": "",
+        "{{ML_QTY}}": "",
+        "{{ML_CPV}}": "",
     }
 
-    mapping.update(materials_mapping)
-
     _replace_placeholders_everywhere(doc, mapping)
+
+    invitation_table = _find_invitation_table(doc)
+    if invitation_table is not None:
+        _fill_invitation_table(invitation_table, procurement)
+
     _set_global_font_arial_12(doc)
 
     output = BytesIO()
