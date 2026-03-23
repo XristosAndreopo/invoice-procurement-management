@@ -264,6 +264,7 @@ def report_invitation_docx(procurement_id: int):
             winner=winner,
             analysis=analysis,
             constants=InvitationConstants(),
+            instrumentation=timing,
         )
         timing.mark("output_bytes", len(docx_bytes))
         timing.end_stage()
@@ -356,6 +357,7 @@ def report_award_decision_docx(procurement_id: int):
             analysis=analysis,
             is_services=is_services,
             constants=AwardDecisionConstants(),
+            instrumentation=timing,
         )
         timing.mark("output_bytes", len(docx_bytes))
         timing.end_stage()
@@ -461,6 +463,7 @@ def report_contract_docx(procurement_id: int):
             winner=winner,
             analysis=analysis,
             constants=ContractConstants(),
+            instrumentation=timing,
         )
         timing.mark("output_bytes", len(docx_bytes))
         timing.end_stage()
@@ -561,6 +564,7 @@ def report_expense_transmittal_docx(procurement_id: int):
             winner=winner,
             analysis=analysis,
             constants=ExpenseTransmittalConstants(),
+            instrumentation=timing,
         )
         timing.mark("output_bytes", len(docx_bytes))
         timing.end_stage()
