@@ -61,6 +61,7 @@ Therefore:
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -87,6 +88,17 @@ from .common.domain import (
     resolve_service_unit_place,
 )
 from .common.formatting import safe_text, upper_service_name
+from .instrumentation import ReportInstrumentation
+
+
+def _timed(
+    instrumentation: Optional[ReportInstrumentation],
+    detail_name: str,
+    **extra: Any,
+):
+    if instrumentation is None:
+        return nullcontext()
+    return instrumentation.timed_detail(detail_name, **extra)
 
 
 def _template_path() -> Path:
@@ -349,6 +361,7 @@ def build_contract_docx(
     winner: Optional[Any],
     analysis: dict[str, Any],
     constants: Optional[ContractConstants] = None,
+    instrumentation: Optional[ReportInstrumentation] = None,
 ) -> bytes:
     """
     Build the contract DOCX and return it as bytes.
@@ -359,86 +372,102 @@ def build_contract_docx(
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    doc = Document(str(template_path))
+    with _timed(instrumentation, "load_template"):
+        doc = Document(str(template_path))
 
     is_services = resolve_is_services(procurement)
 
-    mapping: dict[str, str] = {
-        "{{SERVICE_UNIT_NAME}}": upper_service_name(
-            safe_text(getattr(service_unit, "description", None), default="—")
-        ),
-        "{{HANDLER_DIRECTORY}}": resolve_handler_directory(procurement, uppercase=True),
-        "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
-        "{{PROC_TYPE}}": _resolve_proc_type(is_services),
-        "{{PROC_TYPE_LOWER}}": _resolve_proc_type_lower(is_services),
-        "{{PROCUREMENT_CONTRACT_NUMBER}}": safe_text(getattr(procurement, "contract_number", None)),
-        "{{WINNER_SUPPLIER_AFM}}": _winner_supplier_afm(winner),
-        "{{ WINNER_SUPPLIER_AFM}}": _winner_supplier_afm(winner),
-        "{{WINNER_SUPPLIER_DESCRIPTION}}": _winner_supplier_name(winner),
-        "{{WINNER_SUPPLIER_DESCREIPTION}}": _winner_supplier_name(winner),
-        "{{WINNER_SUPPLIER_EMBA}}": _winner_supplier_emba(winner),
-        "{{PROCUREMENT_HOP_APPROVAL}}": safe_text(getattr(procurement, "hop_approval", None)),
-        "{{PROCUREMENT_AAY}}": safe_text(getattr(procurement, "aay", None)),
-        "{{PROCUREMENT_ADAM_AAY}}": safe_text(getattr(procurement, "adam_aay", None)),
-        "{{PROCUREMENT_ADA_AAY}}": safe_text(getattr(procurement, "ada_aay", None)),
-        "{{PROCUREMENT_IDENTITY_PROSKLISIS}}": safe_text(
-            getattr(procurement, "identity_prosklisis", None)
-        ),
-        "{{PROCUREMENT_INDENTITY_PROSKLISIS}}": safe_text(
-            getattr(procurement, "identity_prosklisis", None)
-        ),
-        "{{PROCUREMENT_ADAM_PROSKLISIS}}": safe_text(
-            getattr(procurement, "adam_prosklisis", None)
-        ),
-        "{{ PROCUREMENT_ADAM_PROSKLISIS}}": safe_text(
-            getattr(procurement, "adam_prosklisis", None)
-        ),
-        "{{PROCUREMENT_IDENTITY_APOFASIS_ANATHESIS}}": safe_text(
-            getattr(procurement, "identity_apofasis_anathesis", None)
-        ),
-        "{{PROCUREMENT_INDENTITY_APOFASIS_ANATHESIS}}": safe_text(
-            getattr(procurement, "identity_apofasis_anathesis", None)
-        ),
-        "{{PROCUREMENT_ADAM_APOFASIS_ANATHESIS}}": safe_text(
-            getattr(procurement, "adam_apofasis_anathesis", None)
-        ),
-        "{{SERVICE_UNIT_PLACE}}": resolve_service_unit_place(service_unit),
-        "{{COMMANDER_ROLE_TYPE}}": safe_text(getattr(service_unit, "commander_role_type", None)),
-        "{{SERVICE_COMMANDER}}": safe_text(getattr(service_unit, "commander", None)),
-        "{{SERVICE_UNIT_COMMANDER}}": safe_text(getattr(service_unit, "commander", None)),
-        "{{SERVICE.AAHT}}": safe_text(getattr(service_unit, "aahit", None)),
-        "{{PROCUREMENT_ALE}}": safe_text(getattr(procurement, "ale", None)),
-        "{{CURRENT_YEAR}}": str(getattr(procurement, "fiscal_year", None) or ""),
-        "{{ML_TOTAL_WORDS}}": money_words_el(resolve_document_total_value(procurement, analysis)),
-        "{{ML_TOTAL}}": resolve_document_total(procurement, analysis),
-        "{{PROCUREMENT_KRATHSEIS_SYNOLO}}": _resolve_krathseis_label(analysis),
-        "{{PROCUREMENT_FE}}": _resolve_fe_label(analysis),
-        "{{PROCUREMENT_FPA}}": _resolve_fpa_label(analysis),
-        "{{AN_SUM_TOTAL}}": money_plain(analysis.get("sum_total", 0)),
-        "{{VAT_SENTENCE}}": _resolve_vat_sentence(analysis, is_services),
-        "{{CONTRACT_KIND_TITLE}}": _resolve_contract_kind_title(is_services),
-        "{{TABLE_REFERENCE_PHRASE}}": _resolve_table_reference_phrase(is_services),
-        "{{DELIVERY_SENTENCE}}": _resolve_delivery_sentence(is_services),
-        "{{DELIVERY_TO_SERVICE_SENTENCE}}": _resolve_delivery_to_service_sentence(is_services),
-        "{{DEADLINE_PHRASE}}": _resolve_deadline_phrase(is_services),
-        "{{COMPLETION_PHRASE}}": _resolve_completion_phrase(is_services),
-        "{{NONCONFORMITY_SUBJECT}}": _resolve_nonconformity_subject(is_services),
-        "{{TABLE_TITLE}}": _resolve_table_title(is_services),
-    }
+    with _timed(instrumentation, "build_mapping"):
+        mapping: dict[str, str] = {
+            "{{SERVICE_UNIT_NAME}}": upper_service_name(
+                safe_text(getattr(service_unit, "description", None), default="—")
+            ),
+            "{{HANDLER_DIRECTORY}}": resolve_handler_directory(procurement, uppercase=True),
+            "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
+            "{{PROC_TYPE}}": _resolve_proc_type(is_services),
+            "{{PROC_TYPE_LOWER}}": _resolve_proc_type_lower(is_services),
+            "{{PROCUREMENT_CONTRACT_NUMBER}}": safe_text(getattr(procurement, "contract_number", None)),
+            "{{WINNER_SUPPLIER_AFM}}": _winner_supplier_afm(winner),
+            "{{ WINNER_SUPPLIER_AFM}}": _winner_supplier_afm(winner),
+            "{{WINNER_SUPPLIER_DESCRIPTION}}": _winner_supplier_name(winner),
+            "{{WINNER_SUPPLIER_DESCREIPTION}}": _winner_supplier_name(winner),
+            "{{WINNER_SUPPLIER_EMBA}}": _winner_supplier_emba(winner),
+            "{{PROCUREMENT_HOP_APPROVAL}}": safe_text(getattr(procurement, "hop_approval", None)),
+            "{{PROCUREMENT_AAY}}": safe_text(getattr(procurement, "aay", None)),
+            "{{PROCUREMENT_ADAM_AAY}}": safe_text(getattr(procurement, "adam_aay", None)),
+            "{{PROCUREMENT_ADA_AAY}}": safe_text(getattr(procurement, "ada_aay", None)),
+            "{{PROCUREMENT_IDENTITY_PROSKLISIS}}": safe_text(
+                getattr(procurement, "identity_prosklisis", None)
+            ),
+            "{{PROCUREMENT_INDENTITY_PROSKLISIS}}": safe_text(
+                getattr(procurement, "identity_prosklisis", None)
+            ),
+            "{{PROCUREMENT_ADAM_PROSKLISIS}}": safe_text(
+                getattr(procurement, "adam_prosklisis", None)
+            ),
+            "{{ PROCUREMENT_ADAM_PROSKLISIS}}": safe_text(
+                getattr(procurement, "adam_prosklisis", None)
+            ),
+            "{{PROCUREMENT_IDENTITY_APOFASIS_ANATHESIS}}": safe_text(
+                getattr(procurement, "identity_apofasis_anathesis", None)
+            ),
+            "{{PROCUREMENT_INDENTITY_APOFASIS_ANATHESIS}}": safe_text(
+                getattr(procurement, "identity_apofasis_anathesis", None)
+            ),
+            "{{PROCUREMENT_ADAM_APOFASIS_ANATHESIS}}": safe_text(
+                getattr(procurement, "adam_apofasis_anathesis", None)
+            ),
+            "{{SERVICE_UNIT_PLACE}}": resolve_service_unit_place(service_unit),
+            "{{COMMANDER_ROLE_TYPE}}": safe_text(getattr(service_unit, "commander_role_type", None)),
+            "{{SERVICE_COMMANDER}}": safe_text(getattr(service_unit, "commander", None)),
+            "{{SERVICE_UNIT_COMMANDER}}": safe_text(getattr(service_unit, "commander", None)),
+            "{{SERVICE.AAHT}}": safe_text(getattr(service_unit, "aahit", None)),
+            "{{PROCUREMENT_ALE}}": safe_text(getattr(procurement, "ale", None)),
+            "{{CURRENT_YEAR}}": str(getattr(procurement, "fiscal_year", None) or ""),
+            "{{ML_TOTAL_WORDS}}": money_words_el(resolve_document_total_value(procurement, analysis)),
+            "{{ML_TOTAL}}": resolve_document_total(procurement, analysis),
+            "{{PROCUREMENT_KRATHSEIS_SYNOLO}}": _resolve_krathseis_label(analysis),
+            "{{PROCUREMENT_FE}}": _resolve_fe_label(analysis),
+            "{{PROCUREMENT_FPA}}": _resolve_fpa_label(analysis),
+            "{{AN_SUM_TOTAL}}": money_plain(analysis.get("sum_total", 0)),
+            "{{VAT_SENTENCE}}": _resolve_vat_sentence(analysis, is_services),
+            "{{CONTRACT_KIND_TITLE}}": _resolve_contract_kind_title(is_services),
+            "{{TABLE_REFERENCE_PHRASE}}": _resolve_table_reference_phrase(is_services),
+            "{{DELIVERY_SENTENCE}}": _resolve_delivery_sentence(is_services),
+            "{{DELIVERY_TO_SERVICE_SENTENCE}}": _resolve_delivery_to_service_sentence(is_services),
+            "{{DEADLINE_PHRASE}}": _resolve_deadline_phrase(is_services),
+            "{{COMPLETION_PHRASE}}": _resolve_completion_phrase(is_services),
+            "{{NONCONFORMITY_SUBJECT}}": _resolve_nonconformity_subject(is_services),
+            "{{TABLE_TITLE}}": _resolve_table_title(is_services),
+        }
 
-    replace_placeholders_everywhere(doc, mapping)
-    replace_placeholders_in_headers_and_footers(doc, mapping)
+    with _timed(instrumentation, "replace_placeholders_body", placeholders=len(mapping)):
+        replace_placeholders_everywhere(doc, mapping)
 
-    _apply_legacy_goods_services_wording(doc, is_services=is_services, analysis=analysis)
+    with _timed(instrumentation, "replace_headers_footers", placeholders=len(mapping)):
+        replace_placeholders_in_headers_and_footers(doc, mapping)
 
-    contract_table = _find_contract_table(doc)
+    with _timed(instrumentation, "apply_legacy_wording"):
+        _apply_legacy_goods_services_wording(doc, is_services=is_services, analysis=analysis)
+
+    with _timed(instrumentation, "locate_tables", materials_count=len(list(getattr(procurement, "materials", []) or []))):
+        contract_table = _find_contract_table(doc)
+
     if contract_table is not None:
-        _fill_contract_table(contract_table, procurement, analysis)
+        with _timed(
+            instrumentation,
+            "fill_contract_table",
+            materials_count=len(list(getattr(procurement, "materials", []) or [])),
+        ):
+            _fill_contract_table(contract_table, procurement, analysis)
 
-    set_global_font_arial_12(doc)
+    with _timed(instrumentation, "set_global_font"):
+        set_global_font_arial_12(doc)
 
-    output = BytesIO()
-    doc.save(output)
+    with _timed(instrumentation, "save_docx"):
+        output = BytesIO()
+        doc.save(output)
+
     return output.getvalue()
 
 

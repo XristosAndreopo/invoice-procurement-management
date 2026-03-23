@@ -48,6 +48,7 @@ Confirmed placeholders present in the template include:
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -74,6 +75,20 @@ from .common.domain import (
     winner_supplier_line,
 )
 from .common.formatting import safe_text, short_date_el, upper_no_accents, upper_service_name
+from .instrumentation import ReportInstrumentation
+
+
+def _timed(
+    instrumentation: Optional[ReportInstrumentation],
+    detail_name: str,
+    **extra: Any,
+):
+    """
+    Return an instrumentation timing context when available, otherwise a no-op.
+    """
+    if instrumentation is None:
+        return nullcontext()
+    return instrumentation.timed_detail(detail_name, **extra)
 
 
 def _template_path() -> Path:
@@ -311,6 +326,7 @@ def build_award_decision_docx(
     analysis: dict,
     is_services: bool,
     constants: Optional[AwardDecisionConstants] = None,
+    instrumentation: Optional[ReportInstrumentation] = None,
 ) -> bytes:
     """
     Build the award decision DOCX and return it as bytes.
@@ -321,81 +337,91 @@ def build_award_decision_docx(
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    doc = Document(str(template_path))
+    with _timed(instrumentation, "load_template"):
+        doc = Document(str(template_path))
 
     proc_type = "παροχή υπηρεσιών" if is_services else "προμήθεια υλικών"
 
     public_withholdings = analysis.get("public_withholdings") or {}
     income_tax = analysis.get("income_tax") or {}
 
-    public_pct = percent(public_withholdings.get("total_percent", 0))
-    income_tax_pct = percent(income_tax.get("rate_percent", 0))
-    vat_pct = percent(analysis.get("vat_percent", 0))
+    with _timed(instrumentation, "build_mapping"):
+        public_pct = percent(public_withholdings.get("total_percent", 0))
+        income_tax_pct = percent(income_tax.get("rate_percent", 0))
+        vat_pct = percent(analysis.get("vat_percent", 0))
 
-    winner_name = safe_text(getattr(winner, "name", None), default="—")
-    winner_afm = safe_text(getattr(winner, "afm", None), default="—")
-    winner_line = winner_supplier_line(winner)
+        winner_name = safe_text(getattr(winner, "name", None), default="—")
+        winner_afm = safe_text(getattr(winner, "afm", None), default="—")
+        winner_line = winner_supplier_line(winner)
 
-    mapping: dict[str, str] = {
-        "{{SHORT_DATE}}": short_date_el(),
-        "{{PROC_TYPE}}": proc_type,
-        "{{SERVICE_UNIT_NAME}}": upper_service_name(
-            safe_text(getattr(service_unit, "description", None), default="—")
-        ),
-        "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
-        "{{SERVICE_UNIT_REGION}}": safe_text(getattr(service_unit, "region", None)),
-        "{{procurement.aay}}": safe_text(getattr(procurement, "aay", None)),
-        "{{procurement.adam_aay}}": safe_text(getattr(procurement, "adam_aay", None)),
-        "{{procurement.identity_prosklisis}}": safe_text(
-            getattr(procurement, "identity_prosklisis", None)
-        ),
-        "{{procurement.adam_prosklisis}}": safe_text(getattr(procurement, "adam_prosklisis", None)),
-        "{{ procurement.adam_prosklisis}}": safe_text(
-            getattr(procurement, "adam_prosklisis", None)
-        ),
-        "{{procurement.ale}}": safe_text(getattr(procurement, "ale", None)),
-        "{{current_year}}": str(getattr(procurement, "fiscal_year", None) or ""),
-        "{{current year}}": str(getattr(procurement, "fiscal_year", None) or ""),
-        "{{armodiothtas}}": _resolve_armodiothtas(procurement),
-        "{{WINNER_SUPPLIER_LINE}}": winner_line,
-        "{{supplier.name}}": winner_name,
-        "{{supplier.afm}}": winner_afm,
-        "{{RECIPIENTS_INFO}}": format_recipients_block(other_suppliers),
-        "{{service.commander}}": safe_text(getattr(service_unit, "commander", None), default="—"),
-        "{{COMMANDER_ROLE_TYPE}}": safe_text(
-            getattr(service_unit, "commander_role_type", None)
-        ),
-        "{{AN_PUBLIC_WITHHOLD_PERCENT}}": f" ({public_pct}%)",
-        "{{AN_PUBLIC_WITHHOLD_TOTAL}}": money_plain(public_withholdings.get("total_amount", 0)),
-        "{{AN_INCOME_TAX_RATE}}": f" ({income_tax_pct}%)",
-        "{{AN_INCOME_TAX_TOTAL}}": money_plain(income_tax.get("amount", 0)),
-        "{{AN_VAT_PERCENT}}": vat_pct,
-        "{{AN_VAT_AMOUNT}}": money_plain(analysis.get("vat_amount", 0)),
-        "{{AN_SUM_TOTAL}}": money_plain(analysis.get("sum_total", 0)),
-        "{{AN_PAYABLE_TOTAL}}": money_plain(analysis.get("payable_total", 0)),
-        "{{ML_TOTAL}}": resolve_document_total(procurement, analysis),
-        "{{ML_TOTAL_WORDS}}": money_words_el(resolve_document_total_value(procurement, analysis)),
-        "{{HANDLER_DIRECTORY}}": upper_no_accents(resolve_handler_directory(procurement)),
-        "{{HANDLER_DEPARTMENT}}": resolve_handler_department(procurement),
-    }
+        mapping: dict[str, str] = {
+            "{{SHORT_DATE}}": short_date_el(),
+            "{{PROC_TYPE}}": proc_type,
+            "{{SERVICE_UNIT_NAME}}": upper_service_name(
+                safe_text(getattr(service_unit, "description", None), default="—")
+            ),
+            "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
+            "{{SERVICE_UNIT_REGION}}": safe_text(getattr(service_unit, "region", None)),
+            "{{procurement.aay}}": safe_text(getattr(procurement, "aay", None)),
+            "{{procurement.adam_aay}}": safe_text(getattr(procurement, "adam_aay", None)),
+            "{{procurement.identity_prosklisis}}": safe_text(
+                getattr(procurement, "identity_prosklisis", None)
+            ),
+            "{{procurement.adam_prosklisis}}": safe_text(
+                getattr(procurement, "adam_prosklisis", None)
+            ),
+            "{{procurement.ale}}": safe_text(getattr(procurement, "ale", None)),
+            "{{current_year}}": str(getattr(procurement, "fiscal_year", None) or ""),
+            "{{armodiothtas}}": _resolve_armodiothtas(procurement),
+            "{{WINNER_SUPPLIER_LINE}}": winner_line,
+            "{{supplier.name}}": winner_name,
+            "{{supplier.afm}}": winner_afm,
+            "{{RECIPIENTS_INFO}}": format_recipients_block(other_suppliers),
+            "{{service.commander}}": safe_text(getattr(service_unit, "commander", None), default="—"),
+            "{{COMMANDER_ROLE_TYPE}}": safe_text(
+                getattr(service_unit, "commander_role_type", None)
+            ),
+            "{{AN_PUBLIC_WITHHOLD_PERCENT}}": f" ({public_pct}%)",
+            "{{AN_PUBLIC_WITHHOLD_TOTAL}}": money_plain(public_withholdings.get("total_amount", 0)),
+            "{{AN_INCOME_TAX_RATE}}": f" ({income_tax_pct}%)",
+            "{{AN_INCOME_TAX_TOTAL}}": money_plain(income_tax.get("amount", 0)),
+            "{{AN_VAT_PERCENT}}": vat_pct,
+            "{{AN_VAT_AMOUNT}}": money_plain(analysis.get("vat_amount", 0)),
+            "{{AN_SUM_TOTAL}}": money_plain(analysis.get("sum_total", 0)),
+            "{{AN_PAYABLE_TOTAL}}": money_plain(analysis.get("payable_total", 0)),
+            "{{ML_TOTAL}}": resolve_document_total(procurement, analysis),
+            "{{ML_TOTAL_WORDS}}": money_words_el(resolve_document_total_value(procurement, analysis)),
+            "{{HANDLER_DIRECTORY}}": upper_no_accents(resolve_handler_directory(procurement)),
+            "{{HANDLER_DEPARTMENT}}": resolve_handler_department(procurement),
+        }
 
-    replace_placeholders_everywhere(doc, mapping)
-    _apply_award_paragraph_vat_text(doc, proc_type, analysis.get("vat_percent", 0))
+    with _timed(instrumentation, "replace_placeholders_body", placeholders=len(mapping)):
+        replace_placeholders_everywhere(doc, mapping)
+
+    with _timed(instrumentation, "apply_award_vat_wording"):
+        _apply_award_paragraph_vat_text(doc, proc_type, analysis.get("vat_percent", 0))
 
     materials = list(getattr(procurement, "materials", []) or [])
 
-    items_table = _find_items_table(doc)
+    with _timed(instrumentation, "locate_tables", materials_count=len(materials)):
+        items_table = _find_items_table(doc)
+        cost_table = _find_cost_table(doc)
+
     if items_table is not None:
-        _fill_items_table(items_table, materials)
+        with _timed(instrumentation, "fill_items_table", materials_count=len(materials)):
+            _fill_items_table(items_table, materials)
 
-    cost_table = _find_cost_table(doc)
     if cost_table is not None:
-        _fill_cost_table(cost_table, materials, analysis)
+        with _timed(instrumentation, "fill_cost_table", materials_count=len(materials)):
+            _fill_cost_table(cost_table, materials, analysis)
 
-    set_global_font_arial_12(doc)
+    with _timed(instrumentation, "set_global_font"):
+        set_global_font_arial_12(doc)
 
-    buffer = BytesIO()
-    doc.save(buffer)
+    with _timed(instrumentation, "save_docx"):
+        buffer = BytesIO()
+        doc.save(buffer)
+
     return buffer.getvalue()
 
 

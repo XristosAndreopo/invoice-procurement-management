@@ -43,6 +43,7 @@ IMPORTANT RENDERING RULES
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal
 from io import BytesIO
@@ -74,6 +75,17 @@ from .common.formatting import (
     short_date_el,
     upper_service_name,
 )
+from .instrumentation import ReportInstrumentation
+
+
+def _timed(
+    instrumentation: Optional[ReportInstrumentation],
+    detail_name: str,
+    **extra: Any,
+):
+    if instrumentation is None:
+        return nullcontext()
+    return instrumentation.timed_detail(detail_name, **extra)
 
 
 def _template_path() -> Path:
@@ -248,6 +260,7 @@ def build_expense_transmittal_docx(
     winner: Optional[Any],
     analysis: dict[str, Any],
     constants: Optional[ExpenseTransmittalConstants] = None,
+    instrumentation: Optional[ReportInstrumentation] = None,
 ) -> bytes:
     """
     Build the expense transmittal DOCX and return it as bytes.
@@ -258,66 +271,72 @@ def build_expense_transmittal_docx(
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    doc = Document(str(template_path))
+    with _timed(instrumentation, "load_template"):
+        doc = Document(str(template_path))
 
-    supporting_items = _build_supporting_document_items(procurement, analysis)
+    with _timed(instrumentation, "build_supporting_items"):
+        supporting_items = _build_supporting_document_items(procurement, analysis)
 
-    mapping: dict[str, str] = {
-        "{{SERVICE_UNIT_NAME}}": upper_service_name(
-            safe_text(getattr(service_unit, "description", None), default="—")
-        ),
-        "{{APPLICATION_ADMIN_DIRECTORY}}": _resolve_application_admin_directory(service_unit),
-        "{{APPLICATION_ADMIN}}": _resolve_application_admin(service_unit),
-        "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
-        "{{SERVICE_UNIT_REGION}}": safe_text(getattr(service_unit, "region", None)),
-        "{{SHORT_DATE}}": short_date_el(),
-        "{{PROC_TYPE}}": _resolve_proc_type(procurement),
-        "{{procurement.hop_approval}}": safe_text(getattr(procurement, "hop_approval", None)),
-        "{{procurement.hop_preapproval}}": safe_text(
-            getattr(procurement, "hop_preapproval", None)
-        ),
-        "{{procurement. hop_preapproval}}": safe_text(
-            getattr(procurement, "hop_preapproval", None)
-        ),
-        "{{procurement.aay}}": safe_text(getattr(procurement, "aay", None)),
-        "{{procurement.protocol_number}}": safe_text(
-            getattr(procurement, "protocol_number", None)
-        ),
-        "{{procurement. protocol_number}}": safe_text(
-            getattr(procurement, "protocol_number", None)
-        ),
-        "{{procurement.committee_description}}": _resolve_committee_description(procurement),
-        "{{WINNER_SUPPLIER_LINE}}": winner_supplier_line(winner),
-        "{{procurement.invoice_number}}": safe_text(getattr(procurement, "invoice_number", None)),
-        "{{procurement.invoice_date}}": format_date_ddmmyyyy(
-            getattr(procurement, "invoice_date", None)
-        ),
-        "{{ML_TOTAL}}": resolve_document_total(procurement, analysis),
-        "{{ML_TOTAL_WORDS}}": money_words_el(resolve_document_total_value(procurement, analysis)),
-        "{{procurement.invoice_receipt_date}}": format_date_ddmmyyyy(
-            getattr(procurement, "invoice_receipt_date", None)
-        ),
-        "{{procurement.identity_prosklisis}}": safe_text(
-            getattr(procurement, "identity_prosklisis", None)
-        ),
-        "{{ProcurementCommittee.description}}": _resolve_committee_description(procurement),
-        "{{procurement.invoice}}": safe_text(getattr(procurement, "invoice_number", None)),
-        "{{procurement.date}}": format_date_ddmmyyyy(getattr(procurement, "invoice_date", None)),
-        "{{MANAGER_SERVICE}}": _resolve_application_admin(service_unit),
-    }
+    with _timed(instrumentation, "build_mapping"):
+        mapping: dict[str, str] = {
+            "{{SERVICE_UNIT_NAME}}": upper_service_name(
+                safe_text(getattr(service_unit, "description", None), default="—")
+            ),
+            "{{APPLICATION_ADMIN_DIRECTORY}}": _resolve_application_admin_directory(service_unit),
+            "{{APPLICATION_ADMIN}}": _resolve_application_admin(service_unit),
+            "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
+            "{{SERVICE_UNIT_REGION}}": safe_text(getattr(service_unit, "region", None)),
+            "{{SHORT_DATE}}": short_date_el(),
+            "{{PROC_TYPE}}": _resolve_proc_type(procurement),
+            "{{procurement.hop_approval}}": safe_text(getattr(procurement, "hop_approval", None)),
+            "{{procurement.hop_preapproval}}": safe_text(
+                getattr(procurement, "hop_preapproval", None)
+            ),
+            "{{procurement.aay}}": safe_text(getattr(procurement, "aay", None)),
+            "{{procurement.protocol_number}}": safe_text(
+                getattr(procurement, "protocol_number", None)
+            ),
+            "{{procurement.committee_description}}": _resolve_committee_description(procurement),
+            "{{WINNER_SUPPLIER_LINE}}": winner_supplier_line(winner),
+            "{{procurement.invoice_number}}": safe_text(getattr(procurement, "invoice_number", None)),
+            "{{procurement.invoice_date}}": format_date_ddmmyyyy(
+                getattr(procurement, "invoice_date", None)
+            ),
+            "{{ML_TOTAL}}": resolve_document_total(procurement, analysis),
+            "{{ML_TOTAL_WORDS}}": money_words_el(resolve_document_total_value(procurement, analysis)),
+            "{{procurement.invoice_receipt_date}}": format_date_ddmmyyyy(
+                getattr(procurement, "invoice_receipt_date", None)
+            ),
+            "{{procurement.identity_prosklisis}}": safe_text(
+                getattr(procurement, "identity_prosklisis", None)
+            ),
+            "{{ProcurementCommittee.description}}": _resolve_committee_description(procurement),
+            "{{procurement.invoice}}": safe_text(getattr(procurement, "invoice_number", None)),
+            "{{procurement.date}}": format_date_ddmmyyyy(getattr(procurement, "invoice_date", None)),
+            "{{MANAGER_SERVICE}}": _resolve_application_admin(service_unit),
+        }
 
-    replace_placeholders_everywhere(doc, mapping)
+    with _timed(instrumentation, "replace_placeholders_body", placeholders=len(mapping)):
+        replace_placeholders_everywhere(doc, mapping)
 
-    _render_supporting_documents_block(
-        doc=doc,
-        placeholder="{{SUPPORTING_DOCUMENTS_BLOCK}}",
-        items=supporting_items,
-    )
+    with _timed(
+        instrumentation,
+        "render_supporting_documents_block",
+        supporting_items_count=len(supporting_items),
+    ):
+        _render_supporting_documents_block(
+            doc=doc,
+            placeholder="{{SUPPORTING_DOCUMENTS_BLOCK}}",
+            items=supporting_items,
+        )
 
-    set_global_font_arial_12(doc)
+    with _timed(instrumentation, "set_global_font"):
+        set_global_font_arial_12(doc)
 
-    output = BytesIO()
-    doc.save(output)
+    with _timed(instrumentation, "save_docx"):
+        output = BytesIO()
+        doc.save(output)
+
     return output.getvalue()
 
 

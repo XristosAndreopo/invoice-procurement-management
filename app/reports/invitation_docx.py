@@ -40,6 +40,7 @@ Therefore:
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -60,6 +61,7 @@ from .common.domain import (
     economic_operator_label,
     invited_suppliers_inline,
     recipients_block,
+    resolve_handler_directory,
     resolve_proc_type_lower,
 )
 from .common.formatting import (
@@ -68,6 +70,17 @@ from .common.formatting import (
     short_date_el,
     upper_no_accents,
 )
+from .instrumentation import ReportInstrumentation
+
+
+def _timed(
+    instrumentation: Optional[ReportInstrumentation],
+    detail_name: str,
+    **extra: Any,
+):
+    if instrumentation is None:
+        return nullcontext()
+    return instrumentation.timed_detail(detail_name, **extra)
 
 
 def _template_path() -> Path:
@@ -76,21 +89,6 @@ def _template_path() -> Path:
     """
     app_dir = Path(__file__).resolve().parents[1]
     return app_dir / "templates" / "docx" / "invitation_template.docx"
-
-
-def _resolve_handler_directory(procurement: Any) -> str:
-    """
-    Invitation requires uppercase handler directory rendering.
-    """
-    assignment = getattr(procurement, "handler_assignment", None)
-    if assignment is not None:
-        directory = getattr(assignment, "directory", None)
-        if directory is not None:
-            return upper_no_accents(getattr(directory, "name", None))
-
-    handler = getattr(procurement, "handler_personnel", None)
-    directory = getattr(handler, "directory", None)
-    return upper_no_accents(getattr(directory, "name", None))
 
 
 def _resolve_service_unit_place(service_unit: Any) -> str:
@@ -186,6 +184,7 @@ def build_invitation_docx(
     winner: Optional[Any],
     analysis: dict[str, Any],
     constants: Optional[InvitationConstants] = None,
+    instrumentation: Optional[ReportInstrumentation] = None,
 ) -> bytes:
     """
     Build the invitation DOCX and return it as bytes.
@@ -198,54 +197,62 @@ def build_invitation_docx(
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    doc = Document(str(template_path))
+    with _timed(instrumentation, "load_template"):
+        doc = Document(str(template_path))
 
-    mapping: dict[str, str] = {
-        "{{SERVICE_UNIT_NAME}}": upper_no_accents(getattr(service_unit, "description", None)),
-        "{{SERVICE_UNIT_DESCRIPTION}}": safe_text(getattr(service_unit, "description", None)),
-        "{{PROCUREMENT_SHORT_DESCRIPTION}}": lower_preserve_accents(
-            getattr(procurement, "description", None)
-        ),
-        "{{HANDLER_DIRECTORY}}": _resolve_handler_directory(procurement),
-        "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
-        "{{ SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
-        "{{SERVICE_UNIT_REGION}}": safe_text(getattr(service_unit, "region", None)),
-        "{{SHORT_DATE}}": short_date_el(),
-        "{{PROC_TYPE}}": resolve_proc_type_lower(procurement),
-        "{{ECONOMIC_OPERATOR_LABEL}}": economic_operator_label(procurement),
-        "{{procurement.aay}}": safe_text(getattr(procurement, "aay", None)),
-        "{{procurement.adam_aay}}": safe_text(getattr(procurement, "adam_aay", None)),
-        "{{procurement hop_approval_commitment}}": safe_text(
-            getattr(procurement, "hop_approval_commitment", None)
-        ),
-        "{{INVITED_SUPPLIERS_INLINE}}": invited_suppliers_inline(procurement),
-        "{{RECIPIENTS_INFO}}": recipients_block(procurement),
-        "{{WINNER_SUPPLIER_LINE}}": invited_suppliers_inline(procurement),
-        "{{SERVICE_UNIT_ADRESS}}": safe_text(getattr(service_unit, "address", None)),
-        "{{ SERVICE_UNIT_ADRESS}}": safe_text(getattr(service_unit, "address", None)),
-        "{{SERVICE_UNIT_PLACE}}": _resolve_service_unit_place(service_unit),
-        "{{SERVICE_UNIT_POSTAL_CODE}}": safe_text(getattr(service_unit, "postal_code", None)),
-        "{{ SERVICE_UNIT_EMAIL}}": safe_text(getattr(service_unit, "email", None)),
-        "{{SERVICE_UNIT_EMAIL}}": safe_text(getattr(service_unit, "email", None)),
-        "{{service.commander}}": safe_text(getattr(service_unit, "commander", None)),
-        "{{COMMANDER_ROLE_TYPE}}": safe_text(getattr(service_unit, "commander_role_type", None)),
-        "{{ML_NO}}": "",
-        "{{ML_DESC}}": "",
-        "{{ML_UNIT}}": "",
-        "{{ML_QTY}}": "",
-        "{{ML_CPV}}": "",
-    }
+    with _timed(instrumentation, "build_mapping"):
+        mapping: dict[str, str] = {
+            "{{SERVICE_UNIT_NAME}}": upper_no_accents(getattr(service_unit, "description", None)),
+            "{{SERVICE_UNIT_DESCRIPTION}}": safe_text(getattr(service_unit, "description", None)),
+            "{{PROCUREMENT_SHORT_DESCRIPTION}}": lower_preserve_accents(
+                getattr(procurement, "description", None)
+            ),
+            "{{HANDLER_DIRECTORY}}": resolve_handler_directory(procurement, uppercase=True),
+            "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
+            "{{SERVICE_UNIT_REGION}}": safe_text(getattr(service_unit, "region", None)),
+            "{{SHORT_DATE}}": short_date_el(),
+            "{{PROC_TYPE}}": resolve_proc_type_lower(procurement),
+            "{{ECONOMIC_OPERATOR_LABEL}}": economic_operator_label(procurement),
+            "{{procurement.aay}}": safe_text(getattr(procurement, "aay", None)),
+            "{{procurement.adam_aay}}": safe_text(getattr(procurement, "adam_aay", None)),
+            "{{procurement.hop_approval_commitment}}": safe_text(
+                getattr(procurement, "hop_approval_commitment", None)
+            ),
+            "{{INVITED_SUPPLIERS_INLINE}}": invited_suppliers_inline(procurement),
+            "{{RECIPIENTS_INFO}}": recipients_block(procurement),
+            "{{WINNER_SUPPLIER_LINE}}": invited_suppliers_inline(procurement),
+            "{{SERVICE_UNIT_ADDRESS}}": safe_text(getattr(service_unit, "address", None)),
+            "{{SERVICE_UNIT_PLACE}}": _resolve_service_unit_place(service_unit),
+            "{{SERVICE_UNIT_POSTAL_CODE}}": safe_text(getattr(service_unit, "postal_code", None)),
+            "{{SERVICE_UNIT_EMAIL}}": safe_text(getattr(service_unit, "email", None)),
+            "{{service.commander}}": safe_text(getattr(service_unit, "commander", None)),
+            "{{COMMANDER_ROLE_TYPE}}": safe_text(getattr(service_unit, "commander_role_type", None)),
+            "{{ML_NO}}": "",
+            "{{ML_DESC}}": "",
+            "{{ML_UNIT}}": "",
+            "{{ML_QTY}}": "",
+            "{{ML_CPV}}": "",
+        }
 
-    replace_placeholders_everywhere(doc, mapping)
+    with _timed(instrumentation, "replace_placeholders_body", placeholders=len(mapping)):
+        replace_placeholders_everywhere(doc, mapping)
 
-    invitation_table = _find_invitation_table(doc)
+    materials = _sorted_materials(procurement)
+
+    with _timed(instrumentation, "locate_tables", materials_count=len(materials)):
+        invitation_table = _find_invitation_table(doc)
+
     if invitation_table is not None:
-        _fill_invitation_table(invitation_table, procurement)
+        with _timed(instrumentation, "fill_invitation_table", materials_count=len(materials)):
+            _fill_invitation_table(invitation_table, procurement)
 
-    set_global_font_arial_12(doc)
+    with _timed(instrumentation, "set_global_font"):
+        set_global_font_arial_12(doc)
 
-    output = BytesIO()
-    doc.save(output)
+    with _timed(instrumentation, "save_docx"):
+        output = BytesIO()
+        doc.save(output)
+
     return output.getvalue()
 
 

@@ -8,21 +8,20 @@ PURPOSE
 This module provides lightweight, request-local timing helpers for report
 generation and download endpoints.
 
-WHY THIS FILE EXISTS
---------------------
-The application currently generates downloadable procurement reports inside the
-HTTP request/response cycle.
+It supports two timing levels:
+1. route-level stage timings
+2. deep builder-level detail timings
 
-When a report feels slow, we need to know precisely where time is spent:
-- ORM/eager-load query
-- winner / related-entity resolution
-- payment analysis
-- DOCX/PDF rendering
-- filename/buffer/send preparation
-- total endpoint time
-
-This module centralizes that timing logic so routes remain readable and the
-logging format stays consistent across all reports.
+The deep detail timings are used inside the report builders to break down the
+single "build_docx" stage into internal steps such as:
+- load_template
+- build_mapping
+- replace_placeholders_body
+- replace_headers_footers
+- locate_tables
+- fill_tables
+- set_global_font
+- save_docx
 
 DESIGN GOALS
 ------------
@@ -30,15 +29,7 @@ DESIGN GOALS
 - no dependency on external APM tooling
 - structured logs via Flask's standard app logger
 - safe to leave enabled in production
-- easy to remove or extend later
-
-LOGGING STRATEGY
-----------------
-Each report request produces:
-1. per-stage timing logs
-2. one final summary log
-
-All logs use milliseconds for readability in operational debugging.
+- easy to extend later
 
 IMPORTANT BOUNDARY
 ------------------
@@ -55,8 +46,9 @@ from __future__ import annotations
 
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterator
 
 from flask import current_app, request
 
@@ -95,13 +87,16 @@ class ReportInstrumentation:
         Perf-counter timestamp for whole-request measurement.
 
     stage_started_at:
-        Current stage start timestamp when a stage is active.
+        Current route-level stage start timestamp when a stage is active.
 
     stage_name:
-        Name of the currently active stage.
+        Name of the currently active route-level stage.
 
     stage_timings_ms:
-        Mapping of stage name -> measured milliseconds.
+        Mapping of route-level stage name -> measured milliseconds.
+
+    detail_timings_ms:
+        Mapping of builder-level detail name -> measured milliseconds.
     """
 
     report_name: str
@@ -111,25 +106,13 @@ class ReportInstrumentation:
     stage_started_at: float | None = None
     stage_name: str | None = None
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
+    detail_timings_ms: dict[str, float] = field(default_factory=dict)
 
     def start_stage(self, name: str) -> None:
         """
-        Start a named timing stage.
+        Start a named route-level timing stage.
 
-        PARAMETERS
-        ----------
-        name:
-            Logical stage name, for example:
-            - load_procurement
-            - resolve_analysis
-            - build_docx
-            - build_filename
-            - prepare_response
-
-        NOTES
-        -----
-        If another stage is already active, this method ends it first so the
-        collector remains robust even if callers forget to end explicitly.
+        If another stage is already active, this method ends it first.
         """
         if self.stage_name is not None:
             self.end_stage()
@@ -139,17 +122,12 @@ class ReportInstrumentation:
 
     def end_stage(self, **extra: Any) -> float:
         """
-        End the current stage and log its duration.
+        End the current route-level stage and emit a timing log.
 
         RETURNS
         -------
         float
             Measured stage duration in milliseconds.
-
-        PARAMETERS
-        ----------
-        extra:
-            Optional structured metadata included in the stage log.
         """
         if self.stage_name is None or self.stage_started_at is None:
             return 0.0
@@ -178,11 +156,6 @@ class ReportInstrumentation:
     def mark(self, name: str, value: Any) -> None:
         """
         Emit a lightweight metadata log associated with this report request.
-
-        This is useful for:
-        - line counts
-        - whether services were detected
-        - byte size of generated output
         """
         payload = self._base_payload()
         payload.update(
@@ -193,6 +166,40 @@ class ReportInstrumentation:
         )
         current_app.logger.info("REPORT_TIMING_MARK %s", payload)
 
+    def log_detail(self, name: str, elapsed_ms: float, **extra: Any) -> None:
+        """
+        Emit one builder-level detail timing log.
+        """
+        detail_name = str(name)
+        self.detail_timings_ms[detail_name] = elapsed_ms
+
+        payload = self._base_payload()
+        payload.update(
+            {
+                "detail": detail_name,
+                "detail_ms": elapsed_ms,
+            }
+        )
+        payload.update(extra)
+
+        current_app.logger.info("REPORT_TIMING_DETAIL %s", payload)
+
+    @contextmanager
+    def timed_detail(self, name: str, **extra: Any) -> Iterator[None]:
+        """
+        Context manager for builder-level detail timing.
+
+        Example
+        -------
+        with instrumentation.timed_detail("load_template"):
+            doc = Document(...)
+        """
+        started_at = _now()
+        try:
+            yield
+        finally:
+            self.log_detail(name, _ms(started_at, _now()), **extra)
+
     def finish(self, **extra: Any) -> float:
         """
         Finish the instrumentation session and emit the summary log.
@@ -201,11 +208,6 @@ class ReportInstrumentation:
         -------
         float
             Total measured request duration in milliseconds.
-
-        PARAMETERS
-        ----------
-        extra:
-            Optional structured metadata to include in the summary log.
         """
         if self.stage_name is not None:
             self.end_stage()
@@ -217,6 +219,7 @@ class ReportInstrumentation:
             {
                 "total_ms": total_ms,
                 "stages_ms": dict(self.stage_timings_ms),
+                "details_ms": dict(self.detail_timings_ms),
                 "path": request.path if request else None,
                 "method": request.method if request else None,
             }
