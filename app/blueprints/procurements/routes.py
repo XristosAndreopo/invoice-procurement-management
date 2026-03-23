@@ -27,6 +27,11 @@ from ...audit import log_action, serialize_model
 from ...extensions import db
 from ...models import Procurement, ProcurementSupplier
 from ...reports.award_decision_docx import AwardDecisionConstants, build_award_decision_docx
+from ...reports.contract_docx import (
+    ContractConstants,
+    build_contract_docx,
+    build_contract_filename,
+)
 from ...reports.expense_transmittal_docx import (
     ExpenseTransmittalConstants,
     build_expense_transmittal_docx,
@@ -304,6 +309,85 @@ def report_award_decision_docx(procurement_id: int):
     amount_label = money_filename(amount_value)
 
     filename = f"Απόφαση Ανάθεσης {kind_label} {supplier_label} {amount_label}.docx"
+    filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+    if not filename.lower().endswith(".docx"):
+        filename = f"{filename}.docx"
+
+    buffer = BytesIO(docx_bytes)
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        max_age=0,
+    )
+
+
+@procurements_bp.route("/<int:procurement_id>/reports/contract", methods=["GET"])
+@login_required
+@procurement_access_required(load_procurement)
+def report_contract_docx(procurement_id: int):
+    """
+    Build and return the Contract DOCX.
+
+    REQUIRED RELATIONSHIPS
+    ----------------------
+    This report needs:
+    - service_unit
+    - handler_assignment.directory
+    - winner supplier
+    - materials
+    - withholding_profile / income_tax_rule for payment analysis
+
+    BUSINESS RULE
+    -------------
+    The contract must switch wording dynamically between:
+    - services
+    - goods/materials
+
+    The canonical project rule is the same used in the other reports:
+    if any material line has `is_service=True`, the document is treated
+    as a services contract.
+    """
+    procurement = (
+        Procurement.query.options(
+            joinedload(Procurement.service_unit),
+            joinedload(Procurement.handler_personnel),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.directory
+            ),
+            joinedload(Procurement.handler_assignment).joinedload(
+                Procurement.handler_assignment.property.mapper.class_.department
+            ),
+            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+            joinedload(Procurement.materials),
+            joinedload(Procurement.withholding_profile),
+            joinedload(Procurement.income_tax_rule),
+        )
+        .get_or_404(procurement_id)
+    )
+
+    winner = procurement.winner_supplier_obj()
+    analysis = procurement.compute_payment_analysis()
+
+    lines = list(procurement.materials or [])
+    is_services = any(bool(getattr(line, "is_service", False)) for line in lines)
+
+    docx_bytes = build_contract_docx(
+        procurement=procurement,
+        service_unit=procurement.service_unit,
+        winner=winner,
+        analysis=analysis,
+        constants=ContractConstants(),
+    )
+
+    filename = build_contract_filename(
+        procurement=procurement,
+        winner=winner,
+        is_services=is_services,
+    )
     filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
     if not filename.lower().endswith(".docx"):
         filename = f"{filename}.docx"

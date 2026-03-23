@@ -50,9 +50,14 @@
         Απόφαση Ανάθεσης
       </a>
 
-      <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      <a
+        class="btn btn-sm btn-outline-primary"
+        href="{{ url_for('procurements.report_contract_docx', procurement_id=procurement.id) }}"
+        title="Λήψη Σύμβασης (DOCX)"
+      >
         Σύμβαση
-      </button>
+      </a>
+
       <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
         Πρωτόκολλο
       </button>
