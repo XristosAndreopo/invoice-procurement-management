@@ -37,6 +37,7 @@ from ...reports.expense_transmittal_docx import (
     build_expense_transmittal_docx,
     build_expense_transmittal_filename,
 )
+from ...reports.instrumentation import begin_report_timing
 from ...reports.invitation_docx import (
     InvitationConstants,
     build_invitation_docx,
@@ -143,48 +144,71 @@ def report_proforma_invoice(procurement_id: int):
     """
     Render the proforma invoice PDF.
     """
-    procurement = (
-        Procurement.query.options(
-            joinedload(Procurement.service_unit),
-            joinedload(Procurement.handler_personnel),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.department
-            ),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.directory
-            ),
-            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
-            joinedload(Procurement.materials),
-            joinedload(Procurement.withholding_profile),
-            joinedload(Procurement.income_tax_rule),
+    timing = begin_report_timing("proforma_invoice_pdf", procurement_id=procurement_id)
+
+    try:
+        timing.start_stage("load_procurement")
+        procurement = (
+            Procurement.query.options(
+                joinedload(Procurement.service_unit),
+                joinedload(Procurement.handler_personnel),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.department
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory
+                ),
+                joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+                joinedload(Procurement.materials),
+                joinedload(Procurement.withholding_profile),
+                joinedload(Procurement.income_tax_rule),
+            )
+            .get_or_404(procurement_id)
         )
-        .get_or_404(procurement_id)
-    )
+        timing.end_stage()
 
-    winner = procurement.winner_supplier_obj()
-    analysis = procurement.compute_payment_analysis()
+        timing.start_stage("resolve_context")
+        winner = procurement.winner_supplier_obj()
+        analysis = procurement.compute_payment_analysis()
 
-    lines = list(procurement.materials or [])
-    has_services = any(bool(getattr(line, "is_service", False)) for line in lines)
-    table_title = "Πίνακας Παρεχόμενων Υπηρεσιών" if has_services else "Πίνακας Προμηθευτέων Υλικών"
+        lines = list(procurement.materials or [])
+        has_services = any(bool(getattr(line, "is_service", False)) for line in lines)
+        table_title = (
+            "Πίνακας Παρεχόμενων Υπηρεσιών"
+            if has_services
+            else "Πίνακας Προμηθευτέων Υλικών"
+        )
+        timing.mark("materials_count", len(lines))
+        timing.mark("has_services", has_services)
+        timing.end_stage()
 
-    pdf_bytes = build_proforma_invoice_pdf(
-        procurement=procurement,
-        service_unit=procurement.service_unit,
-        winner=winner,
-        analysis=analysis,
-        table_title=table_title,
-        constants=ProformaConstants(
-            pn_afm="090153025",
-            pn_doy="ΚΕΦΟΔΕ ΑΤΤΙΚΗΣ",
-            reference_goods="ΒΤ-11-1",
-        ),
-    )
+        timing.start_stage("build_pdf")
+        pdf_bytes = build_proforma_invoice_pdf(
+            procurement=procurement,
+            service_unit=procurement.service_unit,
+            winner=winner,
+            analysis=analysis,
+            table_title=table_title,
+            constants=ProformaConstants(
+                pn_afm="090153025",
+                pn_doy="ΚΕΦΟΔΕ ΑΤΤΙΚΗΣ",
+                reference_goods="ΒΤ-11-1",
+            ),
+        )
+        timing.mark("output_bytes", len(pdf_bytes))
+        timing.end_stage()
 
-    response = make_response(pdf_bytes)
-    response.headers["Content-Type"] = "application/pdf"
-    response.headers["Content-Disposition"] = f'inline; filename="proforma_{procurement.id}.pdf"'
-    return response
+        timing.start_stage("prepare_response")
+        response = make_response(pdf_bytes)
+        response.headers["Content-Type"] = "application/pdf"
+        response.headers["Content-Disposition"] = f'inline; filename="proforma_{procurement.id}.pdf"'
+        timing.end_stage()
+
+        timing.finish(status="ok")
+        return response
+    except Exception:
+        timing.finish(status="error")
+        raise
 
 
 @procurements_bp.route("/<int:procurement_id>/reports/invitation", methods=["GET"])
@@ -202,53 +226,75 @@ def report_invitation_docx(procurement_id: int):
     - winner supplier
     - materials
     """
-    procurement = (
-        Procurement.query.options(
-            joinedload(Procurement.service_unit),
-            joinedload(Procurement.handler_personnel),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.directory
-            ),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.department
-            ),
-            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
-            joinedload(Procurement.materials),
-            joinedload(Procurement.withholding_profile),
-            joinedload(Procurement.income_tax_rule),
+    timing = begin_report_timing("invitation_docx", procurement_id=procurement_id)
+
+    try:
+        timing.start_stage("load_procurement")
+        procurement = (
+            Procurement.query.options(
+                joinedload(Procurement.service_unit),
+                joinedload(Procurement.handler_personnel),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.department
+                ),
+                joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+                joinedload(Procurement.materials),
+                joinedload(Procurement.withholding_profile),
+                joinedload(Procurement.income_tax_rule),
+            )
+            .get_or_404(procurement_id)
         )
-        .get_or_404(procurement_id)
-    )
+        timing.end_stage()
 
-    winner = procurement.winner_supplier_obj()
-    analysis = procurement.compute_payment_analysis()
+        timing.start_stage("resolve_context")
+        winner = procurement.winner_supplier_obj()
+        analysis = procurement.compute_payment_analysis()
+        materials = list(procurement.materials or [])
+        timing.mark("materials_count", len(materials))
+        timing.mark("suppliers_count", len(list(procurement.supplies_links or [])))
+        timing.end_stage()
 
-    docx_bytes = build_invitation_docx(
-        procurement=procurement,
-        service_unit=procurement.service_unit,
-        winner=winner,
-        analysis=analysis,
-        constants=InvitationConstants(),
-    )
+        timing.start_stage("build_docx")
+        docx_bytes = build_invitation_docx(
+            procurement=procurement,
+            service_unit=procurement.service_unit,
+            winner=winner,
+            analysis=analysis,
+            constants=InvitationConstants(),
+        )
+        timing.mark("output_bytes", len(docx_bytes))
+        timing.end_stage()
 
-    filename = build_invitation_filename(
-        procurement=procurement,
-        winner=winner,
-    )
-    filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
-    if not filename.lower().endswith(".docx"):
-        filename = f"{filename}.docx"
+        timing.start_stage("build_filename")
+        filename = build_invitation_filename(
+            procurement=procurement,
+            winner=winner,
+        )
+        filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+        if not filename.lower().endswith(".docx"):
+            filename = f"{filename}.docx"
+        timing.end_stage(filename=filename)
 
-    buffer = BytesIO(docx_bytes)
-    buffer.seek(0)
+        timing.start_stage("prepare_response")
+        buffer = BytesIO(docx_bytes)
+        buffer.seek(0)
 
-    return send_file(
-        buffer,
-        as_attachment=True,
-        download_name=filename,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        max_age=0,
-    )
+        response = send_file(
+            buffer,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            max_age=0,
+        )
+        timing.end_stage()
+        timing.finish(status="ok")
+        return response
+    except Exception:
+        timing.finish(status="error")
+        raise
 
 
 @procurements_bp.route("/<int:procurement_id>/reports/award-decision", methods=["GET"])
@@ -258,71 +304,94 @@ def report_award_decision_docx(procurement_id: int):
     """
     Build and return the Award Decision DOCX.
     """
-    procurement = (
-        Procurement.query.options(
-            joinedload(Procurement.service_unit),
-            joinedload(Procurement.handler_personnel),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.directory
-            ),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.department
-            ),
-            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
-            joinedload(Procurement.materials),
-            joinedload(Procurement.withholding_profile),
-            joinedload(Procurement.income_tax_rule),
+    timing = begin_report_timing("award_decision_docx", procurement_id=procurement_id)
+
+    try:
+        timing.start_stage("load_procurement")
+        procurement = (
+            Procurement.query.options(
+                joinedload(Procurement.service_unit),
+                joinedload(Procurement.handler_personnel),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.department
+                ),
+                joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+                joinedload(Procurement.materials),
+                joinedload(Procurement.withholding_profile),
+                joinedload(Procurement.income_tax_rule),
+            )
+            .get_or_404(procurement_id)
         )
-        .get_or_404(procurement_id)
-    )
+        timing.end_stage()
 
-    winner = procurement.winner_supplier_obj()
+        timing.start_stage("resolve_context")
+        winner = procurement.winner_supplier_obj()
 
-    other_suppliers = []
-    for link in (procurement.supplies_links or []):
-        if not getattr(link, "supplier", None):
-            continue
-        if getattr(link, "is_winner", False):
-            continue
-        other_suppliers.append(link.supplier)
+        other_suppliers = []
+        for link in (procurement.supplies_links or []):
+            if not getattr(link, "supplier", None):
+                continue
+            if getattr(link, "is_winner", False):
+                continue
+            other_suppliers.append(link.supplier)
 
-    analysis = procurement.compute_payment_analysis()
-    lines = list(procurement.materials or [])
-    is_services = any(bool(getattr(line, "is_service", False)) for line in lines)
+        analysis = procurement.compute_payment_analysis()
+        lines = list(procurement.materials or [])
+        is_services = any(bool(getattr(line, "is_service", False)) for line in lines)
 
-    docx_bytes = build_award_decision_docx(
-        procurement=procurement,
-        service_unit=procurement.service_unit,
-        winner=winner,
-        other_suppliers=other_suppliers,
-        analysis=analysis,
-        is_services=is_services,
-        constants=AwardDecisionConstants(),
-    )
+        timing.mark("materials_count", len(lines))
+        timing.mark("other_suppliers_count", len(other_suppliers))
+        timing.mark("is_services", is_services)
+        timing.end_stage()
 
-    kind_label = "Παροχής Υπηρεσιών" if is_services else "Προμήθειας Υλικών"
-    supplier_label = sanitize_filename_component(getattr(winner, "name", None) if winner else "—")
+        timing.start_stage("build_docx")
+        docx_bytes = build_award_decision_docx(
+            procurement=procurement,
+            service_unit=procurement.service_unit,
+            winner=winner,
+            other_suppliers=other_suppliers,
+            analysis=analysis,
+            is_services=is_services,
+            constants=AwardDecisionConstants(),
+        )
+        timing.mark("output_bytes", len(docx_bytes))
+        timing.end_stage()
 
-    amount_value = getattr(procurement, "grand_total", None)
-    if amount_value is None:
-        amount_value = analysis.get("payable_total") or analysis.get("sum_total") or Decimal("0.00")
-    amount_label = money_filename(amount_value)
+        timing.start_stage("build_filename")
+        kind_label = "Παροχής Υπηρεσιών" if is_services else "Προμήθειας Υλικών"
+        supplier_label = sanitize_filename_component(getattr(winner, "name", None) if winner else "—")
 
-    filename = f"Απόφαση Ανάθεσης {kind_label} {supplier_label} {amount_label}.docx"
-    filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
-    if not filename.lower().endswith(".docx"):
-        filename = f"{filename}.docx"
+        amount_value = getattr(procurement, "grand_total", None)
+        if amount_value is None:
+            amount_value = analysis.get("payable_total") or analysis.get("sum_total") or Decimal("0.00")
+        amount_label = money_filename(amount_value)
 
-    buffer = BytesIO(docx_bytes)
-    buffer.seek(0)
+        filename = f"Απόφαση Ανάθεσης {kind_label} {supplier_label} {amount_label}.docx"
+        filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+        if not filename.lower().endswith(".docx"):
+            filename = f"{filename}.docx"
+        timing.end_stage(filename=filename)
 
-    return send_file(
-        buffer,
-        as_attachment=True,
-        download_name=filename,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        max_age=0,
-    )
+        timing.start_stage("prepare_response")
+        buffer = BytesIO(docx_bytes)
+        buffer.seek(0)
+
+        response = send_file(
+            buffer,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            max_age=0,
+        )
+        timing.end_stage()
+        timing.finish(status="ok")
+        return response
+    except Exception:
+        timing.finish(status="error")
+        raise
 
 
 @procurements_bp.route("/<int:procurement_id>/reports/contract", methods=["GET"])
@@ -351,57 +420,79 @@ def report_contract_docx(procurement_id: int):
     if any material line has `is_service=True`, the document is treated
     as a services contract.
     """
-    procurement = (
-        Procurement.query.options(
-            joinedload(Procurement.service_unit),
-            joinedload(Procurement.handler_personnel),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.directory
-            ),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.department
-            ),
-            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
-            joinedload(Procurement.materials),
-            joinedload(Procurement.withholding_profile),
-            joinedload(Procurement.income_tax_rule),
+    timing = begin_report_timing("contract_docx", procurement_id=procurement_id)
+
+    try:
+        timing.start_stage("load_procurement")
+        procurement = (
+            Procurement.query.options(
+                joinedload(Procurement.service_unit),
+                joinedload(Procurement.handler_personnel),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.department
+                ),
+                joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+                joinedload(Procurement.materials),
+                joinedload(Procurement.withholding_profile),
+                joinedload(Procurement.income_tax_rule),
+            )
+            .get_or_404(procurement_id)
         )
-        .get_or_404(procurement_id)
-    )
+        timing.end_stage()
 
-    winner = procurement.winner_supplier_obj()
-    analysis = procurement.compute_payment_analysis()
+        timing.start_stage("resolve_context")
+        winner = procurement.winner_supplier_obj()
+        analysis = procurement.compute_payment_analysis()
 
-    lines = list(procurement.materials or [])
-    is_services = any(bool(getattr(line, "is_service", False)) for line in lines)
+        lines = list(procurement.materials or [])
+        is_services = any(bool(getattr(line, "is_service", False)) for line in lines)
 
-    docx_bytes = build_contract_docx(
-        procurement=procurement,
-        service_unit=procurement.service_unit,
-        winner=winner,
-        analysis=analysis,
-        constants=ContractConstants(),
-    )
+        timing.mark("materials_count", len(lines))
+        timing.mark("is_services", is_services)
+        timing.end_stage()
 
-    filename = build_contract_filename(
-        procurement=procurement,
-        winner=winner,
-        is_services=is_services,
-    )
-    filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
-    if not filename.lower().endswith(".docx"):
-        filename = f"{filename}.docx"
+        timing.start_stage("build_docx")
+        docx_bytes = build_contract_docx(
+            procurement=procurement,
+            service_unit=procurement.service_unit,
+            winner=winner,
+            analysis=analysis,
+            constants=ContractConstants(),
+        )
+        timing.mark("output_bytes", len(docx_bytes))
+        timing.end_stage()
 
-    buffer = BytesIO(docx_bytes)
-    buffer.seek(0)
+        timing.start_stage("build_filename")
+        filename = build_contract_filename(
+            procurement=procurement,
+            winner=winner,
+            is_services=is_services,
+        )
+        filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+        if not filename.lower().endswith(".docx"):
+            filename = f"{filename}.docx"
+        timing.end_stage(filename=filename)
 
-    return send_file(
-        buffer,
-        as_attachment=True,
-        download_name=filename,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        max_age=0,
-    )
+        timing.start_stage("prepare_response")
+        buffer = BytesIO(docx_bytes)
+        buffer.seek(0)
+
+        response = send_file(
+            buffer,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            max_age=0,
+        )
+        timing.end_stage()
+        timing.finish(status="ok")
+        return response
+    except Exception:
+        timing.finish(status="error")
+        raise
 
 
 @procurements_bp.route("/<int:procurement_id>/reports/expense-transmittal", methods=["GET"])
@@ -431,54 +522,76 @@ def report_expense_transmittal_docx(procurement_id: int):
     - procurement.invoice_receipt_date
     - service_unit.supply_officer
     """
-    procurement = (
-        Procurement.query.options(
-            joinedload(Procurement.service_unit),
-            joinedload(Procurement.handler_personnel),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.directory
-            ),
-            joinedload(Procurement.handler_assignment).joinedload(
-                Procurement.handler_assignment.property.mapper.class_.department
-            ),
-            joinedload(Procurement.committee),
-            joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
-            joinedload(Procurement.materials),
-            joinedload(Procurement.withholding_profile),
-            joinedload(Procurement.income_tax_rule),
+    timing = begin_report_timing("expense_transmittal_docx", procurement_id=procurement_id)
+
+    try:
+        timing.start_stage("load_procurement")
+        procurement = (
+            Procurement.query.options(
+                joinedload(Procurement.service_unit),
+                joinedload(Procurement.handler_personnel),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.department
+                ),
+                joinedload(Procurement.committee),
+                joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+                joinedload(Procurement.materials),
+                joinedload(Procurement.withholding_profile),
+                joinedload(Procurement.income_tax_rule),
+            )
+            .get_or_404(procurement_id)
         )
-        .get_or_404(procurement_id)
-    )
+        timing.end_stage()
 
-    winner = procurement.winner_supplier_obj()
-    analysis = procurement.compute_payment_analysis()
+        timing.start_stage("resolve_context")
+        winner = procurement.winner_supplier_obj()
+        analysis = procurement.compute_payment_analysis()
+        materials = list(procurement.materials or [])
+        timing.mark("materials_count", len(materials))
+        timing.mark("has_committee", procurement.committee is not None)
+        timing.end_stage()
 
-    docx_bytes = build_expense_transmittal_docx(
-        procurement=procurement,
-        service_unit=procurement.service_unit,
-        winner=winner,
-        analysis=analysis,
-        constants=ExpenseTransmittalConstants(),
-    )
+        timing.start_stage("build_docx")
+        docx_bytes = build_expense_transmittal_docx(
+            procurement=procurement,
+            service_unit=procurement.service_unit,
+            winner=winner,
+            analysis=analysis,
+            constants=ExpenseTransmittalConstants(),
+        )
+        timing.mark("output_bytes", len(docx_bytes))
+        timing.end_stage()
 
-    filename = build_expense_transmittal_filename(
-        procurement=procurement,
-        winner=winner,
-    )
-    filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
-    if not filename.lower().endswith(".docx"):
-        filename = f"{filename}.docx"
+        timing.start_stage("build_filename")
+        filename = build_expense_transmittal_filename(
+            procurement=procurement,
+            winner=winner,
+        )
+        filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+        if not filename.lower().endswith(".docx"):
+            filename = f"{filename}.docx"
+        timing.end_stage(filename=filename)
 
-    buffer = BytesIO(docx_bytes)
-    buffer.seek(0)
+        timing.start_stage("prepare_response")
+        buffer = BytesIO(docx_bytes)
+        buffer.seek(0)
 
-    return send_file(
-        buffer,
-        as_attachment=True,
-        download_name=filename,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        max_age=0,
-    )
+        response = send_file(
+            buffer,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            max_age=0,
+        )
+        timing.end_stage()
+        timing.finish(status="ok")
+        return response
+    except Exception:
+        timing.finish(status="error")
+        raise
 
 
 @procurements_bp.route("/new", methods=["GET", "POST"])

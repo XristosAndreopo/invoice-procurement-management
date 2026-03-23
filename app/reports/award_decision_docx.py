@@ -48,10 +48,7 @@ Confirmed placeholders present in the template include:
 
 from __future__ import annotations
 
-import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
-from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -59,318 +56,32 @@ from typing import Any, Iterable, Optional
 from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt
 
 from ..services.master_data_service import get_ale_row_by_code
-
-
-def _safe(v: Any, default: str = "—") -> str:
-    s = ("" if v is None else str(v)).strip()
-    return s if s else default
-
-
-def _to_decimal(v: Any) -> Decimal:
-    try:
-        return Decimal(str(v or "0"))
-    except Exception:
-        return Decimal("0.00")
-
-
-def _money_plain(v: Any) -> str:
-    d = _to_decimal(v).quantize(Decimal("0.01"))
-    s = f"{d:,.2f}"
-    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
-    return s
-
-
-def _money(v: Any) -> str:
-    return f"{_money_plain(v)} €"
-
-
-def _percent(v: Any) -> str:
-    d = _to_decimal(v).quantize(Decimal("0.01"))
-    s = f"{d:,.2f}"
-    s = s.replace(",", "X").replace(".", ",").replace("X", ".")
-    return s
-
-
-def _upper_no_accents(value: Any, default: str = "—") -> str:
-    """
-    Return uppercase Greek/Latin text without accents/diacritics.
-
-    Example:
-    Υπηρεσία Ναυτικών Τεχνικών Εγκαταστάσεων Λέρου
-    -> ΥΠΗΡΕΣΙΑ ΝΑΥΤΙΚΩΝ ΤΕΧΝΙΚΩΝ ΕΓΚΑΤΑΣΤΑΣΕΩΝ ΛΕΡΟΥ
-    """
-    text = _safe(value, default=default)
-
-    normalized = unicodedata.normalize("NFD", text)
-    no_marks = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    return unicodedata.normalize("NFC", no_marks).upper()
-
-
-def _upper_service_name(name: str) -> str:
-    """
-    Return service-unit display name in uppercase without accents.
-
-    This intentionally matches the report requirement for all-caps Greek text
-    without tonos/diacritics.
-    """
-    return _upper_no_accents(name)
-
-
-def _short_date_el(value: Any | None = None) -> str:
-    """
-    Return date in Greek short format: DD Mon YY.
-
-    Examples:
-    - 07 Μαρ 26
-    - 22 Μαρ 26
-
-    Accepted inputs:
-    - datetime
-    - date-like object with day/month/year attrs
-    - None -> datetime.now()
-    """
-    months = {
-        1: "Ιαν",
-        2: "Φεβ",
-        3: "Μαρ",
-        4: "Απρ",
-        5: "Μαϊ",
-        6: "Ιουν",
-        7: "Ιουλ",
-        8: "Αυγ",
-        9: "Σεπ",
-        10: "Οκτ",
-        11: "Νοε",
-        12: "Δεκ",
-    }
-
-    dt = value or datetime.now()
-
-    try:
-        day = int(dt.day)
-        month = int(dt.month)
-        year_2d = int(dt.year) % 100
-    except Exception:
-        dt = datetime.now()
-        day = dt.day
-        month = dt.month
-        year_2d = dt.year % 100
-
-    month_label = months.get(month, "")
-    return f"{day:02d} {month_label} {year_2d:02d}".strip()
-
-
-def _int_to_greek_words_genitive(n: int) -> str:
-    """
-    Convert a non-negative integer to Greek words in genitive case,
-    suitable for phrases like:
-
-    - συνολικής αξίας ...
-    - ποσού ...
-
-    Examples:
-    1755 -> χιλίων επτακοσίων πενήντα πέντε
-    20   -> είκοσι
-    200  -> διακοσίων
-
-    Supported range:
-    0 <= n <= 999_999_999
-    """
-    if n < 0:
-        raise ValueError("Negative values are not supported.")
-    if n == 0:
-        return "μηδενός"
-
-    units = {
-        0: "",
-        1: "ενός",
-        2: "δύο",
-        3: "τριών",
-        4: "τεσσάρων",
-        5: "πέντε",
-        6: "έξι",
-        7: "επτά",
-        8: "οκτώ",
-        9: "εννέα",
-    }
-
-    teens = {
-        10: "δέκα",
-        11: "έντεκα",
-        12: "δώδεκα",
-        13: "δεκατριών",
-        14: "δεκατεσσάρων",
-        15: "δεκαπέντε",
-        16: "δεκαέξι",
-        17: "δεκαεπτά",
-        18: "δεκαοκτώ",
-        19: "δεκαεννέα",
-    }
-
-    tens = {
-        2: "είκοσι",
-        3: "τριάντα",
-        4: "σαράντα",
-        5: "πενήντα",
-        6: "εξήντα",
-        7: "εβδομήντα",
-        8: "ογδόντα",
-        9: "ενενήντα",
-    }
-
-    hundreds = {
-        1: "εκατόν",
-        2: "διακοσίων",
-        3: "τριακοσίων",
-        4: "τετρακοσίων",
-        5: "πεντακοσίων",
-        6: "εξακοσίων",
-        7: "επτακοσίων",
-        8: "οκτακοσίων",
-        9: "εννιακοσίων",
-    }
-
-    def two_digits(num: int) -> str:
-        if num < 10:
-            return units[num]
-        if 10 <= num <= 19:
-            return teens[num]
-
-        t = num // 10
-        u = num % 10
-        if u == 0:
-            return tens[t]
-        return f"{tens[t]} {units[u]}".strip()
-
-    def three_digits(num: int) -> str:
-        if num < 100:
-            return two_digits(num)
-
-        h = num // 100
-        rem = num % 100
-
-        if rem == 0:
-            # For exact hundreds in amount phrasing:
-            # 100 -> εκατό
-            # 200 -> διακοσίων
-            if h == 1:
-                return "εκατό"
-            return hundreds[h]
-
-        return f"{hundreds[h]} {two_digits(rem)}".strip()
-
-    parts: list[str] = []
-
-    millions = n // 1_000_000
-    remainder = n % 1_000_000
-
-    thousands = remainder // 1_000
-    below_thousand = remainder % 1_000
-
-    if millions:
-        if millions == 1:
-            parts.append("ενός εκατομμυρίου")
-        else:
-            parts.append(f"{three_digits(millions)} εκατομμυρίων")
-
-    if thousands:
-        if thousands == 1:
-            parts.append("χιλίων")
-        else:
-            parts.append(f"{three_digits(thousands)} χιλιάδων")
-
-    if below_thousand:
-        parts.append(three_digits(below_thousand))
-
-    return " ".join(p for p in parts if p).strip()
-
-
-def _money_words_el(v: Any) -> str:
-    """
-    Convert a numeric amount to Greek words in genitive case, suitable for:
-    'συνολικής αξίας ...' or 'ποσού ...'
-
-    Examples:
-    1755.00 -> χιλίων επτακοσίων πενήντα πέντε ευρώ
-    1755.20 -> χιλίων επτακοσίων πενήντα πέντε ευρώ και είκοσι λεπτών
-    2000.00 -> δύο χιλιάδων ευρώ
-    """
-    amount = _to_decimal(v).quantize(Decimal("0.01"))
-
-    euros = int(amount)
-    cents = int((amount - Decimal(euros)) * 100)
-
-    euro_words = _int_to_greek_words_genitive(euros)
-
-    if cents == 0:
-        return f"{euro_words} ευρώ"
-
-    cents_words = _int_to_greek_words_genitive(cents)
-    return f"{euro_words} ευρώ και {cents_words} λεπτών"
+from .common.amounts import money_plain, money_words_el, percent, to_decimal
+from .common.docx_utils import (
+    clear_table_body_keep_header,
+    replace_placeholders_everywhere,
+    set_cell_alignment,
+    set_global_font_arial_12,
+)
+from .common.domain import (
+    format_recipients_block,
+    resolve_document_total,
+    resolve_document_total_value,
+    resolve_handler_department,
+    resolve_handler_directory,
+    winner_supplier_line,
+)
+from .common.formatting import safe_text, short_date_el, upper_no_accents, upper_service_name
 
 
 def _template_path() -> Path:
+    """
+    Resolve the DOCX template path for the award decision document.
+    """
     app_dir = Path(__file__).resolve().parents[1]
     return app_dir / "templates" / "docx" / "award_decision_template.docx"
-
-
-def _set_global_font_arial_12(doc: Document) -> None:
-    try:
-        style = doc.styles["Normal"]
-        style.font.name = "Arial"
-        style.font.size = Pt(12)
-    except Exception:
-        pass
-
-    for paragraph in doc.paragraphs:
-        for run in paragraph.runs:
-            run.font.name = "Arial"
-            run.font.size = Pt(12)
-
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs:
-                        run.font.name = "Arial"
-                        run.font.size = Pt(12)
-
-
-def _set_cell_alignment(
-    cell,
-    *,
-    horizontal: WD_ALIGN_PARAGRAPH = WD_ALIGN_PARAGRAPH.CENTER,
-    vertical: WD_ALIGN_VERTICAL = WD_ALIGN_VERTICAL.CENTER,
-) -> None:
-    cell.vertical_alignment = vertical
-    for paragraph in cell.paragraphs:
-        paragraph.alignment = horizontal
-
-
-def _replace_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
-    original = paragraph.text
-    updated = original
-
-    for key, value in mapping.items():
-        if key in updated:
-            updated = updated.replace(key, value)
-
-    if updated != original:
-        paragraph.text = updated
-
-
-def _replace_everywhere(doc: Document, mapping: dict[str, str]) -> None:
-    for paragraph in doc.paragraphs:
-        _replace_in_paragraph(paragraph, mapping)
-
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    _replace_in_paragraph(paragraph, mapping)
 
 
 def _find_items_table(doc: Document):
@@ -411,15 +122,11 @@ def _find_cost_table(doc: Document):
     return None
 
 
-def _clear_table_body_keep_header(table, header_rows: int = 1) -> None:
-    while len(table.rows) > header_rows:
-        tbl = table._tbl
-        tr = table.rows[header_rows]._tr
-        tbl.remove(tr)
-
-
 def _fill_items_table(table, materials: list[Any]) -> None:
-    _clear_table_body_keep_header(table, header_rows=1)
+    """
+    Populate the item-description table for award decision rendering.
+    """
+    clear_table_body_keep_header(table, header_rows=1)
 
     if not materials:
         row = table.add_row().cells
@@ -429,33 +136,44 @@ def _fill_items_table(table, materials: list[Any]) -> None:
         row[3].text = "—"
         row[4].text = "—"
         for cell in row:
-            _set_cell_alignment(cell, horizontal=WD_ALIGN_PARAGRAPH.CENTER, vertical=WD_ALIGN_VERTICAL.CENTER)
+            set_cell_alignment(
+                cell,
+                horizontal=WD_ALIGN_PARAGRAPH.CENTER,
+                vertical=WD_ALIGN_VERTICAL.CENTER,
+            )
         return
 
-    for i, line in enumerate(materials, start=1):
+    for idx, line in enumerate(materials, start=1):
         row = table.add_row().cells
-        row[0].text = str(i)
-        row[1].text = _safe(getattr(line, "description", None), default="")
-        row[2].text = _safe(getattr(line, "unit", None))
-        row[3].text = _safe(getattr(line, "quantity", None))
-        row[4].text = _safe(getattr(line, "cpv", None))
+        row[0].text = str(idx)
+        row[1].text = safe_text(getattr(line, "description", None), default="")
+        row[2].text = safe_text(getattr(line, "unit", None))
+        row[3].text = safe_text(getattr(line, "quantity", None))
+        row[4].text = safe_text(getattr(line, "cpv", None))
 
         for cell in row:
-            _set_cell_alignment(cell, horizontal=WD_ALIGN_PARAGRAPH.CENTER, vertical=WD_ALIGN_VERTICAL.CENTER)
+            set_cell_alignment(
+                cell,
+                horizontal=WD_ALIGN_PARAGRAPH.CENTER,
+                vertical=WD_ALIGN_VERTICAL.CENTER,
+            )
 
 
 def _add_cost_summary_row(table, label: str, amount: Any) -> None:
+    """
+    Append one summary row to the cost-analysis table.
+    """
     row = table.add_row()
     merged_cell = row.cells[0].merge(row.cells[4])
     merged_cell.text = label
-    row.cells[5].text = _money_plain(amount)
+    row.cells[5].text = money_plain(amount)
 
-    _set_cell_alignment(
+    set_cell_alignment(
         merged_cell,
         horizontal=WD_ALIGN_PARAGRAPH.RIGHT,
         vertical=WD_ALIGN_VERTICAL.CENTER,
     )
-    _set_cell_alignment(
+    set_cell_alignment(
         row.cells[5],
         horizontal=WD_ALIGN_PARAGRAPH.CENTER,
         vertical=WD_ALIGN_VERTICAL.CENTER,
@@ -463,30 +181,33 @@ def _add_cost_summary_row(table, label: str, amount: Any) -> None:
 
 
 def _fill_cost_table(table, materials: list[Any], analysis: dict[str, Any]) -> None:
-    _clear_table_body_keep_header(table, header_rows=1)
+    """
+    Populate the pricing/cost table and append calculated summary rows.
+    """
+    clear_table_body_keep_header(table, header_rows=1)
 
     if not materials:
         row = table.add_row().cells
-        for i in range(6):
-            row[i].text = "—"
+        for idx in range(6):
+            row[idx].text = "—"
         for cell in row:
-            _set_cell_alignment(cell, horizontal=WD_ALIGN_PARAGRAPH.CENTER, vertical=WD_ALIGN_VERTICAL.CENTER)
+            set_cell_alignment(
+                cell,
+                horizontal=WD_ALIGN_PARAGRAPH.CENTER,
+                vertical=WD_ALIGN_VERTICAL.CENTER,
+            )
     else:
-        for i, line in enumerate(materials, start=1):
-            qty = getattr(line, "quantity", None)
-            unit_price = getattr(line, "unit_price", None)
-            total_pre_vat = getattr(line, "total_pre_vat", None)
-
+        for idx, line in enumerate(materials, start=1):
             row = table.add_row().cells
-            row[0].text = str(i)
-            row[1].text = _safe(getattr(line, "description", None), default="")
-            row[2].text = _safe(getattr(line, "unit", None))
-            row[3].text = _safe(qty)
-            row[4].text = _money_plain(unit_price)
-            row[5].text = _money_plain(total_pre_vat)
+            row[0].text = str(idx)
+            row[1].text = safe_text(getattr(line, "description", None), default="")
+            row[2].text = safe_text(getattr(line, "unit", None))
+            row[3].text = safe_text(getattr(line, "quantity", None))
+            row[4].text = money_plain(getattr(line, "unit_price", None))
+            row[5].text = money_plain(getattr(line, "total_pre_vat", None))
 
             for cell in row:
-                _set_cell_alignment(
+                set_cell_alignment(
                     cell,
                     horizontal=WD_ALIGN_PARAGRAPH.CENTER,
                     vertical=WD_ALIGN_VERTICAL.CENTER,
@@ -495,9 +216,9 @@ def _fill_cost_table(table, materials: list[Any], analysis: dict[str, Any]) -> N
     public_withholdings = analysis.get("public_withholdings") or {}
     income_tax = analysis.get("income_tax") or {}
 
-    public_pct = _percent(public_withholdings.get("total_percent", 0))
-    income_tax_pct = _percent(income_tax.get("rate_percent", 0))
-    vat_pct = _percent(analysis.get("vat_percent", 0))
+    public_pct = percent(public_withholdings.get("total_percent", 0))
+    income_tax_pct = percent(income_tax.get("rate_percent", 0))
+    vat_pct = percent(analysis.get("vat_percent", 0))
 
     _add_cost_summary_row(table, "Μερικό Σύνολο", analysis.get("sum_total", 0))
     _add_cost_summary_row(
@@ -518,54 +239,14 @@ def _fill_cost_table(table, materials: list[Any], analysis: dict[str, Any]) -> N
     _add_cost_summary_row(table, "Τελικό Σύνολο", analysis.get("payable_total", 0))
 
 
-def _winner_supplier_line(winner: Any) -> str:
-    name = _safe(getattr(winner, "name", None), default="—")
-    afm = _safe(getattr(winner, "afm", None), default="—")
-    addr = _safe(getattr(winner, "address", None), default="—")
-    city = _safe(getattr(winner, "city", None), default="—")
-    phone = _safe(getattr(winner, "phone", None), default="—")
-    doy = _safe(getattr(winner, "doy", None), default="—")
-    email = _safe(getattr(winner, "email", None), default="—")
-
-    return (
-        f"{name} με ΑΦΜ: {afm}, διεύθυνση: {addr}, {city}, "
-        f"τηλέφωνο: {phone}, Δ.Ο.Υ.: {doy}, email: {email}"
-    )
-
-
-def _format_recipients(other_suppliers: Iterable[Any]) -> str:
-    rows: list[str] = []
-    for supplier in list(other_suppliers or []):
-        rows.append(f"«{_winner_supplier_line(supplier)}»")
-
-    return "\n".join(rows) if rows else "—"
-
-
 def _resolve_armodiothtas(procurement: Any) -> str:
     """
     Resolve the responsibility text for the award decision.
 
-    SOURCE OF TRUTH
-    ---------------
-    The Procurement row stores only:
-    - procurement.ale
-
-    The actual responsibility text lives in the ALE–KAE master directory.
-
-    RESOLUTION ORDER
-    ----------------
-    1. Lookup AleKae row by procurement.ale
-    2. Return AleKae.responsibility when present
-    3. Fallback to "—"
-
-    IMPORTANT
-    ---------
-    We intentionally do NOT rely on:
-    - procurement.armodiothtas
-    - procurement.ale_kae
-
-    because those fields/relationships are not part of the provided current
-    Procurement contract.
+    Resolution order:
+    1. lookup ALE row by procurement.ale
+    2. return ALE responsibility
+    3. fallback to "—"
     """
     ale_code = (getattr(procurement, "ale", None) or "").strip()
     if not ale_code:
@@ -576,39 +257,14 @@ def _resolve_armodiothtas(procurement: Any) -> str:
         return "—"
 
     responsibility = getattr(ale_row, "responsibility", None)
-    return _safe(responsibility)
-
-
-def _resolve_document_total(procurement: Any, analysis: dict[str, Any]) -> str:
-    grand_total = getattr(procurement, "grand_total", None)
-    if grand_total is not None:
-        return _money_plain(grand_total)
-
-    payable_total = analysis.get("payable_total")
-    if payable_total is not None:
-        return _money_plain(payable_total)
-
-    return _money_plain(analysis.get("sum_total", 0))
-
-
-def _resolve_document_total_value(procurement: Any, analysis: dict[str, Any]) -> Any:
-    """
-    Resolve the numeric total value that should be displayed in the document
-    both numerically and in words.
-    """
-    grand_total = getattr(procurement, "grand_total", None)
-    if grand_total is not None:
-        return grand_total
-
-    payable_total = analysis.get("payable_total")
-    if payable_total is not None:
-        return payable_total
-
-    return analysis.get("sum_total", 0)
+    return safe_text(responsibility)
 
 
 def _apply_award_paragraph_vat_text(doc: Document, proc_type: str, vat_percent: Any) -> None:
-    vat_is_zero = _to_decimal(vat_percent).quantize(Decimal("0.01")) == Decimal("0.00")
+    """
+    Apply the current template's VAT-tail wording rule in the award paragraph.
+    """
+    vat_is_zero = to_decimal(vat_percent).quantize(to_decimal("0.01")) == to_decimal("0.00")
     replacement_tail = ", άνευ ΦΠΑ." if vat_is_zero else " και ΦΠΑ."
 
     targets = [
@@ -623,59 +279,26 @@ def _apply_award_paragraph_vat_text(doc: Document, proc_type: str, vat_percent: 
         if "συμπεριλαμβανομένων κρατήσεων" not in text:
             continue
 
-        new_text = text
+        updated = text
         for target in targets:
-            if target in new_text:
-                new_text = new_text.replace(target, replacement_tail)
+            if target in updated:
+                updated = updated.replace(target, replacement_tail)
 
-        new_text = new_text.replace(", άνευ ΦΠΑ/ και ΦΠΑ.", ", άνευ ΦΠΑ.")
-        new_text = new_text.replace(", άνευ ΦΠΑ / και ΦΠΑ.", ", άνευ ΦΠΑ.")
-        new_text = new_text.replace(", άνευ ΦΠΑ/και ΦΠΑ.", ", άνευ ΦΠΑ.")
-        new_text = new_text.replace(", άνευ ΦΠΑ /και ΦΠΑ.", ", άνευ ΦΠΑ.")
+        updated = updated.replace(", άνευ ΦΠΑ/ και ΦΠΑ.", ", άνευ ΦΠΑ.")
+        updated = updated.replace(", άνευ ΦΠΑ / και ΦΠΑ.", ", άνευ ΦΠΑ.")
+        updated = updated.replace(", άνευ ΦΠΑ/και ΦΠΑ.", ", άνευ ΦΠΑ.")
+        updated = updated.replace(", άνευ ΦΠΑ /και ΦΠΑ.", ", άνευ ΦΠΑ.")
 
-        if new_text != text:
-            paragraph.text = new_text
+        if updated != text:
+            paragraph.text = updated
             break
-
-
-def _resolve_handler_directory(procurement: Any) -> str:
-    """
-    Resolve handler directory from the selected handler assignment first.
-
-    Priority:
-    1. procurement.handler_assignment.directory.name
-    2. procurement.handler_personnel.directory.name (legacy fallback)
-    """
-    assignment = getattr(procurement, "handler_assignment", None)
-    if assignment is not None:
-        directory = getattr(assignment, "directory", None)
-        if directory is not None:
-            return _safe(getattr(directory, "name", None))
-
-    handler = getattr(procurement, "handler_personnel", None)
-    return _safe(getattr(getattr(handler, "directory", None), "name", None))
-
-
-def _resolve_handler_department(procurement: Any) -> str:
-    """
-    Resolve handler department from the selected handler assignment first.
-
-    Priority:
-    1. procurement.handler_assignment.department.name
-    2. procurement.handler_personnel.department.name (legacy fallback)
-    """
-    assignment = getattr(procurement, "handler_assignment", None)
-    if assignment is not None:
-        department = getattr(assignment, "department", None)
-        if department is not None:
-            return _safe(getattr(department, "name", None))
-
-    handler = getattr(procurement, "handler_personnel", None)
-    return _safe(getattr(getattr(handler, "department", None), "name", None))
 
 
 @dataclass(frozen=True)
 class AwardDecisionConstants:
+    """
+    Future-proof constants container for award decision generation.
+    """
     pass
 
 
@@ -689,79 +312,74 @@ def build_award_decision_docx(
     is_services: bool,
     constants: Optional[AwardDecisionConstants] = None,
 ) -> bytes:
+    """
+    Build the award decision DOCX and return it as bytes.
+    """
     _ = constants
 
-    tpl_path = _template_path()
-    if not tpl_path.exists():
-        raise FileNotFoundError(f"Template not found: {tpl_path}")
+    template_path = _template_path()
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path}")
 
-    doc = Document(str(tpl_path))
+    doc = Document(str(template_path))
 
     proc_type = "παροχή υπηρεσιών" if is_services else "προμήθεια υλικών"
-
-    aay = _safe(getattr(procurement, "aay", None))
-    adam_aay = _safe(getattr(procurement, "adam_aay", None))
-    identity_prosklisis = _safe(getattr(procurement, "identity_prosklisis", None))
-    adam_prosklisis = _safe(getattr(procurement, "adam_prosklisis", None))
-    ale = _safe(getattr(procurement, "ale", None))
-    current_year = str(getattr(procurement, "fiscal_year", None) or datetime.now().year)
 
     public_withholdings = analysis.get("public_withholdings") or {}
     income_tax = analysis.get("income_tax") or {}
 
-    public_pct = _percent(public_withholdings.get("total_percent", 0))
-    income_tax_pct = _percent(income_tax.get("rate_percent", 0))
-    vat_pct = _percent(analysis.get("vat_percent", 0))
+    public_pct = percent(public_withholdings.get("total_percent", 0))
+    income_tax_pct = percent(income_tax.get("rate_percent", 0))
+    vat_pct = percent(analysis.get("vat_percent", 0))
 
-    winner_name = _safe(getattr(winner, "name", None), default="—")
-    winner_afm = _safe(getattr(winner, "afm", None), default="—")
-    winner_line = _winner_supplier_line(winner) if winner is not None else "—"
-
-    commander = _safe(getattr(service_unit, "commander", None), default="—")
-    commander_role_type = _safe(getattr(service_unit, "commander_role_type", None))
-    service_unit_region = _safe(getattr(service_unit, "region", None))
-
-    document_total_plain = _resolve_document_total(procurement, analysis)
-    document_total_value = _resolve_document_total_value(procurement, analysis)
+    winner_name = safe_text(getattr(winner, "name", None), default="—")
+    winner_afm = safe_text(getattr(winner, "afm", None), default="—")
+    winner_line = winner_supplier_line(winner)
 
     mapping: dict[str, str] = {
-        "{{SHORT_DATE}}": _short_date_el(),
+        "{{SHORT_DATE}}": short_date_el(),
         "{{PROC_TYPE}}": proc_type,
-        "{{SERVICE_UNIT_NAME}}": _upper_service_name(
-            _safe(getattr(service_unit, "description", None), default="—")
+        "{{SERVICE_UNIT_NAME}}": upper_service_name(
+            safe_text(getattr(service_unit, "description", None), default="—")
         ),
-        "{{SERVICE_UNIT_PHONE}}": _safe(getattr(service_unit, "phone", None)),
-        "{{SERVICE_UNIT_REGION}}": service_unit_region,
-        "{{procurement.aay}}": aay,
-        "{{procurement.adam_aay}}": adam_aay,
-        "{{procurement.identity_prosklisis}}": identity_prosklisis,
-        "{{procurement.adam_prosklisis}}": adam_prosklisis,
-        "{{ procurement.adam_prosklisis}}": adam_prosklisis,
-        "{{procurement.ale}}": ale,
-        "{{current_year}}": current_year,
-        "{{current year}}": current_year,
+        "{{SERVICE_UNIT_PHONE}}": safe_text(getattr(service_unit, "phone", None)),
+        "{{SERVICE_UNIT_REGION}}": safe_text(getattr(service_unit, "region", None)),
+        "{{procurement.aay}}": safe_text(getattr(procurement, "aay", None)),
+        "{{procurement.adam_aay}}": safe_text(getattr(procurement, "adam_aay", None)),
+        "{{procurement.identity_prosklisis}}": safe_text(
+            getattr(procurement, "identity_prosklisis", None)
+        ),
+        "{{procurement.adam_prosklisis}}": safe_text(getattr(procurement, "adam_prosklisis", None)),
+        "{{ procurement.adam_prosklisis}}": safe_text(
+            getattr(procurement, "adam_prosklisis", None)
+        ),
+        "{{procurement.ale}}": safe_text(getattr(procurement, "ale", None)),
+        "{{current_year}}": str(getattr(procurement, "fiscal_year", None) or ""),
+        "{{current year}}": str(getattr(procurement, "fiscal_year", None) or ""),
         "{{armodiothtas}}": _resolve_armodiothtas(procurement),
         "{{WINNER_SUPPLIER_LINE}}": winner_line,
         "{{supplier.name}}": winner_name,
         "{{supplier.afm}}": winner_afm,
-        "{{RECIPIENTS_INFO}}": _format_recipients(other_suppliers),
-        "{{service.commander}}": commander,
-        "{{COMMANDER_ROLE_TYPE}}": commander_role_type,
+        "{{RECIPIENTS_INFO}}": format_recipients_block(other_suppliers),
+        "{{service.commander}}": safe_text(getattr(service_unit, "commander", None), default="—"),
+        "{{COMMANDER_ROLE_TYPE}}": safe_text(
+            getattr(service_unit, "commander_role_type", None)
+        ),
         "{{AN_PUBLIC_WITHHOLD_PERCENT}}": f" ({public_pct}%)",
-        "{{AN_PUBLIC_WITHHOLD_TOTAL}}": _money_plain(public_withholdings.get("total_amount", 0)),
+        "{{AN_PUBLIC_WITHHOLD_TOTAL}}": money_plain(public_withholdings.get("total_amount", 0)),
         "{{AN_INCOME_TAX_RATE}}": f" ({income_tax_pct}%)",
-        "{{AN_INCOME_TAX_TOTAL}}": _money_plain(income_tax.get("amount", 0)),
+        "{{AN_INCOME_TAX_TOTAL}}": money_plain(income_tax.get("amount", 0)),
         "{{AN_VAT_PERCENT}}": vat_pct,
-        "{{AN_VAT_AMOUNT}}": _money_plain(analysis.get("vat_amount", 0)),
-        "{{AN_SUM_TOTAL}}": _money_plain(analysis.get("sum_total", 0)),
-        "{{AN_PAYABLE_TOTAL}}": _money_plain(analysis.get("payable_total", 0)),
-        "{{ML_TOTAL}}": document_total_plain,
-        "{{ML_TOTAL_WORDS}}": _money_words_el(document_total_value),
-        "{{HANDLER_DIRECTORY}}": _upper_no_accents(_resolve_handler_directory(procurement)),
-        "{{HANDLER_DEPARTMENT}}": _resolve_handler_department(procurement),
+        "{{AN_VAT_AMOUNT}}": money_plain(analysis.get("vat_amount", 0)),
+        "{{AN_SUM_TOTAL}}": money_plain(analysis.get("sum_total", 0)),
+        "{{AN_PAYABLE_TOTAL}}": money_plain(analysis.get("payable_total", 0)),
+        "{{ML_TOTAL}}": resolve_document_total(procurement, analysis),
+        "{{ML_TOTAL_WORDS}}": money_words_el(resolve_document_total_value(procurement, analysis)),
+        "{{HANDLER_DIRECTORY}}": upper_no_accents(resolve_handler_directory(procurement)),
+        "{{HANDLER_DEPARTMENT}}": resolve_handler_department(procurement),
     }
 
-    _replace_everywhere(doc, mapping)
+    replace_placeholders_everywhere(doc, mapping)
     _apply_award_paragraph_vat_text(doc, proc_type, analysis.get("vat_percent", 0))
 
     materials = list(getattr(procurement, "materials", []) or [])
@@ -774,7 +392,7 @@ def build_award_decision_docx(
     if cost_table is not None:
         _fill_cost_table(cost_table, materials, analysis)
 
-    _set_global_font_arial_12(doc)
+    set_global_font_arial_12(doc)
 
     buffer = BytesIO()
     doc.save(buffer)
@@ -787,17 +405,11 @@ def build_award_decision_filename(
     winner: Optional[Any],
     is_services: bool,
 ) -> str:
+    """
+    Build a human-readable filename for the generated award decision document.
+    """
     kind = "Παροχής Υπηρεσιών" if is_services else "Προμήθειας Υλικών"
-    supplier_name = _safe(getattr(winner, "name", None), default="—")
+    supplier_name = safe_text(getattr(winner, "name", None), default="—")
+    total_str = resolve_document_total(procurement, {})
 
-    grand_total = getattr(procurement, "grand_total", None)
-
-    if grand_total is None and hasattr(procurement, "compute_payment_analysis"):
-        try:
-            analysis = procurement.compute_payment_analysis()
-            grand_total = analysis.get("payable_total")
-        except Exception:
-            grand_total = None
-
-    total_str = _money_plain(grand_total)
     return f"Απόφαση Ανάθεσης {kind} {supplier_name} {total_str}.docx"
