@@ -12,25 +12,14 @@ PERFORMANCE NOTES
 -----------------
 The DOCX report builders rely heavily on placeholder replacement.
 
-The original implementation performed a full nested traversal:
-- for every paragraph
-- for every placeholder in the mapping
-- with repeated run-aware replacement attempts
+The optimized implementation below keeps the existing public API intact while
+reducing repeated work in placeholder replacement:
 
-That approach is functionally correct but expensive for large templates because
-most paragraphs do not contain placeholders, and the majority of placeholders do
-not exist in any given paragraph.
-
-The optimized implementation below preserves the public API and rendering
-behavior while reducing unnecessary work by:
-
-1. Quickly skipping paragraphs that do not contain the placeholder sentinel
-   `{{`.
-2. Pre-scanning each candidate paragraph to discover only the placeholders that
-   are actually present.
-3. Replacing only those discovered placeholders.
-4. Keeping the same split-run replacement logic so placeholders broken across
-   multiple runs still work exactly as before.
+- paragraphs without '{{' are skipped immediately
+- each candidate paragraph is flattened only once
+- placeholder matches are discovered from the paragraph text itself
+- all replacements for a paragraph are applied in a single rebuild pass
+- split-run placeholder support is preserved
 
 IMPORTANT COMPATIBILITY RULE
 ----------------------------
@@ -38,7 +27,6 @@ This file is intentionally implemented as a low-risk performance patch:
 - function names stay the same
 - signatures stay the same
 - call sites do not need to change
-- split-run placeholder support is preserved
 """
 
 from __future__ import annotations
@@ -57,17 +45,10 @@ from docx.shared import Pt
 # placeholders.
 _PLACEHOLDER_SENTINEL = "{{"
 
-# Extract placeholder-like tokens from paragraph text.
-#
-# The current template contract uses placeholders such as:
+# Matches literal placeholder tokens such as:
 #   {{FIELD_NAME}}
 #
-# We intentionally keep this pattern conservative and literal so we can:
-# - avoid scanning the entire mapping for every paragraph
-# - preserve compatibility with the existing placeholder convention
-#
-# This regex matches balanced double-curly tokens that do not themselves contain
-# nested braces.
+# It intentionally does not try to parse nested braces.
 _PLACEHOLDER_TOKEN_RE = re.compile(r"\{\{[^{}]+\}\}")
 
 
@@ -164,6 +145,182 @@ def find_run_index_at_offset(
     return -1
 
 
+def _iter_text_segments_for_range(
+    paragraph,
+    positions: list[tuple[int, int, int]],
+    start: int,
+    end: int,
+) -> list[tuple[str, object | None]]:
+    """
+    Return styled text segments for a slice of paragraph full text.
+
+    Each returned item is:
+        (text_chunk, source_run_or_none)
+
+    The slice is split on original run boundaries so style can be preserved as
+    closely as possible when rebuilding a paragraph after placeholder
+    replacements.
+
+    If the paragraph has no runs, a single style-less segment is returned.
+    """
+    if start >= end:
+        return []
+
+    if not paragraph.runs:
+        return [(paragraph.text[start:end], None)]
+
+    segments: list[tuple[str, object | None]] = []
+
+    for run_index, run_start, run_end in positions:
+        if run_end <= start:
+            continue
+        if run_start >= end:
+            break
+
+        seg_start = max(start, run_start)
+        seg_end = min(end, run_end)
+        if seg_start >= seg_end:
+            continue
+
+        source_run = paragraph.runs[run_index]
+        local_start = seg_start - run_start
+        local_end = seg_end - run_start
+        text_chunk = (source_run.text or "")[local_start:local_end]
+
+        if text_chunk:
+            segments.append((text_chunk, source_run))
+
+    return segments
+
+
+def _append_styled_segment(paragraph, text: str, src_run) -> None:
+    """
+    Append a run with the given text, copying style from `src_run` when present.
+    """
+    if not text:
+        return
+
+    new_run = paragraph.add_run(text)
+    copy_run_style(src_run, new_run)
+
+
+def _append_range_with_original_styles(
+    paragraph,
+    original_paragraph,
+    positions: list[tuple[int, int, int]],
+    start: int,
+    end: int,
+) -> None:
+    """
+    Append a text slice from the original paragraph while preserving run-level
+    styling across original run boundaries.
+    """
+    for text_chunk, src_run in _iter_text_segments_for_range(
+        original_paragraph,
+        positions,
+        start,
+        end,
+    ):
+        _append_styled_segment(paragraph, text_chunk, src_run)
+
+
+def _placeholder_matches_for_paragraph(
+    full_text: str,
+    mapping: dict[str, str],
+) -> list[tuple[int, int, str, str]]:
+    """
+    Return all placeholder matches for a paragraph.
+
+    Each match is:
+        (start_offset, end_offset, placeholder, replacement)
+
+    Only placeholders that exist in `mapping` are returned. Unknown placeholder
+    tokens are ignored so they remain unchanged in output.
+    """
+    if not full_text or _PLACEHOLDER_SENTINEL not in full_text:
+        return []
+
+    matches: list[tuple[int, int, str, str]] = []
+
+    for match in _PLACEHOLDER_TOKEN_RE.finditer(full_text):
+        placeholder = match.group(0)
+        if placeholder not in mapping:
+            continue
+        matches.append(
+            (
+                match.start(),
+                match.end(),
+                placeholder,
+                str(mapping[placeholder]),
+            )
+        )
+
+    return matches
+
+
+def _replace_placeholders_single_pass_in_paragraph(
+    paragraph,
+    mapping: dict[str, str],
+) -> bool:
+    """
+    Replace all mapped placeholders in a paragraph in a single rebuild pass.
+
+    This preserves split-run placeholder support while avoiding repeated
+    paragraph flattening and repeated nested placeholder loops.
+
+    Styling behavior:
+    - text outside placeholders keeps its original run styling
+    - replacement text inherits the style of the first participating run of the
+      matched placeholder, which matches current behavior
+    """
+    if not mapping:
+        return False
+
+    full_text, positions = paragraph_runs_text(paragraph)
+    if not full_text or _PLACEHOLDER_SENTINEL not in full_text:
+        return False
+
+    matches = _placeholder_matches_for_paragraph(full_text, mapping)
+    if not matches:
+        return False
+
+    original_paragraph = paragraph
+    original_runs = list(paragraph.runs)
+
+    rebuilt_segments: list[tuple[str, object | None]] = []
+    cursor = 0
+
+    for start, end, _placeholder, replacement in matches:
+        if cursor < start:
+            rebuilt_segments.extend(
+                _iter_text_segments_for_range(original_paragraph, positions, cursor, start)
+            )
+
+        start_run_idx = find_run_index_at_offset(positions, start)
+        replacement_style_run = (
+            original_runs[start_run_idx] if start_run_idx >= 0 else None
+        )
+        rebuilt_segments.append((replacement, replacement_style_run))
+        cursor = end
+
+    if cursor < len(full_text):
+        rebuilt_segments.extend(
+            _iter_text_segments_for_range(
+                original_paragraph,
+                positions,
+                cursor,
+                len(full_text),
+            )
+        )
+
+    clear_paragraph_runs(paragraph)
+
+    for text_chunk, src_run in rebuilt_segments:
+        _append_styled_segment(paragraph, text_chunk, src_run)
+
+    return True
+
+
 def replace_placeholder_once_in_paragraph(
     paragraph,
     placeholder: str,
@@ -174,17 +331,6 @@ def replace_placeholder_once_in_paragraph(
     across multiple runs.
 
     The replacement text inherits the style of the first participating run.
-
-    BEHAVIOR NOTES
-    --------------
-    This function intentionally preserves the current low-level behavior:
-    - it replaces a single occurrence at a time
-    - it supports split-run placeholders
-    - it writes the final replacement into the first participating run
-    - it clears the following participating runs
-
-    The optimized higher-level helpers call this function fewer times by first
-    detecting which placeholders are actually present in a paragraph.
     """
     full_text, positions = paragraph_runs_text(paragraph)
     if not full_text or placeholder not in full_text:
@@ -224,85 +370,22 @@ def replace_placeholder_all_in_paragraph(
     """
     Replace all occurrences of a placeholder in a paragraph, robustly across
     runs.
+
+    This function keeps the public contract unchanged. For performance, it uses
+    the same single-pass paragraph rewrite engine as the document-level helpers,
+    but scoped to a single placeholder mapping.
     """
-    while replace_placeholder_once_in_paragraph(paragraph, placeholder, replacement):
-        pass
-
-
-def _extract_present_placeholders(text: str, mapping: dict[str, str]) -> list[str]:
-    """
-    Return the placeholder keys from `mapping` that are actually present in
-    `text`.
-
-    WHY THIS EXISTS
-    ---------------
-    The original implementation looped through every mapping key for every
-    paragraph. That is the dominant cost observed in report timings.
-
-    This helper performs a lightweight paragraph-local pre-scan:
-    - skip immediately when `{{` does not exist
-    - extract only placeholder-like tokens from the paragraph text
-    - keep only tokens that actually exist in the provided mapping
-
-    ORDERING
-    --------
-    We preserve first-seen paragraph order for discovered placeholders and
-    remove duplicates. This keeps replacement stable and avoids repeated work
-    for the same placeholder token within the same paragraph discovery pass.
-    """
-    if not text or _PLACEHOLDER_SENTINEL not in text:
-        return []
-
-    tokens = _PLACEHOLDER_TOKEN_RE.findall(text)
-    if not tokens:
-        return []
-
-    seen: set[str] = set()
-    present: list[str] = []
-
-    for token in tokens:
-        if token in seen:
-            continue
-        if token not in mapping:
-            continue
-        seen.add(token)
-        present.append(token)
-
-    return present
-
-
-def _replace_present_placeholders_in_paragraph(paragraph, mapping: dict[str, str]) -> None:
-    """
-    Replace only the placeholders that are actually present in a paragraph.
-
-    This is the main optimization entrypoint used by the shared traversal
-    helpers. It keeps the low-level split-run replacement logic unchanged while
-    drastically reducing unnecessary placeholder checks.
-    """
-    text = paragraph.text or ""
-    present_placeholders = _extract_present_placeholders(text, mapping)
-    if not present_placeholders:
-        return
-
-    for placeholder in present_placeholders:
-        replace_placeholder_all_in_paragraph(
-            paragraph,
-            placeholder,
-            str(mapping[placeholder]),
-        )
+    _replace_placeholders_single_pass_in_paragraph(paragraph, {placeholder: replacement})
 
 
 def _replace_placeholders_in_table(table, mapping: dict[str, str]) -> None:
     """
     Replace placeholders in every paragraph of a table.
-
-    This includes nested traversal of rows -> cells -> paragraphs while applying
-    the same paragraph-local fast skip logic.
     """
     for row in table.rows:
         for cell in row.cells:
             for paragraph in cell.paragraphs:
-                _replace_present_placeholders_in_paragraph(paragraph, mapping)
+                _replace_placeholders_single_pass_in_paragraph(paragraph, mapping)
 
 
 def _replace_placeholders_in_container(container, mapping: dict[str, str]) -> None:
@@ -314,7 +397,7 @@ def _replace_placeholders_in_container(container, mapping: dict[str, str]) -> No
     - table cell paragraphs
     """
     for paragraph in container.paragraphs:
-        _replace_present_placeholders_in_paragraph(paragraph, mapping)
+        _replace_placeholders_single_pass_in_paragraph(paragraph, mapping)
 
     for table in container.tables:
         _replace_placeholders_in_table(table, mapping)
@@ -324,18 +407,16 @@ def replace_placeholders_everywhere(doc: Document, mapping: dict[str, str]) -> N
     """
     Replace placeholders across all document paragraphs and table paragraphs.
 
-    OPTIMIZATION STRATEGY
-    ---------------------
-    This function keeps the same public behavior while reducing work:
-    - body paragraphs are skipped immediately when they do not contain `{{`
-    - table cell paragraphs are treated the same way
-    - only placeholders that actually exist in each paragraph are processed
+    This implementation is optimized to:
+    - skip paragraphs without '{{'
+    - flatten each candidate paragraph only once
+    - replace all placeholders in a paragraph in one rebuild pass
     """
     if not mapping:
         return
 
     for paragraph in doc.paragraphs:
-        _replace_present_placeholders_in_paragraph(paragraph, mapping)
+        _replace_placeholders_single_pass_in_paragraph(paragraph, mapping)
 
     for table in doc.tables:
         _replace_placeholders_in_table(table, mapping)
@@ -350,9 +431,6 @@ def replace_placeholders_in_headers_and_footers(
     - default header/footer
     - first-page header/footer
     - even-page header/footer
-
-    The same paragraph-local optimization used in the body is applied here as
-    well.
     """
     if not mapping:
         return
