@@ -10,16 +10,23 @@ This module centralizes:
 
 PERFORMANCE NOTES
 -----------------
-The DOCX report builders rely heavily on placeholder replacement.
+The DOCX report builders rely heavily on placeholder replacement and, after that
+was optimized, font normalization became one of the main remaining shared costs.
 
 The optimized implementation below keeps the existing public API intact while
-reducing repeated work in placeholder replacement:
+reducing repeated work:
 
+Placeholder replacement:
 - paragraphs without '{{' are skipped immediately
 - each candidate paragraph is flattened only once
 - placeholder matches are discovered from the paragraph text itself
 - all replacements for a paragraph are applied in a single rebuild pass
 - split-run placeholder support is preserved
+
+Font normalization:
+- runs already set to Arial 12 are skipped
+- style writes are only performed when needed
+- traversal coverage remains unchanged
 
 IMPORTANT COMPATIBILITY RULE
 ----------------------------
@@ -41,6 +48,11 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.shared import Pt
 
+# Shared constant target font configuration.
+_TARGET_FONT_NAME = "Arial"
+_TARGET_FONT_SIZE_PT = 12
+_TARGET_FONT_SIZE = Pt(_TARGET_FONT_SIZE_PT)
+
 # Fast sentinel used to skip paragraphs/cells that obviously do not contain
 # placeholders.
 _PLACEHOLDER_SENTINEL = "{{"
@@ -52,31 +64,104 @@ _PLACEHOLDER_SENTINEL = "{{"
 _PLACEHOLDER_TOKEN_RE = re.compile(r"\{\{[^{}]+\}\}")
 
 
+def _font_name_matches(run, expected_name: str) -> bool:
+    """
+    Return True when the run already uses the expected font name.
+
+    `python-docx` may expose font name as None or as a concrete string depending
+    on direct formatting vs inherited styling. We only skip a write when the
+    concrete current value is already the desired one.
+    """
+    try:
+        return run.font.name == expected_name
+    except Exception:
+        return False
+
+
+def _font_size_matches_pt(run, expected_pt: int) -> bool:
+    """
+    Return True when the run already uses the expected point size.
+
+    `run.font.size` is typically an EMU-like Length object. Comparing its `.pt`
+    value is the most stable way to avoid unnecessary writes while preserving
+    current behavior.
+    """
+    try:
+        size = run.font.size
+        if size is None:
+            return False
+        return round(float(size.pt), 2) == float(expected_pt)
+    except Exception:
+        return False
+
+
+def _normalize_run_font_if_needed(run) -> None:
+    """
+    Normalize one run to Arial 12, avoiding unnecessary property writes.
+
+    This preserves the existing normalization behavior while reducing repeated
+    writes for runs that are already in the desired state.
+    """
+    if not _font_name_matches(run, _TARGET_FONT_NAME):
+        run.font.name = _TARGET_FONT_NAME
+
+    if not _font_size_matches_pt(run, _TARGET_FONT_SIZE_PT):
+        run.font.size = _TARGET_FONT_SIZE
+
+
+def _normalize_paragraph_runs_font(paragraph) -> None:
+    """
+    Normalize every run in a paragraph to Arial 12.
+    """
+    for run in paragraph.runs:
+        _normalize_run_font_if_needed(run)
+
+
+def _normalize_table_runs_font(table) -> None:
+    """
+    Normalize every run inside a table's cells to Arial 12.
+    """
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                _normalize_paragraph_runs_font(paragraph)
+
+
 def set_global_font_arial_12(doc: Document) -> None:
     """
     Normalize generated document font to Arial 12 where possible.
 
     This keeps current behavior consistent with the existing report modules.
+
+    PERFORMANCE
+    -----------
+    The traversal coverage is intentionally unchanged, but individual run writes
+    are skipped when the run is already Arial 12.
     """
     try:
         style = doc.styles["Normal"]
-        style.font.name = "Arial"
-        style.font.size = Pt(12)
+        if style.font.name != _TARGET_FONT_NAME:
+            style.font.name = _TARGET_FONT_NAME
+
+        try:
+            current_style_size_pt = (
+                round(float(style.font.size.pt), 2)
+                if style.font.size is not None
+                else None
+            )
+        except Exception:
+            current_style_size_pt = None
+
+        if current_style_size_pt != float(_TARGET_FONT_SIZE_PT):
+            style.font.size = _TARGET_FONT_SIZE
     except Exception:
         pass
 
     for paragraph in doc.paragraphs:
-        for run in paragraph.runs:
-            run.font.name = "Arial"
-            run.font.size = Pt(12)
+        _normalize_paragraph_runs_font(paragraph)
 
     for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs:
-                        run.font.name = "Arial"
-                        run.font.size = Pt(12)
+        _normalize_table_runs_font(table)
 
     for section in doc.sections:
         containers = [
@@ -93,17 +178,10 @@ def set_global_font_arial_12(doc: Document) -> None:
                 continue
 
             for paragraph in container.paragraphs:
-                for run in paragraph.runs:
-                    run.font.name = "Arial"
-                    run.font.size = Pt(12)
+                _normalize_paragraph_runs_font(paragraph)
 
             for table in container.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for paragraph in cell.paragraphs:
-                            for run in paragraph.runs:
-                                run.font.name = "Arial"
-                                run.font.size = Pt(12)
+                _normalize_table_runs_font(table)
 
 
 def paragraph_runs_text(paragraph) -> tuple[str, list[tuple[int, int, int]]]:
