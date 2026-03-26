@@ -6,6 +6,7 @@ Procurement routes – Enterprise Secured Version
 
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 from io import BytesIO
 
@@ -13,6 +14,8 @@ from flask import (
     Blueprint,
     abort,
     flash,
+    g,
+    has_request_context,
     make_response,
     redirect,
     render_template,
@@ -82,28 +85,115 @@ from ...services.procurement_service import (
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
 
+def _current_request_timing():
+    """
+    Return the active request timing collector when available.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The request-local collector stored on Flask's `g`, or None when
+        instrumentation is unavailable.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Route functions must remain safe and unchanged even if request timing has
+    not been initialized for some reason.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
+
+
+def _record_route_timing(name: str, started_at: float, **marks) -> None:
+    """
+    Record one route-local timing part into the active request collector.
+
+    PARAMETERS
+    ----------
+    name:
+        Stable logical timing name.
+    started_at:
+        Perf-counter start timestamp.
+    marks:
+        Optional lightweight metadata to attach as request marks.
+
+    IMPORTANT
+    ---------
+    This helper is observability-only and never raises when instrumentation is
+    unavailable.
+    """
+    request_timing = _current_request_timing()
+    if request_timing is None:
+        return
+
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+    request_timing.add_timing(name, elapsed_ms)
+
+    for key, value in marks.items():
+        request_timing.mark(key, value)
+
+
 @procurements_bp.route("/inbox")
 @login_required
 def inbox_procurements():
+    route_started_at = time.perf_counter()
+
+    allow_create_started_at = time.perf_counter()
+    allow_create = current_user.is_admin or current_user.can_manage()
+    _record_route_timing(
+        "route.procurements.inbox.allow_create",
+        allow_create_started_at,
+        inbox_allow_create=bool(allow_create),
+    )
+
+    context_started_at = time.perf_counter()
     context = build_inbox_procurements_list_context(
         request.args,
-        allow_create=(current_user.is_admin or current_user.can_manage()),
+        allow_create=allow_create,
     )
-    return render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.inbox.build_context", context_started_at)
+
+    render_started_at = time.perf_counter()
+    response = render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.inbox.render_template", render_started_at)
+
+    _record_route_timing("route.procurements.inbox.total", route_started_at)
+    return response
 
 
 @procurements_bp.route("/pending-expenses")
 @login_required
 def pending_expenses():
+    route_started_at = time.perf_counter()
+
+    context_started_at = time.perf_counter()
     context = build_pending_expenses_list_context(request.args)
-    return render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.pending_expenses.build_context", context_started_at)
+
+    render_started_at = time.perf_counter()
+    response = render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.pending_expenses.render_template", render_started_at)
+
+    _record_route_timing("route.procurements.pending_expenses.total", route_started_at)
+    return response
 
 
 @procurements_bp.route("/all")
 @login_required
 def all_procurements():
+    route_started_at = time.perf_counter()
+
+    context_started_at = time.perf_counter()
     context = build_all_procurements_list_context(request.args)
-    return render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.all.build_context", context_started_at)
+
+    render_started_at = time.perf_counter()
+    response = render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.all.render_template", render_started_at)
+
+    _record_route_timing("route.procurements.all.total", route_started_at)
+    return response
 
 
 @procurements_bp.route("/")

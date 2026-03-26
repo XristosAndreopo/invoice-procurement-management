@@ -53,16 +53,80 @@ SECURITY NOTE
 Capability helpers such as `can_manage()` and `can_view()` are convenience
 methods only. They do NOT replace server-side authorization checks in routes
 and services.
+
+PERFORMANCE INSTRUMENTATION
+---------------------------
+This model includes lightweight request-local timing instrumentation for:
+- role helper evaluation
+- display-name resolution
+
+IMPORTANT
+---------
+The instrumentation is observability-only:
+- no capability changes
+- no relationship changes
+- no authorization changes
 """
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
+from flask import g, has_request_context
 from flask_login import UserMixin
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from ..extensions import db
+
+
+def _current_request_timing():
+    """
+    Return the active request timing collector when available.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The request-local collector stored on Flask's `g`, or None when
+        instrumentation is unavailable.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Model helpers may be called both inside and outside Flask request context.
+    The instrumentation must remain harmless in both cases.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
+
+
+def _record_user_timing(name: str, started_at: float, **marks) -> None:
+    """
+    Record one timing part for user-helper evaluation.
+
+    PARAMETERS
+    ----------
+    name:
+        Stable logical timing name.
+    started_at:
+        Perf-counter start timestamp.
+    marks:
+        Optional lightweight metadata to attach as request marks.
+
+    IMPORTANT
+    ---------
+    This helper is observability-only and never raises when request timing is
+    unavailable.
+    """
+    request_timing = _current_request_timing()
+    if request_timing is None:
+        return
+
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+    request_timing.add_timing(name, elapsed_ms)
+
+    for key, value in marks.items():
+        request_timing.mark(key, value)
 
 
 class User(UserMixin, db.Model):
@@ -162,9 +226,21 @@ class User(UserMixin, db.Model):
         - that service unit's manager_personnel_id matches this user's
           personnel_id
         """
+        started_at = time.perf_counter()
+
         if not self.service_unit:
-            return False
-        return self.service_unit.manager_personnel_id == self.personnel_id
+            result = False
+        else:
+            result = self.service_unit.manager_personnel_id == self.personnel_id
+
+        _record_user_timing(
+            "user.is_manager",
+            started_at,
+            user_id=self.id,
+            user_service_unit_id=self.service_unit_id,
+            user_is_manager=bool(result),
+        )
+        return result
 
     def is_deputy(self) -> bool:
         """
@@ -177,9 +253,21 @@ class User(UserMixin, db.Model):
         - that service unit's deputy_personnel_id matches this user's
           personnel_id
         """
+        started_at = time.perf_counter()
+
         if not self.service_unit:
-            return False
-        return self.service_unit.deputy_personnel_id == self.personnel_id
+            result = False
+        else:
+            result = self.service_unit.deputy_personnel_id == self.personnel_id
+
+        _record_user_timing(
+            "user.is_deputy",
+            started_at,
+            user_id=self.id,
+            user_service_unit_id=self.service_unit_id,
+            user_is_deputy=bool(result),
+        )
+        return result
 
     def can_manage(self) -> bool:
         """
@@ -196,7 +284,17 @@ class User(UserMixin, db.Model):
         This is a convenience helper only. Route-level and service-level
         authorization must still be enforced separately.
         """
-        return bool(self.is_admin or self.is_manager() or self.is_deputy())
+        started_at = time.perf_counter()
+        result = bool(self.is_admin or self.is_manager() or self.is_deputy())
+
+        _record_user_timing(
+            "user.can_manage",
+            started_at,
+            user_id=self.id,
+            user_is_admin=bool(self.is_admin),
+            user_can_manage=bool(result),
+        )
+        return result
 
     def can_view(self) -> bool:
         """
@@ -223,19 +321,40 @@ class User(UserMixin, db.Model):
         - linked Personnel selected label
         - username
         """
+        started_at = time.perf_counter()
+
         if self.personnel:
             display_selected = getattr(self.personnel, "display_selected_label", None)
             if callable(display_selected):
                 value = display_selected()
                 if value:
+                    _record_user_timing(
+                        "user.display_name",
+                        started_at,
+                        user_id=self.id,
+                        user_display_name_source="personnel.display_selected_label",
+                    )
                     return value
 
             display_name = getattr(self.personnel, "display_name", None)
             if isinstance(display_name, str) and display_name.strip():
-                return display_name.strip()
+                value = display_name.strip()
+                _record_user_timing(
+                    "user.display_name",
+                    started_at,
+                    user_id=self.id,
+                    user_display_name_source="personnel.display_name",
+                )
+                return value
 
-        return (self.username or "").strip()
+        value = (self.username or "").strip()
+        _record_user_timing(
+            "user.display_name",
+            started_at,
+            user_id=self.id,
+            user_display_name_source="username",
+        )
+        return value
 
     def __repr__(self) -> str:
         return f"<User {self.id}: {self.username}>"
-

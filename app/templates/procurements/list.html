@@ -53,18 +53,18 @@
         <table class="table table-sm align-middle mb-0 procurements-table">
           <thead>
             <tr class="text-center">
-              <th>Υπηρεσία</th>
+              <th>ΥΠΗΡΕΣΙΑ</th>
               <th>Α/Α</th>
-              <th>Σύντομη Περιγραφή</th>
+              <th>ΣΥΝΤΟΜΗ ΠΕΡΙΓΡΑΦΗ</th>
               <th>ΑΛΕ</th>
               <th>ΑΦΜ</th>
-              <th>Μειοδότης</th>
-              <th>ΗΩΠ Προέγκρισης</th>
-              <th>ΗΩΠ Έγκρισης</th>
+              <th>ΜΕΙΟΔΟΤΗΣ</th>
+              <th>ΗΩΠ ΠΡΟΕΓΚΡΙΣΗΣ</th>
+              <th>ΗΩΠ ΕΓΚΡΙΣΗΣ</th>
               <th>ΑΑΥ</th>
               <th>ΠΟΣΟ</th>
-              <th>Κατάσταση</th>
-              <th>Στάδιο</th>
+              <th>ΚΑΤΑΣΤΑΣΗ</th>
+              <th>ΣΤΑΔΙΟ</th>
               {% if show_open_button %}
                 <th></th>
               {% endif %}
@@ -230,18 +230,12 @@
                         {% endif %}
 
                         {% if allow_delete %}
-                          <form method="post"
-                                action="{{ url_for('procurements.delete_procurement', procurement_id=p.id) }}"
-                                class="d-inline js-delete-procurement-form">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="next" value="{{ request.full_path }}">
-                            <input type="hidden" name="delete_origin" value="all_procurements">
-                            <button type="submit"
-                                    class="btn btn-sm btn-outline-danger"
-                                    data-procurement-label="{{ p.serial_no or p.id }}">
-                              Διαγραφή
-                            </button>
-                          </form>
+                          <button type="submit"
+                                  form="delete-procurement-{{ p.id }}"
+                                  class="btn btn-sm btn-outline-danger"
+                                  data-procurement-label="{{ p.serial_no or p.id }}">
+                            Διαγραφή
+                          </button>
                         {% endif %}
                       </div>
                     </td>
@@ -259,6 +253,19 @@
         </table>
       </div>
     </form>
+
+    {% if allow_delete and procurements %}
+      {% for p in procurements %}
+        <form id="delete-procurement-{{ p.id }}"
+              method="post"
+              action="{{ url_for('procurements.delete_procurement', procurement_id=p.id) }}"
+              class="js-delete-procurement-form d-none">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.full_path }}">
+          <input type="hidden" name="delete_origin" value="all_procurements">
+        </form>
+      {% endfor %}
+    {% endif %}
 
     {% if total_pages > 1 %}
       <form method="get" action="{{ request.path }}" class="mt-3">
@@ -369,7 +376,8 @@
 (function() {
   document.querySelectorAll(".js-delete-procurement-form").forEach(form => {
     form.addEventListener("submit", function(ev) {
-      const btn = form.querySelector("button[type='submit']");
+      const formId = form.getAttribute("id");
+      const btn = formId ? document.querySelector('button[form="' + formId + '"]') : null;
       const label = btn?.getAttribute("data-procurement-label") || "τη συγκεκριμένη προμήθεια";
       const ok = window.confirm(
         `Είσαι βέβαιος ότι θέλεις να διαγράψεις την προμήθεια ${label}; Η ενέργεια δεν αναιρείται.`
