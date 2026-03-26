@@ -25,17 +25,6 @@
         </select>
       </div>
 
-      <div class="col-12 col-md-4">
-        <label class="form-label">Κατηγορία</label>
-        <select name="category" class="form-select">
-          <option value="">(Όλες)</option>
-          <option value="complaint" {% if category_filter == 'complaint' %}selected{% endif %}>Παράπονο</option>
-          <option value="suggestion" {% if category_filter == 'suggestion' %}selected{% endif %}>Πρόταση</option>
-          <option value="bug" {% if category_filter == 'bug' %}selected{% endif %}>Σφάλμα</option>
-          <option value="other" {% if category_filter == 'other' %}selected{% endif %}>Άλλο</option>
-        </select>
-      </div>
-
       <div class="col-12 col-md-4 d-flex align-items-end">
         <button class="btn btn-outline-primary me-2">
           Φιλτράρισμα
@@ -56,11 +45,9 @@
           <thead>
             <tr>
               <th>Ημ/νία</th>
-              <th>Χρήστης</th>
-              <th>Κατηγορία</th>
+              <th>Αποστολέας</th>
               <th>Τίτλος</th>
               <th>Μήνυμα</th>
-              <th>Προμήθεια</th>
               <th>Κατάσταση</th>
               <th></th>
             </tr>
@@ -72,23 +59,13 @@
                   {{ fb.created_at.strftime('%d/%m/%Y %H:%M') }}
                 </td>
                 <td class="small">
-                  {{ fb.user.username if fb.user else '—' }}
-                </td>
-                <td class="small">
-                  {{ category_labels.get(fb.category, '—') }}
+                  {{ fb.sender_display }}
                 </td>
                 <td class="small fw-semibold">
                   {{ fb.subject }}
                 </td>
-                <td class="small text-break" style="max-width: 280px;">
+                <td class="small text-break" style="max-width: 360px;">
                   {{ fb.message }}
-                </td>
-                <td class="small">
-                  {% if fb.related_procurement_id %}
-                    Α/Α: {{ fb.related_procurement_id }}
-                  {% else %}
-                    —
-                  {% endif %}
                 </td>
                 <td class="small">
                   {{ status_choices.get(fb.status or 'new', 'Νέο') }}
@@ -122,4 +99,3 @@
   </div>
 </div>
 {% endblock %}
-

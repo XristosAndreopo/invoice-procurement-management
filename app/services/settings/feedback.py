@@ -26,15 +26,26 @@ Routes remain responsible only for:
 - flashing returned messages
 - render / redirect responses
 
-IMPORTANT SOURCE-OF-TRUTH NOTE
-------------------------------
-The current `combined_project.md` contains an inconsistency:
-`app/blueprints/settings/routes.py` uses Feedback fields such as `user_id`,
-`category`, and `related_procurement_id`, while the visible
-`app/models/feedback.py` excerpt in the same source does not show those fields.
+IMPORTANT IMPLEMENTATION NOTE
+-----------------------------
+The active Feedback model in the project stores only the fields that are
+actually present in `app/models/feedback.py`:
 
-This module preserves the route contract exactly as the route file currently
-uses it. The model/schema mismatch must be reconciled separately in the project.
+- name
+- email
+- subject
+- message
+- status
+- created_at / updated_at
+
+This service therefore intentionally avoids assumptions about fields that are
+not present in the current persisted model, such as:
+- user_id
+- category
+- related_procurement_id
+
+This keeps the feedback flow production-safe without requiring a schema
+migration.
 """
 
 from __future__ import annotations
@@ -42,10 +53,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from flask_login import current_user
+
 from ...extensions import db
 from ...models import Feedback
 from ..shared.operation_results import FlashMessage, OperationResult
-from ..shared.parsing import parse_optional_int
 
 FEEDBACK_CATEGORIES: list[tuple[str, str]] = [
     ("complaint", "Παράπονο"),
@@ -61,15 +73,54 @@ FEEDBACK_STATUS_CHOICES: dict[str, str] = {
     "closed": "Κλειστό",
 }
 
-FEEDBACK_CATEGORY_LABELS: dict[str | None, str] = {
-    "complaint": "Παράπονο",
-    "suggestion": "Πρόταση",
-    "bug": "Σφάλμα",
-    "other": "Άλλο",
-    None: "—",
-}
 
-VALID_FEEDBACK_CATEGORY_KEYS = {"complaint", "suggestion", "bug", "other"}
+def _current_user_sender_name() -> str:
+    """
+    Build a best-effort sender display name from the authenticated user.
+
+    RETURNS
+    -------
+    str
+        Human-readable sender name suitable for Feedback.name.
+
+    FALLBACK ORDER
+    --------------
+    1. current_user.display_name when available and non-empty
+    2. current_user.username when available and non-empty
+    3. generic fallback label
+    """
+    display_name = getattr(current_user, "display_name", None)
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+
+    username = getattr(current_user, "username", None)
+    if isinstance(username, str) and username.strip():
+        return username.strip()
+
+    return "Χρήστης εφαρμογής"
+
+
+def _current_user_sender_email() -> str | None:
+    """
+    Return a best-effort sender email for Feedback.email.
+
+    RETURNS
+    -------
+    str | None
+        Currently None unless a real email field is present on the active user
+        object in the running project.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    The current visible source of truth does not guarantee that User has an
+    email field. This helper therefore remains defensive and avoids
+    assumptions.
+    """
+    email = getattr(current_user, "email", None)
+    if isinstance(email, str) and email.strip():
+        return email.strip()
+
+    return None
 
 
 def build_feedback_page_context(*, user_id: int) -> dict[str, Any]:
@@ -85,17 +136,16 @@ def build_feedback_page_context(*, user_id: int) -> dict[str, Any]:
     -------
     dict[str, Any]
         Template context for feedback submission/history display.
-    """
-    recent_feedback = (
-        Feedback.query.filter_by(user_id=user_id)
-        .order_by(Feedback.created_at.desc())
-        .limit(5)
-        .all()
-    )
 
+    IMPORTANT
+    ---------
+    The active Feedback model does not contain a user_id field. Therefore the
+    "recent feedback" section is intentionally omitted in this hotfix path to
+    avoid unsafe filtering assumptions.
+    """
     return {
         "categories": FEEDBACK_CATEGORIES,
-        "recent_feedback": recent_feedback,
+        "recent_feedback": [],
     }
 
 
@@ -106,7 +156,8 @@ def execute_feedback_submission(*, user_id: int, form_data: Mapping[str, object]
     PARAMETERS
     ----------
     user_id:
-        Authenticated user id.
+        Authenticated user id. Retained for route compatibility, but not
+        persisted because the current Feedback model has no user_id field.
     form_data:
         Submitted form payload.
 
@@ -114,11 +165,24 @@ def execute_feedback_submission(*, user_id: int, form_data: Mapping[str, object]
     -------
     OperationResult
         Result object for route flashing/redirecting.
+
+    HOTFIX STORAGE POLICY
+    ---------------------
+    This implementation persists only fields that are present in the active
+    Feedback model:
+    - name
+    - email
+    - subject
+    - message
+    - status
+
+    Extra form fields such as category or related procurement id are ignored
+    intentionally in this compatibility-safe hotfix.
     """
-    category = form_data.get("category") or None
+    _ = user_id  # Route contract retained intentionally.
+
     subject = (form_data.get("subject") or "").strip()
     message = (form_data.get("message") or "").strip()
-    related_procurement_id_raw = (form_data.get("related_procurement_id") or "").strip()
 
     if not subject:
         return OperationResult(
@@ -132,19 +196,11 @@ def execute_feedback_submission(*, user_id: int, form_data: Mapping[str, object]
             flashes=(FlashMessage("Το κείμενο είναι υποχρεωτικό.", "danger"),),
         )
 
-    related_procurement_id = parse_optional_int(related_procurement_id_raw)
-    if related_procurement_id_raw and related_procurement_id is None:
-        return OperationResult(
-            ok=False,
-            flashes=(FlashMessage("Μη έγκυρο Α/Α προμήθειας.", "danger"),),
-        )
-
     feedback_row = Feedback(
-        user_id=user_id,
-        category=category,
+        name=_current_user_sender_name(),
+        email=_current_user_sender_email(),
         subject=subject,
         message=message,
-        related_procurement_id=related_procurement_id,
         status="new",
     )
     db.session.add(feedback_row)
@@ -169,27 +225,26 @@ def build_feedback_admin_page_context(args: Mapping[str, object]) -> dict[str, A
     RETURNS
     -------
     dict[str, Any]
-        Template context with filters, labels, and the filtered feedback list.
+        Template context with filters and the filtered feedback list.
+
+    IMPORTANT
+    ---------
+    Category filtering is intentionally unsupported in this hotfix because the
+    active Feedback model does not define a category field.
     """
     status_filter = (args.get("status") or "").strip() or None
-    category_filter = (args.get("category") or "").strip() or None
 
     query = Feedback.query
 
     if status_filter and status_filter in FEEDBACK_STATUS_CHOICES:
         query = query.filter(Feedback.status == status_filter)
 
-    if category_filter and category_filter in VALID_FEEDBACK_CATEGORY_KEYS:
-        query = query.filter(Feedback.category == category_filter)
-
     feedback_items = query.order_by(Feedback.created_at.desc()).all()
 
     return {
         "feedback_items": feedback_items,
         "status_choices": FEEDBACK_STATUS_CHOICES,
-        "category_labels": FEEDBACK_CATEGORY_LABELS,
         "status_filter": status_filter,
-        "category_filter": category_filter,
     }
 
 
@@ -210,7 +265,11 @@ def execute_feedback_admin_status_update(form_data: Mapping[str, object]) -> Ope
     feedback_id_raw = (form_data.get("feedback_id") or "").strip()
     new_status = (form_data.get("status") or "").strip()
 
-    feedback_id = parse_optional_int(feedback_id_raw)
+    try:
+        feedback_id = int(feedback_id_raw)
+    except (TypeError, ValueError):
+        feedback_id = None
+
     if feedback_id is None or new_status not in FEEDBACK_STATUS_CHOICES:
         return OperationResult(
             ok=False,
@@ -238,10 +297,8 @@ def execute_feedback_admin_status_update(form_data: Mapping[str, object]) -> Ope
 __all__ = [
     "FEEDBACK_CATEGORIES",
     "FEEDBACK_STATUS_CHOICES",
-    "FEEDBACK_CATEGORY_LABELS",
     "build_feedback_page_context",
     "execute_feedback_submission",
     "build_feedback_admin_page_context",
     "execute_feedback_admin_status_update",
 ]
-
