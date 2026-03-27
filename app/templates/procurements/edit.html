@@ -58,9 +58,15 @@
         Σύμβαση
       </a>
 
-      <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      <a
+        class="btn btn-sm btn-outline-primary"
+        href="{{ url_for('procurements.report_protocol_docx', procurement_id=procurement.id) }}"
+        target="_blank"
+        rel="noopener"
+        title="Άνοιγμα Πρωτοκόλλου (PDF)"
+      >
         Πρωτόκολλο
-      </button>
+      </a>
       <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
         ΚΠΔ
       </button>

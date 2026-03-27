@@ -47,6 +47,7 @@ from ...reports.invitation_docx import (
     build_invitation_filename,
 )
 from ...reports.proforma_invoice import ProformaConstants, build_proforma_invoice_pdf
+from ...reports.protocol_docx import ProtocolConstants, build_protocol_docx, build_protocol_filename
 from ...security import procurement_access_required, procurement_edit_required
 from ...security.procurement_guards import can_mutate_procurement
 from ...services.shared.parsing import next_from_request
@@ -581,6 +582,121 @@ def report_contract_docx(procurement_id: int):
             max_age=0,
         )
         timing.end_stage()
+        timing.finish(status="ok")
+        return response
+    except Exception:
+        timing.finish(status="error")
+        raise
+
+
+
+
+@procurements_bp.route("/<int:procurement_id>/reports/protocol", methods=["GET"])
+@login_required
+@procurement_access_required(load_procurement)
+def report_protocol_docx(procurement_id: int):
+    """
+    Build and return the Protocol DOCX.
+
+    REQUIRED RELATIONSHIPS
+    ----------------------
+    This report needs:
+    - service_unit
+    - committee and committee members
+    - handler personnel / assignment / directory director
+    - winner supplier
+    - materials
+
+    BUSINESS RULE
+    -------------
+    The protocol must switch wording dynamically between:
+    - services
+    - goods/materials
+
+    Canonical project rule:
+    if any procurement material line has `is_service=True`,
+    the report is treated as a services protocol.
+    """
+    timing = begin_report_timing("protocol_docx", procurement_id=procurement_id)
+
+    try:
+        timing.start_stage("load_procurement")
+        procurement = (
+            Procurement.query.options(
+                joinedload(Procurement.service_unit),
+                joinedload(Procurement.committee).joinedload(
+                    Procurement.committee.property.mapper.class_.president
+                ),
+                joinedload(Procurement.committee).joinedload(
+                    Procurement.committee.property.mapper.class_.member1
+                ),
+                joinedload(Procurement.committee).joinedload(
+                    Procurement.committee.property.mapper.class_.member2
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.department
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory
+                ).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory.property.mapper.class_.director
+                ),
+                joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+                joinedload(Procurement.materials),
+                joinedload(Procurement.withholding_profile),
+                joinedload(Procurement.income_tax_rule),
+            )
+            .get_or_404(procurement_id)
+        )
+        timing.end_stage()
+
+        timing.start_stage("resolve_context")
+        winner = procurement.winner_supplier_obj()
+        analysis = procurement.compute_payment_analysis()
+        materials = list(procurement.materials or [])
+        has_services = any(bool(getattr(line, "is_service", False)) for line in materials)
+        timing.mark("materials_count", len(materials))
+        timing.mark("has_services", has_services)
+        timing.mark("has_committee", procurement.committee is not None)
+        timing.end_stage()
+
+        timing.start_stage("build_docx")
+        docx_bytes = build_protocol_docx(
+            procurement=procurement,
+            service_unit=procurement.service_unit,
+            winner=winner,
+            analysis=analysis,
+            constants=ProtocolConstants(),
+            instrumentation=timing,
+        )
+        timing.mark("output_bytes", len(docx_bytes))
+        timing.end_stage()
+
+        timing.start_stage("build_filename")
+        filename = build_protocol_filename(
+            procurement=procurement,
+            winner=winner,
+            is_services=has_services,
+            analysis=analysis,
+        )
+        filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+        if not filename.lower().endswith(".docx"):
+            filename = f"{filename}.docx"
+        timing.end_stage(filename=filename)
+
+        timing.start_stage("prepare_response")
+        buffer = BytesIO(docx_bytes)
+        buffer.seek(0)
+
+        response = send_file(
+            buffer,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            max_age=0,
+        )
+        timing.end_stage()
+
         timing.finish(status="ok")
         return response
     except Exception:

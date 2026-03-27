@@ -892,6 +892,7 @@ Procurement routes – Enterprise Secured Version
 
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 from io import BytesIO
 
@@ -899,6 +900,8 @@ from flask import (
     Blueprint,
     abort,
     flash,
+    g,
+    has_request_context,
     make_response,
     redirect,
     render_template,
@@ -930,6 +933,7 @@ from ...reports.invitation_docx import (
     build_invitation_filename,
 )
 from ...reports.proforma_invoice import ProformaConstants, build_proforma_invoice_pdf
+from ...reports.protocol_docx import ProtocolConstants, build_protocol_docx, build_protocol_filename
 from ...security import procurement_access_required, procurement_edit_required
 from ...security.procurement_guards import can_mutate_procurement
 from ...services.shared.parsing import next_from_request
@@ -968,28 +972,115 @@ from ...services.procurement_service import (
 procurements_bp = Blueprint("procurements", __name__, url_prefix="/procurements")
 
 
+def _current_request_timing():
+    """
+    Return the active request timing collector when available.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The request-local collector stored on Flask's `g`, or None when
+        instrumentation is unavailable.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Route functions must remain safe and unchanged even if request timing has
+    not been initialized for some reason.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
+
+
+def _record_route_timing(name: str, started_at: float, **marks) -> None:
+    """
+    Record one route-local timing part into the active request collector.
+
+    PARAMETERS
+    ----------
+    name:
+        Stable logical timing name.
+    started_at:
+        Perf-counter start timestamp.
+    marks:
+        Optional lightweight metadata to attach as request marks.
+
+    IMPORTANT
+    ---------
+    This helper is observability-only and never raises when instrumentation is
+    unavailable.
+    """
+    request_timing = _current_request_timing()
+    if request_timing is None:
+        return
+
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+    request_timing.add_timing(name, elapsed_ms)
+
+    for key, value in marks.items():
+        request_timing.mark(key, value)
+
+
 @procurements_bp.route("/inbox")
 @login_required
 def inbox_procurements():
+    route_started_at = time.perf_counter()
+
+    allow_create_started_at = time.perf_counter()
+    allow_create = current_user.is_admin or current_user.can_manage()
+    _record_route_timing(
+        "route.procurements.inbox.allow_create",
+        allow_create_started_at,
+        inbox_allow_create=bool(allow_create),
+    )
+
+    context_started_at = time.perf_counter()
     context = build_inbox_procurements_list_context(
         request.args,
-        allow_create=(current_user.is_admin or current_user.can_manage()),
+        allow_create=allow_create,
     )
-    return render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.inbox.build_context", context_started_at)
+
+    render_started_at = time.perf_counter()
+    response = render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.inbox.render_template", render_started_at)
+
+    _record_route_timing("route.procurements.inbox.total", route_started_at)
+    return response
 
 
 @procurements_bp.route("/pending-expenses")
 @login_required
 def pending_expenses():
+    route_started_at = time.perf_counter()
+
+    context_started_at = time.perf_counter()
     context = build_pending_expenses_list_context(request.args)
-    return render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.pending_expenses.build_context", context_started_at)
+
+    render_started_at = time.perf_counter()
+    response = render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.pending_expenses.render_template", render_started_at)
+
+    _record_route_timing("route.procurements.pending_expenses.total", route_started_at)
+    return response
 
 
 @procurements_bp.route("/all")
 @login_required
 def all_procurements():
+    route_started_at = time.perf_counter()
+
+    context_started_at = time.perf_counter()
     context = build_all_procurements_list_context(request.args)
-    return render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.all.build_context", context_started_at)
+
+    render_started_at = time.perf_counter()
+    response = render_template("procurements/list.html", **context)
+    _record_route_timing("route.procurements.all.render_template", render_started_at)
+
+    _record_route_timing("route.procurements.all.total", route_started_at)
+    return response
 
 
 @procurements_bp.route("/")
@@ -1377,6 +1468,121 @@ def report_contract_docx(procurement_id: int):
             max_age=0,
         )
         timing.end_stage()
+        timing.finish(status="ok")
+        return response
+    except Exception:
+        timing.finish(status="error")
+        raise
+
+
+
+
+@procurements_bp.route("/<int:procurement_id>/reports/protocol", methods=["GET"])
+@login_required
+@procurement_access_required(load_procurement)
+def report_protocol_docx(procurement_id: int):
+    """
+    Build and return the Protocol DOCX.
+
+    REQUIRED RELATIONSHIPS
+    ----------------------
+    This report needs:
+    - service_unit
+    - committee and committee members
+    - handler personnel / assignment / directory director
+    - winner supplier
+    - materials
+
+    BUSINESS RULE
+    -------------
+    The protocol must switch wording dynamically between:
+    - services
+    - goods/materials
+
+    Canonical project rule:
+    if any procurement material line has `is_service=True`,
+    the report is treated as a services protocol.
+    """
+    timing = begin_report_timing("protocol_docx", procurement_id=procurement_id)
+
+    try:
+        timing.start_stage("load_procurement")
+        procurement = (
+            Procurement.query.options(
+                joinedload(Procurement.service_unit),
+                joinedload(Procurement.committee).joinedload(
+                    Procurement.committee.property.mapper.class_.president
+                ),
+                joinedload(Procurement.committee).joinedload(
+                    Procurement.committee.property.mapper.class_.member1
+                ),
+                joinedload(Procurement.committee).joinedload(
+                    Procurement.committee.property.mapper.class_.member2
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.department
+                ),
+                joinedload(Procurement.handler_assignment).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory
+                ).joinedload(
+                    Procurement.handler_assignment.property.mapper.class_.directory.property.mapper.class_.director
+                ),
+                joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
+                joinedload(Procurement.materials),
+                joinedload(Procurement.withholding_profile),
+                joinedload(Procurement.income_tax_rule),
+            )
+            .get_or_404(procurement_id)
+        )
+        timing.end_stage()
+
+        timing.start_stage("resolve_context")
+        winner = procurement.winner_supplier_obj()
+        analysis = procurement.compute_payment_analysis()
+        materials = list(procurement.materials or [])
+        has_services = any(bool(getattr(line, "is_service", False)) for line in materials)
+        timing.mark("materials_count", len(materials))
+        timing.mark("has_services", has_services)
+        timing.mark("has_committee", procurement.committee is not None)
+        timing.end_stage()
+
+        timing.start_stage("build_docx")
+        docx_bytes = build_protocol_docx(
+            procurement=procurement,
+            service_unit=procurement.service_unit,
+            winner=winner,
+            analysis=analysis,
+            constants=ProtocolConstants(),
+            instrumentation=timing,
+        )
+        timing.mark("output_bytes", len(docx_bytes))
+        timing.end_stage()
+
+        timing.start_stage("build_filename")
+        filename = build_protocol_filename(
+            procurement=procurement,
+            winner=winner,
+            is_services=has_services,
+            analysis=analysis,
+        )
+        filename = sanitize_filename_component(filename).replace(" .docx", ".docx")
+        if not filename.lower().endswith(".docx"):
+            filename = f"{filename}.docx"
+        timing.end_stage(filename=filename)
+
+        timing.start_stage("prepare_response")
+        buffer = BytesIO(docx_bytes)
+        buffer.seek(0)
+
+        response = send_file(
+            buffer,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            max_age=0,
+        )
+        timing.end_stage()
+
         timing.finish(status="ok")
         return response
     except Exception:
@@ -2496,17 +2702,60 @@ PUBLIC API
 - register_cli_commands(app)
 - register_root_routes(app)
 - configure_app(app)
+
+PERFORMANCE INSTRUMENTATION
+---------------------------
+This bootstrap module now also wires lightweight structured timing logs for:
+
+- whole-request timing
+- Flask-Login user loader timing
+- context processor timing
+- navigation build timing
+
+IMPORTANT
+---------
+These additions are instrumentation-only:
+- no authorization changes
+- no query changes
+- no response-body changes
+- no template-context contract changes
+
+Any SQL query counting / slow-query logging must be attached separately at the
+SQLAlchemy engine layer.
 """
 
 from __future__ import annotations
 
+import time
+
 import click
-from flask import Flask, redirect, url_for
+from flask import Flask, g, has_request_context, redirect, request, url_for
 from flask_login import current_user
 
-from ..extensions import csrf, db, login_manager, migrate
+from ..extensions import csrf, db, login_manager, migrate, register_sqlalchemy_instrumentation
+from ..reports.instrumentation import begin_request_timing
 from ..security import viewer_readonly_guard
 from .navigation import build_visible_nav_sections
+
+
+def _current_request_timing():
+    """
+    Return the active request timing collector from Flask's request-local `g`.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The active collector when present, otherwise None.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Bootstrap-level instrumentation is optional and must never raise just
+    because a timing collector is missing or a call happens outside request
+    context.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
 
 
 def init_extensions(app: Flask) -> None:
@@ -2516,6 +2765,7 @@ def init_extensions(app: Flask) -> None:
     db.init_app(app)
     migrate.init_app(app, db)
     csrf.init_app(app)
+    register_sqlalchemy_instrumentation(app)
 
 
 def configure_login(app: Flask) -> None:
@@ -2528,12 +2778,30 @@ def configure_login(app: Flask) -> None:
 
     @login_manager.user_loader
     def load_user(user_id: str):
+        """
+        Load the authenticated user for Flask-Login.
+
+        PERFORMANCE NOTE
+        ----------------
+        This function is instrumented to expose the timing cost of user loading.
+        It intentionally preserves the existing query behavior and exception
+        handling semantics.
+        """
         from ..models import User
+
+        request_timing = _current_request_timing()
+        started_at = time.perf_counter()
 
         try:
             return User.query.get(int(user_id))
         except Exception:
             return None
+        finally:
+            if request_timing is not None:
+                request_timing.add_timing(
+                    "user_loader",
+                    round((time.perf_counter() - started_at) * 1000.0, 2),
+                )
 
 
 def register_blueprints(app: Flask) -> None:
@@ -2569,14 +2837,89 @@ def register_cli_commands(app: Flask) -> None:
 def register_request_hooks(app: Flask) -> None:
     """
     Register global request hooks.
+
+    HOOKS INSTALLED
+    ---------------
+    - before_request:
+        creates a request-local timing collector and runs the existing viewer
+        readonly guard
+
+    - after_request:
+        emits one structured request summary timing log
+
+    IMPORTANT
+    ---------
+    These hooks are instrumentation-only and preserve existing behavior.
     """
 
     @app.before_request
+    def _request_timing_start():
+        """
+        Create one request-local timing collector for the active request.
+        """
+        g.request_timing = begin_request_timing()
+        g.request_started_at = time.perf_counter()
+
+    @app.before_request
     def _viewer_guard_hook():
-        result = viewer_readonly_guard()
-        if result is not None:
-            return result
-        return None
+        """
+        Preserve the existing readonly guard behavior.
+
+        The guard remains functionally unchanged; only the elapsed timing is
+        recorded when request instrumentation is active.
+        """
+        request_timing = _current_request_timing()
+        started_at = time.perf_counter()
+
+        try:
+            result = viewer_readonly_guard()
+            if result is not None:
+                return result
+            return None
+        finally:
+            if request_timing is not None:
+                request_timing.add_timing(
+                    "viewer_readonly_guard",
+                    round((time.perf_counter() - started_at) * 1000.0, 2),
+                )
+
+    @app.after_request
+    def _request_timing_finish(response):
+        """
+        Emit one structured request timing summary after the response is built.
+
+        LOGGING POLICY
+        --------------
+        - INFO for ordinary requests
+        - WARNING for obviously slow requests
+
+        This does not alter the response object.
+        """
+        request_timing = _current_request_timing()
+        if request_timing is None:
+            return response
+
+        total_ms = request_timing.finish(
+            status_code=response.status_code,
+        )
+
+        log_payload = {
+            "trace_id": request_timing.trace_id,
+            "method": request.method if has_request_context() else None,
+            "path": request.path if has_request_context() else None,
+            "endpoint": request.endpoint if has_request_context() else None,
+            "status_code": response.status_code,
+            "total_ms": total_ms,
+            "sql_query_count": getattr(request_timing, "sql_query_count", 0),
+            "sql_total_ms": getattr(request_timing, "sql_total_ms", 0.0),
+        }
+
+        if total_ms >= 800:
+            app.logger.warning("HTTP_REQUEST_SLOW %s", log_payload)
+        else:
+            app.logger.info("HTTP_REQUEST %s", log_payload)
+
+        return response
 
 
 def register_context_processors(app: Flask) -> None:
@@ -2586,9 +2929,32 @@ def register_context_processors(app: Flask) -> None:
 
     @app.context_processor
     def inject_globals():
+        """
+        Inject application-wide template globals.
+
+        PERFORMANCE NOTE
+        ----------------
+        This context processor is instrumented because it runs broadly across
+        rendered pages and may contribute to request-wide overhead.
+        """
+        request_timing = _current_request_timing()
+
+        context_started_at = time.perf_counter()
+        nav_started_at = time.perf_counter()
+        nav_sections = build_visible_nav_sections()
+        nav_elapsed_ms = round((time.perf_counter() - nav_started_at) * 1000.0, 2)
+
+        if request_timing is not None:
+            request_timing.add_timing("navigation_build", nav_elapsed_ms)
+            request_timing.add_timing(
+                "context_processor.inject_globals",
+                round((time.perf_counter() - context_started_at) * 1000.0, 2),
+            )
+            request_timing.mark("nav_sections_count", len(nav_sections))
+
         return {
             "config": app.config,
-            "nav_sections": build_visible_nav_sections(),
+            "nav_sections": nav_sections,
         }
 
 
@@ -2628,7 +2994,6 @@ __all__ = [
     "configure_app",
 ]
 
-
 ```
 
 FILE: .\app\bootstrap\bootstrap.py
@@ -2659,7 +3024,7 @@ from . import *  # noqa: F401,F403
 FILE: .\app\bootstrap\navigation.py
 ```python
 """
-app/navigation.py
+app/bootstrap/navigation.py
 
 Sidebar navigation configuration and presentation-only visibility helpers.
 
@@ -2709,11 +3074,49 @@ This module exposes:
 
 The context processor in bootstrap code should call `build_visible_nav_sections()`
 and inject its result into templates.
+
+PERFORMANCE INSTRUMENTATION
+---------------------------
+This module includes lightweight request-local timing/mark instrumentation for:
+- item-level visibility checks
+- full navigation tree building
+
+IMPORTANT
+---------
+The instrumentation is observability-only:
+- no authorization changes
+- no visibility-rule changes
+- no navigation contract changes
 """
 
 from __future__ import annotations
 
+import time
+
+from flask import g, has_request_context
 from flask_login import current_user
+
+
+def _current_request_timing():
+    """
+    Return the active request timing collector when available.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The request-local collector stored on Flask's `g`, or None when
+        instrumentation is unavailable or the call happens outside request
+        context.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Navigation code is used from template context processors and must remain
+    safe even when instrumentation is absent.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
+
 
 # -------------------------------------------------------------------
 # NAVIGATION STRUCTURE (presentation only; real auth is server-side)
@@ -2889,44 +3292,60 @@ def is_nav_item_visible(item: dict) -> bool:
     -------
     bool
         True if the item should be shown in the sidebar for the current user.
+
+    PERFORMANCE NOTE
+    ----------------
+    This function emits request-local timing and lightweight metadata logs when
+    global request instrumentation is active. It does not alter visibility
+    behavior.
     """
-    if item.get("type") == "header":
-        return True
+    request_timing = _current_request_timing()
+    started_at = time.perf_counter()
 
-    if item.get("admin_only", False):
-        if not (current_user.is_authenticated and current_user.is_admin):
-            return False
-
+    item_type = item.get("type")
     endpoint = item.get("endpoint")
 
-    # Committees: visible to admin OR manager/deputy
-    if endpoint == "settings.committees":
-        return bool(
-            current_user.is_authenticated
-            and (current_user.is_admin or current_user.can_manage())
-        )
-
-    # Consolidated organization page:
-    # visible to admin OR manager (not deputy)
-    if endpoint == "admin.organization_setup":
-        if not current_user.is_authenticated:
-            return False
-        if current_user.is_admin:
+    try:
+        if item_type == "header":
             return True
-        is_mgr = getattr(current_user, "is_manager", None)
-        return bool(callable(is_mgr) and is_mgr())
 
-    # Personnel list:
-    # visible to admin OR manager (not deputy)
-    if endpoint == "admin.personnel_list":
-        if not current_user.is_authenticated:
-            return False
-        if current_user.is_admin:
-            return True
-        is_mgr = getattr(current_user, "is_manager", None)
-        return bool(callable(is_mgr) and is_mgr())
+        if item.get("admin_only", False):
+            if not (current_user.is_authenticated and current_user.is_admin):
+                return False
 
-    return True
+        # Committees: visible to admin OR manager/deputy
+        if endpoint == "settings.committees":
+            return bool(
+                current_user.is_authenticated
+                and (current_user.is_admin or current_user.can_manage())
+            )
+
+        # Consolidated organization page:
+        # visible to admin OR manager (not deputy)
+        if endpoint == "admin.organization_setup":
+            if not current_user.is_authenticated:
+                return False
+            if current_user.is_admin:
+                return True
+            is_mgr = getattr(current_user, "is_manager", None)
+            return bool(callable(is_mgr) and is_mgr())
+
+        # Personnel list:
+        # visible to admin OR manager (not deputy)
+        if endpoint == "admin.personnel_list":
+            if not current_user.is_authenticated:
+                return False
+            if current_user.is_admin:
+                return True
+            is_mgr = getattr(current_user, "is_manager", None)
+            return bool(callable(is_mgr) and is_mgr())
+
+        return True
+    finally:
+        if request_timing is not None:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+            item_key = endpoint or item.get("label") or item_type or "unknown"
+            request_timing.add_timing(f"nav_item:{item_key}", elapsed_ms)
 
 
 def build_visible_nav_sections() -> list[dict]:
@@ -2941,65 +3360,92 @@ def build_visible_nav_sections() -> list[dict]:
     -------
     list[dict]
         The final sidebar sections to inject into templates.
+
+    PERFORMANCE NOTE
+    ----------------
+    This function emits request-local timing/marks when available, but does not
+    alter the resulting navigation structure.
     """
+    request_timing = _current_request_timing()
+    started_at = time.perf_counter()
+
     visible_sections: list[dict] = []
+    sections_seen = 0
+    items_seen = 0
+    visible_items_count = 0
+    headers_rendered = 0
 
-    for section in NAV_SECTIONS:
-        if section.get("auth_required", False) and not current_user.is_authenticated:
-            continue
+    try:
+        for section in NAV_SECTIONS:
+            sections_seen += 1
 
-        section_items = section.get("items", [])
-        built_items: list[dict] = []
+            if section.get("auth_required", False) and not current_user.is_authenticated:
+                continue
 
-        current_header: dict | None = None
-        current_group: list[dict] = []
+            section_items = section.get("items", [])
+            built_items: list[dict] = []
 
-        def _flush_group() -> None:
-            """
-            Flush the current header-group pair into built_items.
+            current_header: dict | None = None
+            current_group: list[dict] = []
 
-            Behavior:
-            - If there is no header, append the group directly.
-            - If there is a header, append the header only when there is at least
-              one visible non-header child item in that group.
-            """
-            nonlocal current_header, current_group, built_items
+            def _flush_group() -> None:
+                """
+                Flush the current header-group pair into built_items.
 
-            if current_header is None:
-                built_items.extend(current_group)
-            else:
-                if any(i.get("type") != "header" for i in current_group):
-                    built_items.append(current_header)
+                Behavior:
+                - If there is no header, append the group directly.
+                - If there is a header, append the header only when there is at least
+                  one visible non-header child item in that group.
+                """
+                nonlocal current_header, current_group, built_items, headers_rendered
+
+                if current_header is None:
                     built_items.extend(current_group)
+                else:
+                    if any(i.get("type") != "header" for i in current_group):
+                        built_items.append(current_header)
+                        built_items.extend(current_group)
+                        headers_rendered += 1
 
-            current_header = None
-            current_group = []
-
-        for item in section_items:
-            if item.get("type") == "header":
-                _flush_group()
-                current_header = item
+                current_header = None
                 current_group = []
-                continue
 
-            if not is_nav_item_visible(item):
-                continue
+            for item in section_items:
+                items_seen += 1
 
-            current_group.append(item)
+                if item.get("type") == "header":
+                    _flush_group()
+                    current_header = item
+                    current_group = []
+                    continue
 
-        _flush_group()
+                if not is_nav_item_visible(item):
+                    continue
 
-        if built_items:
-            visible_sections.append(
-                {
-                    "key": section["key"],
-                    "label": section["label"],
-                    "items": built_items,
-                }
-            )
+                current_group.append(item)
+                visible_items_count += 1
 
-    return visible_sections
+            _flush_group()
 
+            if built_items:
+                visible_sections.append(
+                    {
+                        "key": section["key"],
+                        "label": section["label"],
+                        "items": built_items,
+                    }
+                )
+
+        return visible_sections
+    finally:
+        if request_timing is not None:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+            request_timing.add_timing("build_visible_nav_sections", elapsed_ms)
+            request_timing.mark("nav_sections_seen", sections_seen)
+            request_timing.mark("nav_items_seen", items_seen)
+            request_timing.mark("nav_visible_items", visible_items_count)
+            request_timing.mark("nav_headers_rendered", headers_rendered)
+            request_timing.mark("nav_visible_sections", len(visible_sections))
 
 ```
 
@@ -3028,27 +3474,236 @@ It must NOT:
 - contain configuration logic
 - contain business logic
 - contain route logic
+
+PERFORMANCE INSTRUMENTATION
+---------------------------
+This module now also provides optional SQLAlchemy engine listener helpers for:
+
+- per-request SQL query counting
+- aggregate SQL execution time
+- slow-query logging
+
+IMPORTANT
+---------
+The listener registration helpers are safe to import from bootstrap code and do
+not alter database behavior. They only observe SQL execution and emit logs.
+
+REGISTRY POLICY
+---------------
+The extension singletons remain defined here exactly once. Listener attachment
+is exposed as an explicit helper so bootstrap code can opt in after the app and
+engine are ready.
 """
 
 from __future__ import annotations
 
+import time
+from typing import Any
+
+from flask import current_app, g, has_request_context, request
 from flask_login import LoginManager
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import CSRFProtect
+from sqlalchemy import event
 
 db = SQLAlchemy()
 migrate = Migrate()
 login_manager = LoginManager()
 csrf = CSRFProtect()
 
+# Default threshold for individual slow SQL statement logs.
+#
+# Chosen to be visible enough for PythonAnywhere-style latency debugging while
+# avoiding excessive noise from very small statements.
+_SLOW_SQL_THRESHOLD_MS = 100.0
+
+
+def _compact_sql(statement: str | None, *, max_length: int = 500) -> str:
+    """
+    Compact a SQL statement into one log-friendly single-line preview.
+
+    PARAMETERS
+    ----------
+    statement:
+        Raw SQL statement string.
+    max_length:
+        Maximum number of characters to keep in the preview.
+
+    RETURNS
+    -------
+    str
+        Whitespace-normalized SQL preview, safely truncated when necessary.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Slow-query logs should remain readable and bounded. Full raw SQL payloads
+    can be excessively large and noisy in production logs.
+    """
+    if not statement:
+        return ""
+
+    compact = " ".join(str(statement).split())
+    if len(compact) <= max_length:
+        return compact
+    return compact[: max_length - 1] + "…"
+
+
+def _current_request_timing():
+    """
+    Return the active request timing collector from Flask's request-local `g`.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The active request collector when present, otherwise None.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    SQLAlchemy engine event listeners may run both inside and outside a Flask
+    request context. Listener code must remain safe in both cases.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
+
+
+def register_sqlalchemy_instrumentation(app) -> None:
+    """
+    Attach SQLAlchemy engine listeners for request-local SQL timing.
+
+    PARAMETERS
+    ----------
+    app:
+        The Flask application instance whose SQLAlchemy engine should be
+        observed.
+
+    INSTALLED OBSERVABILITY
+    -----------------------
+    - statement execution timing
+    - per-request query count
+    - per-request aggregate SQL time
+    - individual slow-query warning logs
+    - SQL error timing logs
+
+    IMPORTANT
+    ---------
+    This function is idempotent per process. Repeated calls will not re-register
+    the listeners once attached.
+    """
+    if getattr(db, "_performance_instrumentation_registered", False):
+        return
+
+    with app.app_context():
+        engine = db.engine
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _before_cursor_execute(
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
+    ) -> None:
+        """
+        Store a perf-counter timestamp before the DBAPI cursor executes.
+        """
+        context._query_started_at = time.perf_counter()
+
+    @event.listens_for(engine, "after_cursor_execute")
+    def _after_cursor_execute(
+        conn,
+        cursor,
+        statement,
+        parameters,
+        context,
+        executemany,
+    ) -> None:
+        """
+        Record SQL execution timing and emit slow-query logs when necessary.
+
+        REQUEST-LOCAL SIDE EFFECTS
+        --------------------------
+        When a Flask request timing collector exists, this listener updates:
+        - sql_query_count
+        - sql_total_ms
+
+        LOGGING
+        -------
+        A slow individual statement emits a WARNING log but does not affect the
+        request or the transaction.
+        """
+        started_at = getattr(context, "_query_started_at", None)
+        if started_at is None:
+            return
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+
+        request_timing = _current_request_timing()
+        if request_timing is not None:
+            request_timing.increment_sql(elapsed_ms)
+
+        if elapsed_ms >= _SLOW_SQL_THRESHOLD_MS:
+            log_payload: dict[str, Any] = {
+                "elapsed_ms": elapsed_ms,
+                "statement_preview": _compact_sql(statement),
+                "executemany": bool(executemany),
+                "rowcount": getattr(cursor, "rowcount", None),
+                "path": request.path if has_request_context() else None,
+                "method": request.method if has_request_context() else None,
+                "endpoint": request.endpoint if has_request_context() else None,
+            }
+
+            if request_timing is not None:
+                log_payload["trace_id"] = request_timing.trace_id
+
+            current_app.logger.warning("SLOW_SQL %s", log_payload)
+
+    @event.listens_for(engine, "handle_error")
+    def _handle_sql_error(exception_context) -> None:
+        """
+        Emit a structured SQL timing/error log when statement execution fails.
+
+        IMPORTANT
+        ---------
+        This listener does not swallow or transform exceptions. It only logs.
+        """
+        original_exception = getattr(exception_context, "original_exception", None)
+        statement = getattr(exception_context, "statement", None)
+        execution_context = getattr(exception_context, "execution_context", None)
+
+        started_at = getattr(execution_context, "_query_started_at", None)
+        elapsed_ms = None
+        if started_at is not None:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+
+        log_payload: dict[str, Any] = {
+            "elapsed_ms": elapsed_ms,
+            "statement_preview": _compact_sql(statement),
+            "path": request.path if has_request_context() else None,
+            "method": request.method if has_request_context() else None,
+            "endpoint": request.endpoint if has_request_context() else None,
+            "error_type": type(original_exception).__name__ if original_exception else None,
+            "error": str(original_exception) if original_exception else None,
+        }
+
+        request_timing = _current_request_timing()
+        if request_timing is not None:
+            log_payload["trace_id"] = request_timing.trace_id
+
+        current_app.logger.warning("SQL_EXECUTION_ERROR %s", log_payload)
+
+    db._performance_instrumentation_registered = True
+
+
 __all__ = [
     "db",
     "migrate",
     "login_manager",
     "csrf",
+    "register_sqlalchemy_instrumentation",
 ]
-
 
 ```
 
@@ -5284,16 +5939,80 @@ SECURITY NOTE
 Capability helpers such as `can_manage()` and `can_view()` are convenience
 methods only. They do NOT replace server-side authorization checks in routes
 and services.
+
+PERFORMANCE INSTRUMENTATION
+---------------------------
+This model includes lightweight request-local timing instrumentation for:
+- role helper evaluation
+- display-name resolution
+
+IMPORTANT
+---------
+The instrumentation is observability-only:
+- no capability changes
+- no relationship changes
+- no authorization changes
 """
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
+from flask import g, has_request_context
 from flask_login import UserMixin
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from ..extensions import db
+
+
+def _current_request_timing():
+    """
+    Return the active request timing collector when available.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The request-local collector stored on Flask's `g`, or None when
+        instrumentation is unavailable.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Model helpers may be called both inside and outside Flask request context.
+    The instrumentation must remain harmless in both cases.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
+
+
+def _record_user_timing(name: str, started_at: float, **marks) -> None:
+    """
+    Record one timing part for user-helper evaluation.
+
+    PARAMETERS
+    ----------
+    name:
+        Stable logical timing name.
+    started_at:
+        Perf-counter start timestamp.
+    marks:
+        Optional lightweight metadata to attach as request marks.
+
+    IMPORTANT
+    ---------
+    This helper is observability-only and never raises when request timing is
+    unavailable.
+    """
+    request_timing = _current_request_timing()
+    if request_timing is None:
+        return
+
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+    request_timing.add_timing(name, elapsed_ms)
+
+    for key, value in marks.items():
+        request_timing.mark(key, value)
 
 
 class User(UserMixin, db.Model):
@@ -5393,9 +6112,21 @@ class User(UserMixin, db.Model):
         - that service unit's manager_personnel_id matches this user's
           personnel_id
         """
+        started_at = time.perf_counter()
+
         if not self.service_unit:
-            return False
-        return self.service_unit.manager_personnel_id == self.personnel_id
+            result = False
+        else:
+            result = self.service_unit.manager_personnel_id == self.personnel_id
+
+        _record_user_timing(
+            "user.is_manager",
+            started_at,
+            user_id=self.id,
+            user_service_unit_id=self.service_unit_id,
+            user_is_manager=bool(result),
+        )
+        return result
 
     def is_deputy(self) -> bool:
         """
@@ -5408,9 +6139,21 @@ class User(UserMixin, db.Model):
         - that service unit's deputy_personnel_id matches this user's
           personnel_id
         """
+        started_at = time.perf_counter()
+
         if not self.service_unit:
-            return False
-        return self.service_unit.deputy_personnel_id == self.personnel_id
+            result = False
+        else:
+            result = self.service_unit.deputy_personnel_id == self.personnel_id
+
+        _record_user_timing(
+            "user.is_deputy",
+            started_at,
+            user_id=self.id,
+            user_service_unit_id=self.service_unit_id,
+            user_is_deputy=bool(result),
+        )
+        return result
 
     def can_manage(self) -> bool:
         """
@@ -5427,7 +6170,17 @@ class User(UserMixin, db.Model):
         This is a convenience helper only. Route-level and service-level
         authorization must still be enforced separately.
         """
-        return bool(self.is_admin or self.is_manager() or self.is_deputy())
+        started_at = time.perf_counter()
+        result = bool(self.is_admin or self.is_manager() or self.is_deputy())
+
+        _record_user_timing(
+            "user.can_manage",
+            started_at,
+            user_id=self.id,
+            user_is_admin=bool(self.is_admin),
+            user_can_manage=bool(result),
+        )
+        return result
 
     def can_view(self) -> bool:
         """
@@ -5454,22 +6207,43 @@ class User(UserMixin, db.Model):
         - linked Personnel selected label
         - username
         """
+        started_at = time.perf_counter()
+
         if self.personnel:
             display_selected = getattr(self.personnel, "display_selected_label", None)
             if callable(display_selected):
                 value = display_selected()
                 if value:
+                    _record_user_timing(
+                        "user.display_name",
+                        started_at,
+                        user_id=self.id,
+                        user_display_name_source="personnel.display_selected_label",
+                    )
                     return value
 
             display_name = getattr(self.personnel, "display_name", None)
             if isinstance(display_name, str) and display_name.strip():
-                return display_name.strip()
+                value = display_name.strip()
+                _record_user_timing(
+                    "user.display_name",
+                    started_at,
+                    user_id=self.id,
+                    user_display_name_source="personnel.display_name",
+                )
+                return value
 
-        return (self.username or "").strip()
+        value = (self.username or "").strip()
+        _record_user_timing(
+            "user.display_name",
+            started_at,
+            user_id=self.id,
+            user_display_name_source="username",
+        )
+        return value
 
     def __repr__(self) -> str:
         return f"<User {self.id}: {self.username}>"
-
 
 ```
 
@@ -8290,27 +9064,32 @@ FILE: .\app\reports\instrumentation.py
 """
 app/reports/instrumentation.py
 
-Structured timing instrumentation for report-generation requests.
+Structured timing instrumentation for report-generation requests and
+general HTTP request profiling.
 
 PURPOSE
 -------
-This module provides lightweight, request-local timing helpers for report
-generation and download endpoints.
+This module provides lightweight, request-local timing helpers for:
 
-It supports two timing levels:
-1. route-level stage timings
-2. deep builder-level detail timings
+1. report-generation and download endpoints
+2. general Flask request timing / bootstrap timing instrumentation
 
-The deep detail timings are used inside the report builders to break down the
-single "build_docx" stage into internal steps such as:
-- load_template
-- build_mapping
-- replace_placeholders_body
-- replace_headers_footers
-- locate_tables
-- fill_tables
-- set_global_font
-- save_docx
+It supports two main instrumentation families:
+
+A. ReportInstrumentation
+   Used by report routes/builders to capture:
+   - route-level stage timings
+   - deep builder-level detail timings
+
+B. RequestInstrumentation
+   Used by generic request/bootstrap hooks to capture:
+   - whole-request duration
+   - named timing parts such as:
+     - user_loader
+     - context_processor
+     - navigation_build
+     - list_context_build
+   - optional SQL counters populated elsewhere
 
 DESIGN GOALS
 ------------
@@ -8319,6 +9098,8 @@ DESIGN GOALS
 - structured logs via Flask's standard app logger
 - safe to leave enabled in production
 - easy to extend later
+- request-local only
+- must not swallow exceptions
 
 IMPORTANT BOUNDARY
 ------------------
@@ -8339,7 +9120,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from flask import current_app, request
+from flask import current_app, has_request_context, request
 
 
 def _now() -> float:
@@ -8354,6 +9135,33 @@ def _ms(start: float, end: float) -> float:
     Convert two perf-counter timestamps to milliseconds.
     """
     return round((end - start) * 1000.0, 2)
+
+
+def _request_path() -> str | None:
+    """
+    Return the active request path when a request context exists.
+    """
+    if not has_request_context():
+        return None
+    return request.path
+
+
+def _request_method() -> str | None:
+    """
+    Return the active request method when a request context exists.
+    """
+    if not has_request_context():
+        return None
+    return request.method
+
+
+def _request_endpoint() -> str | None:
+    """
+    Return the active request endpoint when a request context exists.
+    """
+    if not has_request_context():
+        return None
+    return request.endpoint
 
 
 @dataclass
@@ -8509,8 +9317,9 @@ class ReportInstrumentation:
                 "total_ms": total_ms,
                 "stages_ms": dict(self.stage_timings_ms),
                 "details_ms": dict(self.detail_timings_ms),
-                "path": request.path if request else None,
-                "method": request.method if request else None,
+                "path": _request_path(),
+                "method": _request_method(),
+                "endpoint": _request_endpoint(),
             }
         )
         payload.update(extra)
@@ -8529,7 +9338,179 @@ class ReportInstrumentation:
         }
 
 
-def begin_report_timing(report_name: str, procurement_id: int | None = None) -> ReportInstrumentation:
+@dataclass
+class RequestInstrumentation:
+    """
+    Request-local timing collector for one general Flask request.
+
+    PURPOSE
+    -------
+    This collector supports global request timing without altering route
+    behavior. It is intended for:
+    - before_request / after_request instrumentation
+    - login user-loader timing
+    - context processor timing
+    - navigation build timing
+    - list-context builder timing
+    - optional SQL counters populated elsewhere
+
+    ATTRIBUTES
+    ----------
+    trace_id:
+        Correlation id shared across all logs emitted during one request.
+
+    started_at:
+        Whole-request start timestamp.
+
+    timings_ms:
+        Mapping of logical timing part -> elapsed milliseconds.
+
+    marks:
+        Lightweight metadata emitted at summary time.
+
+    sql_query_count:
+        Optional SQL query count collected by SQLAlchemy event hooks.
+
+    sql_total_ms:
+        Optional aggregate SQL time collected by SQLAlchemy event hooks.
+    """
+
+    trace_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    started_at: float = field(default_factory=_now)
+    timings_ms: dict[str, float] = field(default_factory=dict)
+    marks: dict[str, Any] = field(default_factory=dict)
+    sql_query_count: int = 0
+    sql_total_ms: float = 0.0
+
+    def add_timing(self, name: str, elapsed_ms: float) -> float:
+        """
+        Add or overwrite a named timing part and emit a detail log.
+
+        PARAMETERS
+        ----------
+        name:
+            Stable logical timing name, e.g. 'user_loader'.
+        elapsed_ms:
+            Measured duration in milliseconds.
+
+        RETURNS
+        -------
+        float
+            The same elapsed value for convenience.
+        """
+        timing_name = str(name)
+        elapsed = round(float(elapsed_ms), 2)
+        self.timings_ms[timing_name] = elapsed
+
+        payload = self._base_payload()
+        payload.update(
+            {
+                "part": timing_name,
+                "elapsed_ms": elapsed,
+            }
+        )
+        current_app.logger.info("REQUEST_TIMING_PART %s", payload)
+        return elapsed
+
+    def increment_sql(self, elapsed_ms: float) -> None:
+        """
+        Increment SQL aggregate counters for the active request.
+
+        PARAMETERS
+        ----------
+        elapsed_ms:
+            Duration of one SQL statement in milliseconds.
+        """
+        self.sql_query_count += 1
+        self.sql_total_ms = round(self.sql_total_ms + float(elapsed_ms), 2)
+
+    def mark(self, name: str, value: Any) -> None:
+        """
+        Store lightweight metadata for the request summary and emit a mark log.
+        """
+        key = str(name)
+        self.marks[key] = value
+
+        payload = self._base_payload()
+        payload.update(
+            {
+                "mark": key,
+                "value": value,
+            }
+        )
+        current_app.logger.info("REQUEST_TIMING_MARK %s", payload)
+
+    @contextmanager
+    def timed(self, name: str, **extra: Any) -> Iterator[None]:
+        """
+        Measure one named request-local timing part.
+
+        Example
+        -------
+        with instrumentation.timed("context_processor"):
+            build_context()
+        """
+        started_at = _now()
+        try:
+            yield
+        finally:
+            elapsed_ms = self.add_timing(name, _ms(started_at, _now()))
+            if extra:
+                payload = self._base_payload()
+                payload.update(
+                    {
+                        "part": str(name),
+                        "elapsed_ms": elapsed_ms,
+                    }
+                )
+                payload.update(extra)
+                current_app.logger.info("REQUEST_TIMING_PART_EXTRA %s", payload)
+
+    def finish(self, **extra: Any) -> float:
+        """
+        Emit the final request summary log.
+
+        RETURNS
+        -------
+        float
+            Total request duration in milliseconds.
+        """
+        total_ms = _ms(self.started_at, _now())
+
+        payload = self._base_payload()
+        payload.update(
+            {
+                "total_ms": total_ms,
+                "parts_ms": dict(self.timings_ms),
+                "marks": dict(self.marks),
+                "sql_query_count": self.sql_query_count,
+                "sql_total_ms": round(self.sql_total_ms, 2),
+                "path": _request_path(),
+                "method": _request_method(),
+                "endpoint": _request_endpoint(),
+            }
+        )
+        payload.update(extra)
+
+        current_app.logger.info("REQUEST_TIMING_SUMMARY %s", payload)
+        return total_ms
+
+    def _base_payload(self) -> dict[str, Any]:
+        """
+        Build the common structured payload shared by all request timing logs.
+        """
+        return {
+            "trace_id": self.trace_id,
+            "path": _request_path(),
+            "method": _request_method(),
+            "endpoint": _request_endpoint(),
+        }
+
+
+def begin_report_timing(
+    report_name: str,
+    procurement_id: int | None = None,
+) -> ReportInstrumentation:
     """
     Create a report timing collector for one request.
     """
@@ -8539,9 +9520,18 @@ def begin_report_timing(report_name: str, procurement_id: int | None = None) -> 
     )
 
 
+def begin_request_timing() -> RequestInstrumentation:
+    """
+    Create a general request timing collector for one active Flask request.
+    """
+    return RequestInstrumentation()
+
+
 __all__ = [
     "ReportInstrumentation",
+    "RequestInstrumentation",
     "begin_report_timing",
+    "begin_request_timing",
 ]
 
 ```
@@ -9165,6 +10155,656 @@ def build_proforma_invoice_pdf(
     doc.build(elems)
     return buf.getvalue()
 
+
+```
+
+FILE: .\app\reports\protocol_docx.py
+```python
+"""
+app/reports/protocol_docx.py
+
+Generate "ΠΡΩΤΟΚΟΛΛΟ" as DOCX bytes using a Word template and placeholder
+replacement.
+
+SOURCE OF TRUTH
+---------------
+This implementation is aligned to:
+- current uploaded `protocol_template.docx`
+- current Procurement / ServiceUnit / Committee / Directory related models
+- the canonical procurement-type rule:
+  if any procurement material line has `is_service == True`
+  -> services wording
+  otherwise -> goods/materials
+
+IMPORTANT DIRECTORY RULE
+------------------------
+For the materials-only closing block, `{{HANDLER_NAME}}` must resolve to the
+director of the selected handler directory, not the department head and not the
+handler person.
+
+Resolution order:
+1. procurement.handler_assignment.directory.director
+2. procurement.handler_assignment.directory.director_personnel
+3. procurement.handler_assignment.directory.director_personnel_id -> lookup
+4. em dash fallback
+
+CURRENT YEAR RULE
+-----------------
+`{{CURRENT_YEAR}}` resolves to the 2-digit year:
+1. procurement.materials_receipt_date.year
+2. current system year
+
+TEMPLATE HANDLING RULE
+----------------------
+The protocol template is the layout source of truth. This generator must:
+- replace placeholders only
+- preserve the template's alignment / tabs / table layout
+- avoid rebuilding the committee-signature structure
+"""
+
+from __future__ import annotations
+
+from contextlib import nullcontext
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Iterable, Optional
+
+from docx import Document
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import _Cell, Table
+from docx.text.paragraph import Paragraph
+
+from ..models.organization import Personnel
+from .common.amounts import money_plain
+from .common.docx_utils import (
+    clear_table_body_keep_header,
+    set_cell_alignment,
+    set_global_font_arial_12,
+)
+from .common.domain import (
+    resolve_is_services,
+    resolve_service_unit_place,
+    winner_supplier_line,
+)
+from .common.formatting import format_date_ddmmyyyy, safe_text, upper_service_name
+from .instrumentation import ReportInstrumentation
+
+
+def _timed(
+    instrumentation: Optional[ReportInstrumentation],
+    detail_name: str,
+    **extra: Any,
+):
+    if instrumentation is None:
+        return nullcontext()
+    return instrumentation.timed_detail(detail_name, **extra)
+
+
+def _template_path() -> Path:
+    """
+    Resolve the DOCX template path for the protocol document.
+    """
+    app_dir = Path(__file__).resolve().parents[1]
+    return app_dir / "templates" / "docx" / "protocol_template.docx"
+
+
+def _sorted_materials(procurement: Any) -> list[Any]:
+    """
+    Preserve source ordering by default.
+    """
+    return list(getattr(procurement, "materials", []) or [])
+
+
+def _person_full_name(person: Any) -> str:
+    """
+    Resolve a person display name conservatively.
+    """
+    if person is None:
+        return "—"
+
+    full_name_method = getattr(person, "full_name", None)
+    if callable(full_name_method):
+        try:
+            value = safe_text(full_name_method())
+            if value:
+                return value
+        except Exception:
+            pass
+
+    rank = safe_text(getattr(person, "rank", None), default="")
+    last_name = safe_text(getattr(person, "last_name", None), default="")
+    first_name = safe_text(getattr(person, "first_name", None), default="")
+    specialty = safe_text(getattr(person, "specialty", None), default="")
+
+    combined = " ".join(
+        part for part in [rank, specialty, first_name, last_name] if part
+    ).strip()
+    if combined:
+        return combined
+
+    name = safe_text(getattr(person, "name", None), default="")
+    if name:
+        return name
+
+    return "—"
+
+
+def _resolve_directory_director_name(procurement: Any) -> str:
+    """
+    Resolve the selected handler directory director.
+    """
+    assignment = getattr(procurement, "handler_assignment", None)
+    if assignment is not None:
+        directory = getattr(assignment, "directory", None)
+        if directory is not None:
+            director = getattr(directory, "director", None)
+            if director is not None:
+                return _person_full_name(director)
+
+            director_personnel = getattr(directory, "director_personnel", None)
+            if director_personnel is not None:
+                return _person_full_name(director_personnel)
+
+            director_personnel_id = getattr(directory, "director_personnel_id", None)
+            if director_personnel_id:
+                person = Personnel.query.get(director_personnel_id)
+                if person is not None:
+                    return _person_full_name(person)
+
+    return "—"
+
+
+def _committee_member(procurement: Any, attr_name: str) -> str:
+    committee = getattr(procurement, "committee", None)
+    if committee is None:
+        return "—"
+    return _person_full_name(getattr(committee, attr_name, None))
+
+
+def _committee_identity_text(procurement: Any) -> str:
+    committee = getattr(procurement, "committee", None)
+    if committee is None:
+        return "—"
+    return safe_text(getattr(committee, "identity_text", None), default="—")
+
+
+def _protocol_title(is_services: bool) -> str:
+    return (
+        "ΠΡΩΤΟΚΟΛΛΟ ΠΟΣΟΤΙΚΗΣ ΚΑΙ ΠΟΙΟΤΙΚΗΣ ΠΑΡΟΧΗΣ ΥΠΗΡΕΣΙΩΝ"
+        if is_services
+        else "ΠΡΩΤΟΚΟΛΛΟ ΠΟΣΟΤΙΚΗΣ ΚΑΙ ΠΟΙΟΤΙΚΗΣ ΠΡΟΜΗΘΕΙΑΣ ΥΛΙΚΩΝ"
+    )
+
+
+def _intro_items_label(is_services: bool) -> str:
+    return "υπηρεσιών" if is_services else "υλικών"
+
+
+def _delivery_verb(is_services: bool) -> str:
+    return "παρασχέθηκαν" if is_services else "παραλήφθηκαν"
+
+
+def _analysis_title(is_services: bool) -> str:
+    return (
+        "ΑΝΑΛΥΣΗ ΠΑΡΟΧΗΣ ΥΠΗΡΕΣΙΩΝ"
+        if is_services
+        else "ΑΝΑΛΥΣΗ ΠΡΟΜΗΘΕΙΑΣ ΥΛΙΚΩΝ"
+    )
+
+
+def _decision_text(is_services: bool) -> str:
+    if is_services:
+        return (
+            "Η επιτροπή, αφού έλαβε υπόψη τα ανωτέρω, αποφαίνεται παμψηφεί ότι "
+            "οι υπηρεσίες που παρασχέθηκαν, πληρούν τους όρους της σύμβασης και "
+            "εισηγείται την οριστική παραλαβή αυτών."
+        )
+
+    return (
+        "Η επιτροπή, αφού έλαβε υπόψη τα ανωτέρω, αποφαίνεται παμψηφεί ότι "
+        "τα υλικά που παραλήφθηκαν, πληρούν τους όρους της σύμβασης και "
+        "εισηγείται την οριστική παραλαβή αυτών."
+    )
+
+
+def _current_year_text(procurement: Any) -> str:
+    materials_receipt_date = getattr(procurement, "materials_receipt_date", None)
+    if materials_receipt_date is not None and getattr(materials_receipt_date, "year", None):
+        return str(materials_receipt_date.year)
+    return str(date.today().year)
+
+
+def _current_year_two_digits(procurement: Any) -> str:
+    return _current_year_text(procurement)[-2:]
+
+
+def _find_protocol_table(doc: Document):
+    """
+    Find the main protocol analysis table.
+
+    Expected shape in current template:
+    - 6 columns
+    - header includes:
+      Α/Α | ΠΕΡΙΓΡΑΦΗ | NSN | Μ/Μ | ΣΥΝ. ΠΟΣ. | ΤΙΜΗ ΜΟΝ. (€)
+    """
+    for table in doc.tables:
+        if len(table.columns) != 6 or not table.rows:
+            continue
+
+        header = " ".join(cell.text.strip() for cell in table.rows[0].cells).upper()
+        if (
+            "Α/Α" in header
+            and "ΠΕΡΙΓΡΑΦΗ" in header
+            and "NSN" in header
+            and "Μ/Μ" in header
+            and "ΣΥΝ. ΠΟΣ." in header
+            and "ΤΙΜΗ ΜΟΝ." in header
+        ):
+            return table
+
+    return None
+
+
+def _fill_protocol_table(table, procurement: Any) -> None:
+    """
+    Fill the protocol analysis table with one row per procurement material line.
+    """
+    clear_table_body_keep_header(table, header_rows=1)
+
+    lines = _sorted_materials(procurement)
+
+    if not lines:
+        row = table.add_row().cells
+        row[0].text = "—"
+        row[1].text = "Δεν υπάρχουν γραμμές υλικών/υπηρεσιών."
+        row[2].text = "—"
+        row[3].text = "—"
+        row[4].text = "—"
+        row[5].text = "—"
+        for cell in row:
+            set_cell_alignment(
+                cell,
+                horizontal=WD_ALIGN_PARAGRAPH.CENTER,
+                vertical=WD_ALIGN_VERTICAL.CENTER,
+            )
+        return
+
+    for idx, line in enumerate(lines, start=1):
+        row = table.add_row().cells
+        row[0].text = str(idx)
+        row[1].text = safe_text(getattr(line, "description", None))
+        row[2].text = safe_text(getattr(line, "nsn", None))
+        row[3].text = safe_text(getattr(line, "unit", None))
+
+        qty_value = getattr(line, "quantity", None)
+        row[4].text = money_plain(qty_value) if qty_value is not None else "—"
+        row[5].text = money_plain(getattr(line, "unit_price", None))
+
+        for cell in row:
+            set_cell_alignment(
+                cell,
+                horizontal=WD_ALIGN_PARAGRAPH.CENTER,
+                vertical=WD_ALIGN_VERTICAL.CENTER,
+            )
+
+
+def _iter_body_blocks(doc: Document):
+    """
+    Iterate document body elements preserving body order.
+    """
+    body = doc.element.body
+    for child in body.iterchildren():
+        if isinstance(child, CT_P):
+            yield ("paragraph", child)
+        elif isinstance(child, CT_Tbl):
+            yield ("table", child)
+
+
+def _remove_xml_element(element) -> None:
+    parent = element.getparent()
+    if parent is not None:
+        parent.remove(element)
+
+
+def _iter_all_paragraphs(doc: Document) -> Iterable[Paragraph]:
+    for paragraph in doc.paragraphs:
+        yield paragraph
+
+    for table in doc.tables:
+        yield from _iter_table_paragraphs(table)
+
+    for section in doc.sections:
+        for paragraph in section.header.paragraphs:
+            yield paragraph
+        for table in section.header.tables:
+            yield from _iter_table_paragraphs(table)
+
+        for paragraph in section.footer.paragraphs:
+            yield paragraph
+        for table in section.footer.tables:
+            yield from _iter_table_paragraphs(table)
+
+
+def _iter_table_paragraphs(table: Table) -> Iterable[Paragraph]:
+    for row in table.rows:
+        for cell in row.cells:
+            yield from _iter_cell_paragraphs(cell)
+
+
+def _iter_cell_paragraphs(cell: _Cell) -> Iterable[Paragraph]:
+    for paragraph in cell.paragraphs:
+        yield paragraph
+    for table in cell.tables:
+        yield from _iter_table_paragraphs(table)
+
+
+def _replace_text_in_paragraph(paragraph: Paragraph, old: str, new: str) -> None:
+    if old not in paragraph.text:
+        return
+
+    for run in paragraph.runs:
+        if old in run.text:
+            run.text = run.text.replace(old, new)
+
+    if old in paragraph.text:
+        paragraph.text = paragraph.text.replace(old, new)
+
+
+def _replace_placeholders_everywhere_local(doc: Document, mapping: dict[str, str]) -> None:
+    """
+    Replace placeholders across body, tables, headers, and footers.
+    """
+    for paragraph in _iter_all_paragraphs(doc):
+        if not paragraph.text:
+            continue
+        for placeholder, value in mapping.items():
+            if placeholder in paragraph.text:
+                _replace_text_in_paragraph(paragraph, placeholder, value)
+
+
+def _fix_known_template_typos(doc: Document) -> None:
+    """
+    Patch known current-template typos before placeholder replacement.
+
+    Important:
+    - only replace the exact wrong placeholder token
+    - do not rewrite whole paragraph layout
+    """
+    wrong = "{{COMMITTEE_MEMBER1}}"
+    right = "{{COMMITTEE_MEMBER3}}"
+
+    for paragraph in _iter_all_paragraphs(doc):
+        text = paragraph.text or ""
+        if text.strip().startswith("γ.") and wrong in text:
+            _replace_text_in_paragraph(paragraph, wrong, right)
+
+
+def _strip_marker_paragraphs_and_toggle_materials_block(
+    doc: Document,
+    *,
+    keep_materials_block: bool,
+) -> None:
+    """
+    Remove materials markers and optionally remove the whole materials block.
+
+    Rules:
+    - when materials block is kept: remove only the markers
+    - when materials block is not kept: remove everything between markers
+      from the main document body, including tables
+    """
+    start_marker = "{{#IF_MATERIALS}}"
+    end_marker = "{{/IF_MATERIALS}}"
+
+    inside_block = False
+
+    for kind, element in list(_iter_body_blocks(doc)):
+        if kind == "paragraph":
+            text = "".join(element.itertext())
+
+            has_start = start_marker in text
+            has_end = end_marker in text
+
+            if has_start and not keep_materials_block:
+                inside_block = True
+                _remove_xml_element(element)
+                continue
+
+            if has_end and not keep_materials_block:
+                inside_block = False
+                _remove_xml_element(element)
+                continue
+
+            if inside_block and not keep_materials_block:
+                _remove_xml_element(element)
+                continue
+
+            if has_start or has_end:
+                paragraph = Paragraph(element, doc)
+                if has_start:
+                    _replace_text_in_paragraph(paragraph, start_marker, "")
+                if has_end:
+                    _replace_text_in_paragraph(paragraph, end_marker, "")
+
+        elif kind == "table" and inside_block and not keep_materials_block:
+            _remove_xml_element(element)
+
+    _remove_marker_tokens_everywhere(doc)
+
+
+def _remove_marker_tokens_everywhere(doc: Document) -> None:
+    """
+    Final safety pass to ensure IF markers never remain visible anywhere.
+    """
+    for paragraph in _iter_all_paragraphs(doc):
+        if not paragraph.text:
+            continue
+        if "{{#IF_MATERIALS}}" in paragraph.text:
+            _replace_text_in_paragraph(paragraph, "{{#IF_MATERIALS}}", "")
+        if "{{/IF_MATERIALS}}" in paragraph.text:
+            _replace_text_in_paragraph(paragraph, "{{/IF_MATERIALS}}", "")
+
+
+def _resolve_total_amount(procurement: Any, analysis: Optional[dict[str, Any]] = None) -> Decimal:
+    """
+    Resolve the filename amount.
+
+    Business rule:
+    - use General Total, not Final Payable Total
+    """
+    analysis = analysis or {}
+
+    for key in ("sum_total", "total", "grand_total"):
+        value = analysis.get(key)
+        if value not in (None, ""):
+            try:
+                return Decimal(str(value))
+            except Exception:
+                pass
+
+    for attr_name in ("sum_total", "total", "grand_total", "total_amount"):
+        value = getattr(procurement, attr_name, None)
+        if value not in (None, ""):
+            try:
+                return Decimal(str(value))
+            except Exception:
+                pass
+
+    running = Decimal("0")
+    found = False
+    for line in _sorted_materials(procurement):
+        for attr_name in ("total_with_vat", "total_post_vat", "total_pre_vat", "total"):
+            value = getattr(line, attr_name, None)
+            if value not in (None, ""):
+                try:
+                    running += Decimal(str(value))
+                    found = True
+                    break
+                except Exception:
+                    pass
+
+    if found:
+        return running
+
+    return Decimal("0")
+
+
+def _format_filename_amount(amount: Decimal) -> str:
+    q = amount.quantize(Decimal("0.01"))
+    s = f"{q:.2f}".replace(".", ",")
+    return f"{s}Ε"
+
+
+@dataclass(frozen=True)
+class ProtocolConstants:
+    """
+    Future-proof constants container for protocol generation.
+    """
+    pass
+
+
+def build_protocol_docx(
+    *,
+    procurement: Any,
+    service_unit: Any,
+    winner: Optional[Any],
+    analysis: dict[str, Any],
+    constants: Optional[ProtocolConstants] = None,
+    instrumentation: Optional[ReportInstrumentation] = None,
+) -> bytes:
+    """
+    Build the protocol DOCX and return it as bytes.
+    """
+    _ = constants
+
+    template_path = _template_path()
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path}")
+
+    is_services = resolve_is_services(procurement)
+
+    with _timed(instrumentation, "load_template"):
+        doc = Document(str(template_path))
+
+    with _timed(instrumentation, "fix_template_typos"):
+        _fix_known_template_typos(doc)
+
+    with _timed(instrumentation, "build_mapping"):
+        mapping: dict[str, str] = {
+            "{{PROCUREMENT_PROTOCOL_NUMBER}}": safe_text(
+                getattr(procurement, "protocol_number", None)
+            ),
+            "{{CURRENT_YEAR}}": _current_year_two_digits(procurement),
+            "{{SERVICE_UNIT_NAME}}": upper_service_name(
+                safe_text(getattr(service_unit, "description", None), default="—")
+            ),
+            "{{PROTOCOL_TITLE}}": _protocol_title(is_services),
+            "{{PROCUREMENT_SERVICE_UNIT_PLACE}}": resolve_service_unit_place(service_unit),
+            "{{PROCUREMENT_MATERIALS_RECEIPT_DATE}}": format_date_ddmmyyyy(
+                getattr(procurement, "materials_receipt_date", None)
+            ),
+            "{{COMMITTEE_MEMBER1}}": _committee_member(procurement, "president"),
+            "{{COMMITTEE_MEMBER2}}": _committee_member(procurement, "member1"),
+            "{{COMMITTEE_MEMBER3}}": _committee_member(procurement, "member2"),
+            "{{PROCUREMENT_COMMITTEE_IDENTITY_TEXT}}": _committee_identity_text(procurement),
+            "{{PROTOCOL_INTRO_ITEMS_LABEL}}": _intro_items_label(is_services),
+            "{{PROTOCOL_DELIVERY_VERB}}": _delivery_verb(is_services),
+            "{{WINNER_SUPPLIER_LINE}}": winner_supplier_line(winner),
+            "{{PROCUREMENT_HOP_APPROVAL}}": safe_text(
+                getattr(procurement, "hop_approval", None)
+            ),
+            "{{PROTOCOL_ANALYSIS_TITLE}}": _analysis_title(is_services),
+            "{{PROTOCOL_DECISION_TEXT}}": _decision_text(is_services),
+            "{{service.commander}}": safe_text(
+                getattr(service_unit, "commander", None),
+                default="—",
+            ),
+            "{{COMMANDER_ROLE_TYPE}}": safe_text(
+                getattr(service_unit, "commander_role_type", None),
+                default="—",
+            ),
+            "{{SERVICE_UNIT_SUPPLY_OFFICER}}": safe_text(
+                getattr(service_unit, "supply_officer", None),
+                default="—",
+            ),
+            "{{HANDLER_NAME}}": _resolve_directory_director_name(procurement),
+            "{{ML_NO}}": "",
+            "{{ML_DESC}}": "",
+            "{{ML_NSN}}": "",
+            "{{ML_UNIT}}": "",
+            "{{ML_QTY}}": "",
+            "{{ML_UNIT_PRICE}}": "",
+        }
+
+    with _timed(
+        instrumentation,
+        "toggle_materials_block",
+        keep_materials_block=not is_services,
+    ):
+        _strip_marker_paragraphs_and_toggle_materials_block(
+            doc,
+            keep_materials_block=not is_services,
+        )
+
+    with _timed(
+        instrumentation,
+        "replace_placeholders_body_headers_footers",
+        placeholders=len(mapping),
+    ):
+        _replace_placeholders_everywhere_local(doc, mapping)
+
+    with _timed(instrumentation, "locate_tables"):
+        protocol_table = _find_protocol_table(doc)
+
+    if protocol_table is not None:
+        with _timed(
+            instrumentation,
+            "fill_protocol_table",
+            materials_count=len(_sorted_materials(procurement)),
+        ):
+            _fill_protocol_table(protocol_table, procurement)
+
+    with _timed(instrumentation, "set_global_font"):
+        set_global_font_arial_12(doc)
+
+    with _timed(instrumentation, "save_docx"):
+        buffer = BytesIO()
+        doc.save(buffer)
+
+    return buffer.getvalue()
+
+
+def build_protocol_filename(
+    *,
+    procurement: Any,
+    winner: Optional[Any],
+    is_services: bool,
+    analysis: Optional[dict[str, Any]] = None,
+) -> str:
+    """
+    Build a human-readable filename for the generated protocol document.
+
+    Expected pattern:
+    Πρωτόκολλο Ποιοτικής και Ποσοτικής Παραλαβής <kind> <protocol>_<yy> <supplier> <amount>Ε.docx
+
+    Amount rule:
+    - use General Total, not Final Payable Total
+    """
+    kind = "Παροχής Υπηρεσιών" if is_services else "Προμήθειας Υλικών"
+    supplier_name = safe_text(getattr(winner, "name", None), default="—")
+    protocol_number = safe_text(getattr(procurement, "protocol_number", None), default="—")
+    protocol_with_year = f"{protocol_number}_{_current_year_two_digits(procurement)}"
+    amount_text = _format_filename_amount(_resolve_total_amount(procurement, analysis))
+
+    return (
+        f"Πρωτόκολλο Ποιοτικής και Ποσοτικής Παραλαβής "
+        f"{kind} {protocol_with_year} {supplier_name} {amount_text}.docx"
+    )
 
 ```
 
@@ -15313,13 +16953,31 @@ This module MUST NOT:
 - mutate database state
 - implement unrelated business workflows
 - replace existing lower-level procurement query helpers
+
+PERFORMANCE INSTRUMENTATION
+---------------------------
+This module includes lightweight request-local instrumentation for:
+- full list context build timing
+- pagination timing
+- filter-options loading timing
+- coarse query assembly timing
+
+IMPORTANT
+---------
+The instrumentation is observability-only:
+- no filtering changes
+- no pagination changes
+- no template-context contract changes
 """
 
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping
 from typing import Any
+
+from flask import g, has_request_context
 
 from ...models import Procurement
 from ..master_data_service import get_active_option_values
@@ -15337,6 +16995,38 @@ from ..procurement_service import (
 # giving users a reasonable amount of data per page.
 _ALLOWED_PER_PAGE_VALUES = (25, 50, 100)
 _DEFAULT_PER_PAGE = 25
+
+
+def _current_request_timing():
+    """
+    Return the active request timing collector when available.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The request-local collector stored on Flask's `g`, or None when
+        instrumentation is unavailable.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    These page services must remain safe and reusable even if they are executed
+    outside an instrumented request.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
+
+
+def _timing_name(prefix: str, page_name: str, part: str) -> str:
+    """
+    Build a stable instrumentation name for list-page timings.
+
+    EXAMPLE
+    -------
+    _timing_name("list_page", "inbox", "pagination")
+    -> "list_page.inbox.pagination"
+    """
+    return f"{prefix}.{page_name}.{part}"
 
 
 def _parse_positive_int(value: object, default: int) -> int:
@@ -15384,7 +17074,12 @@ def _build_pagination_window(current_page: int, total_pages: int, *, radius: int
     return list(range(start_page, end_page + 1))
 
 
-def _paginate_procurements_query(query, request_args: Mapping[str, Any]) -> tuple[list[Procurement], dict[str, Any]]:
+def _paginate_procurements_query(
+    query,
+    request_args: Mapping[str, Any],
+    *,
+    page_name: str,
+) -> tuple[list[Procurement], dict[str, Any]]:
     """
     Apply bounded pagination to a procurement list query.
 
@@ -15392,11 +17087,24 @@ def _paginate_procurements_query(query, request_args: Mapping[str, Any]) -> tupl
     - the database returns only the rows needed for the active page
     - PythonAnywhere does not need to materialize large full-result lists
     - the template does not iterate over every matching procurement
+
+    PERFORMANCE NOTE
+    ----------------
+    This function measures:
+    - count query timing
+    - page fetch timing
+    - full pagination timing
     """
+    request_timing = _current_request_timing()
+    pagination_started_at = time.perf_counter()
+
     page = _parse_positive_int(request_args.get("page"), 1)
     per_page = _parse_per_page(request_args.get("per_page"))
 
+    count_started_at = time.perf_counter()
     total_items = query.order_by(None).count()
+    count_elapsed_ms = round((time.perf_counter() - count_started_at) * 1000.0, 2)
+
     total_pages = max(1, math.ceil(total_items / per_page)) if total_items else 1
 
     if page > total_pages:
@@ -15404,11 +17112,13 @@ def _paginate_procurements_query(query, request_args: Mapping[str, Any]) -> tupl
 
     offset = (page - 1) * per_page
 
+    page_fetch_started_at = time.perf_counter()
     paged_query = order_by_serial_no(query)
     paged_query = paged_query.offset(offset).limit(per_page)
     paged_query = with_list_eagerloads(paged_query)
 
     procurements = paged_query.all()
+    page_fetch_elapsed_ms = round((time.perf_counter() - page_fetch_started_at) * 1000.0, 2)
 
     start_index = offset + 1 if total_items > 0 else 0
     end_index = min(offset + per_page, total_items) if total_items > 0 else 0
@@ -15428,6 +17138,24 @@ def _paginate_procurements_query(query, request_args: Mapping[str, Any]) -> tupl
         "end_index": end_index,
     }
 
+    if request_timing is not None:
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "pagination.count"),
+            count_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "pagination.fetch"),
+            page_fetch_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "pagination.total"),
+            round((time.perf_counter() - pagination_started_at) * 1000.0, 2),
+        )
+        request_timing.mark(f"{page_name}_page", page)
+        request_timing.mark(f"{page_name}_per_page", per_page)
+        request_timing.mark(f"{page_name}_total_items", total_items)
+        request_timing.mark(f"{page_name}_rows_loaded", len(procurements))
+
     return procurements, pagination
 
 
@@ -15439,17 +17167,36 @@ def build_inbox_procurements_list_context(
     """
     Build template context for the `/procurements/inbox` page.
     """
+    request_timing = _current_request_timing()
+    page_name = "inbox"
+    started_at = time.perf_counter()
+
+    base_query_started_at = time.perf_counter()
     query = base_procurements_query()
     query = query.filter(Procurement.status == "ΣΕ ΕΞΕΛΙΞΗ")
     query = query.filter(
         (Procurement.send_to_expenses.is_(False))
         | (Procurement.send_to_expenses.is_(None))
     )
+    base_query_elapsed_ms = round((time.perf_counter() - base_query_started_at) * 1000.0, 2)
 
+    filters_started_at = time.perf_counter()
     query = apply_list_filters(query, request_args)
-    procurements, pagination = _paginate_procurements_query(query, request_args)
+    filters_elapsed_ms = round((time.perf_counter() - filters_started_at) * 1000.0, 2)
 
-    return {
+    procurements, pagination = _paginate_procurements_query(
+        query,
+        request_args,
+        page_name=page_name,
+    )
+
+    options_started_at = time.perf_counter()
+    service_units = service_units_for_filter()
+    status_options = get_active_option_values("KATASTASH")
+    stage_options = get_active_option_values("STADIO")
+    options_elapsed_ms = round((time.perf_counter() - options_started_at) * 1000.0, 2)
+
+    context = {
         "procurements": procurements,
         "pagination": pagination,
         "page_title": "Λίστα Προμηθειών (μη εγκεκριμένες)",
@@ -15459,10 +17206,34 @@ def build_inbox_procurements_list_context(
         "show_open_button": True,
         "enable_row_colors": True,
         "allow_delete": False,
-        "service_units": service_units_for_filter(),
-        "status_options": get_active_option_values("KATASTASH"),
-        "stage_options": get_active_option_values("STADIO"),
+        "service_units": service_units,
+        "status_options": status_options,
+        "stage_options": stage_options,
     }
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "base_query"),
+            base_query_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "apply_filters"),
+            filters_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "load_filter_options"),
+            options_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "build_context"),
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+        request_timing.mark(f"{page_name}_service_units_count", len(service_units))
+        request_timing.mark(f"{page_name}_status_options_count", len(status_options))
+        request_timing.mark(f"{page_name}_stage_options_count", len(stage_options))
+        request_timing.mark(f"{page_name}_allow_create", bool(allow_create))
+
+    return context
 
 
 def build_pending_expenses_list_context(
@@ -15471,14 +17242,33 @@ def build_pending_expenses_list_context(
     """
     Build template context for the `/procurements/pending-expenses` page.
     """
+    request_timing = _current_request_timing()
+    page_name = "pending_expenses"
+    started_at = time.perf_counter()
+
+    base_query_started_at = time.perf_counter()
     query = base_procurements_query()
     query = query.filter(Procurement.status == "ΣΕ ΕΞΕΛΙΞΗ")
     query = query.filter(Procurement.send_to_expenses.is_(True))
+    base_query_elapsed_ms = round((time.perf_counter() - base_query_started_at) * 1000.0, 2)
 
+    filters_started_at = time.perf_counter()
     query = apply_list_filters(query, request_args)
-    procurements, pagination = _paginate_procurements_query(query, request_args)
+    filters_elapsed_ms = round((time.perf_counter() - filters_started_at) * 1000.0, 2)
 
-    return {
+    procurements, pagination = _paginate_procurements_query(
+        query,
+        request_args,
+        page_name=page_name,
+    )
+
+    options_started_at = time.perf_counter()
+    service_units = service_units_for_filter()
+    status_options = get_active_option_values("KATASTASH")
+    stage_options = get_active_option_values("STADIO")
+    options_elapsed_ms = round((time.perf_counter() - options_started_at) * 1000.0, 2)
+
+    context = {
         "procurements": procurements,
         "pagination": pagination,
         "page_title": "Εκκρεμείς Δαπάνες",
@@ -15488,10 +17278,33 @@ def build_pending_expenses_list_context(
         "show_open_button": True,
         "enable_row_colors": True,
         "allow_delete": False,
-        "service_units": service_units_for_filter(),
-        "status_options": get_active_option_values("KATASTASH"),
-        "stage_options": get_active_option_values("STADIO"),
+        "service_units": service_units,
+        "status_options": status_options,
+        "stage_options": stage_options,
     }
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "base_query"),
+            base_query_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "apply_filters"),
+            filters_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "load_filter_options"),
+            options_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "build_context"),
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+        request_timing.mark(f"{page_name}_service_units_count", len(service_units))
+        request_timing.mark(f"{page_name}_status_options_count", len(status_options))
+        request_timing.mark(f"{page_name}_stage_options_count", len(stage_options))
+
+    return context
 
 
 def build_all_procurements_list_context(
@@ -15500,11 +17313,31 @@ def build_all_procurements_list_context(
     """
     Build template context for the `/procurements/all` page.
     """
-    query = base_procurements_query()
-    query = apply_list_filters(query, request_args)
-    procurements, pagination = _paginate_procurements_query(query, request_args)
+    request_timing = _current_request_timing()
+    page_name = "all_procurements"
+    started_at = time.perf_counter()
 
-    return {
+    base_query_started_at = time.perf_counter()
+    query = base_procurements_query()
+    base_query_elapsed_ms = round((time.perf_counter() - base_query_started_at) * 1000.0, 2)
+
+    filters_started_at = time.perf_counter()
+    query = apply_list_filters(query, request_args)
+    filters_elapsed_ms = round((time.perf_counter() - filters_started_at) * 1000.0, 2)
+
+    procurements, pagination = _paginate_procurements_query(
+        query,
+        request_args,
+        page_name=page_name,
+    )
+
+    options_started_at = time.perf_counter()
+    service_units = service_units_for_filter()
+    status_options = get_active_option_values("KATASTASH")
+    stage_options = get_active_option_values("STADIO")
+    options_elapsed_ms = round((time.perf_counter() - options_started_at) * 1000.0, 2)
+
+    context = {
         "procurements": procurements,
         "pagination": pagination,
         "page_title": "Όλες οι Προμήθειες",
@@ -15514,10 +17347,33 @@ def build_all_procurements_list_context(
         "show_open_button": True,
         "enable_row_colors": True,
         "allow_delete": True,
-        "service_units": service_units_for_filter(),
-        "status_options": get_active_option_values("KATASTASH"),
-        "stage_options": get_active_option_values("STADIO"),
+        "service_units": service_units,
+        "status_options": status_options,
+        "stage_options": stage_options,
     }
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "base_query"),
+            base_query_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "apply_filters"),
+            filters_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "load_filter_options"),
+            options_elapsed_ms,
+        )
+        request_timing.add_timing(
+            _timing_name("list_page", page_name, "build_context"),
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+        request_timing.mark(f"{page_name}_service_units_count", len(service_units))
+        request_timing.mark(f"{page_name}_status_options_count", len(status_options))
+        request_timing.mark(f"{page_name}_stage_options_count", len(stage_options))
+
+    return context
 
 ```
 
@@ -15576,13 +17432,30 @@ Important assumptions:
 - admin users may access all procurements
 - non-admin users are service-isolated by Procurement.service_unit_id
 - caller still owns action-level permission checks
+
+PERFORMANCE INSTRUMENTATION
+---------------------------
+This module includes lightweight request-local timing/mark instrumentation for:
+- procurement loader timing
+- base query construction timing
+- eager-load option application timing
+- ordering helper timing
+- list-filter application timing
+
+IMPORTANT
+---------
+The instrumentation is observability-only:
+- no authorization changes
+- no query semantics changes
+- no filtering behavior changes
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 
-from flask import abort
+from flask import abort, g, has_request_context
 from flask_login import current_user
 from sqlalchemy import Integer, and_, case, func
 from sqlalchemy.orm import joinedload
@@ -15590,6 +17463,26 @@ from sqlalchemy.orm import joinedload
 from ...extensions import db
 from ...models import Procurement, ProcurementSupplier, Supplier
 from ..shared.parsing import normalize_digits, parse_optional_int
+
+
+def _current_request_timing():
+    """
+    Return the active request timing collector when available.
+
+    RETURNS
+    -------
+    RequestInstrumentation | None
+        The request-local collector stored on Flask's `g`, or None when
+        instrumentation is unavailable.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    Query helpers must remain safe to use even outside a fully instrumented
+    request path.
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "request_timing", None)
 
 
 def load_procurement(procurement_id: int, **_: object) -> Procurement:
@@ -15612,9 +17505,22 @@ def load_procurement(procurement_id: int, **_: object) -> Procurement:
     small loader function with a stable signature. Centralizing it here keeps
     route files smaller and avoids repeated boilerplate.
     """
+    request_timing = _current_request_timing()
+    started_at = time.perf_counter()
+
     procurement = db.session.get(Procurement, procurement_id)
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            "procurement_query.load_procurement",
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+        request_timing.mark("load_procurement_id", procurement_id)
+        request_timing.mark("load_procurement_found", procurement is not None)
+
     if procurement is None:
         abort(404)
+
     return procurement
 
 
@@ -15634,12 +17540,30 @@ def base_procurements_query():
     unit. This helper provides the canonical starting point for procurement
     list pages and procurement searches.
     """
-    if current_user.is_admin:
-        return Procurement.query
+    request_timing = _current_request_timing()
+    started_at = time.perf_counter()
 
-    return Procurement.query.filter(
-        Procurement.service_unit_id == current_user.service_unit_id
-    )
+    if current_user.is_admin:
+        query = Procurement.query
+        scope = "admin_all"
+    else:
+        query = Procurement.query.filter(
+            Procurement.service_unit_id == current_user.service_unit_id
+        )
+        scope = "service_scoped"
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            "procurement_query.base_procurements_query",
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+        request_timing.mark("procurement_query_scope", scope)
+        request_timing.mark(
+            "procurement_query_service_unit_id",
+            None if current_user.is_admin else current_user.service_unit_id,
+        )
+
+    return query
 
 
 def with_list_eagerloads(query):
@@ -15665,11 +17589,22 @@ def with_list_eagerloads(query):
 
     Without eager loading, list rendering may trigger N+1 query behavior.
     """
-    return query.options(
+    request_timing = _current_request_timing()
+    started_at = time.perf_counter()
+
+    query = query.options(
         joinedload(Procurement.service_unit),
         joinedload(Procurement.handler_personnel),
         joinedload(Procurement.supplies_links).joinedload(ProcurementSupplier.supplier),
     )
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            "procurement_query.with_list_eagerloads",
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+
+    return query
 
 
 def order_by_serial_no(query):
@@ -15702,16 +17637,27 @@ def order_by_serial_no(query):
     -----
     This implementation intentionally remains SQLite-friendly.
     """
+    request_timing = _current_request_timing()
+    started_at = time.perf_counter()
+
     serial = func.coalesce(Procurement.serial_no, "")
     is_numeric = serial.op("GLOB")("[0-9]+")
     numeric_value = func.cast(serial, Integer)
 
-    return query.order_by(
+    query = query.order_by(
         case((is_numeric, 0), else_=1),
         case((is_numeric, numeric_value), else_=None),
         serial.asc(),
         Procurement.id.asc(),
     )
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            "procurement_query.order_by_serial_no",
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+
+    return query
 
 
 def apply_list_filters(query, request_args: Mapping[str, object]):
@@ -15750,49 +17696,62 @@ def apply_list_filters(query, request_args: Mapping[str, object]):
     This helper only applies filtering logic.
     It does not replace authorization logic or submitted-form validation.
     """
+    request_timing = _current_request_timing()
+    started_at = time.perf_counter()
+    applied_filters: list[str] = []
+
     service_unit_id = parse_optional_int(request_args.get("service_unit_id"))
     if service_unit_id and current_user.is_admin:
         query = query.filter(Procurement.service_unit_id == service_unit_id)
+        applied_filters.append("service_unit_id")
 
     serial_no = (request_args.get("serial_no") or "").strip()
     if serial_no:
         query = query.filter(
             func.coalesce(Procurement.serial_no, "").ilike(f"%{serial_no}%")
         )
+        applied_filters.append("serial_no")
 
     description = (request_args.get("description") or "").strip()
     if description:
         query = query.filter(
             func.coalesce(Procurement.description, "").ilike(f"%{description}%")
         )
+        applied_filters.append("description")
 
     ale = (request_args.get("ale") or "").strip()
     if ale:
         query = query.filter(func.coalesce(Procurement.ale, "").ilike(f"%{ale}%"))
+        applied_filters.append("ale")
 
     hop_preapproval = (request_args.get("hop_preapproval") or "").strip()
     if hop_preapproval:
         query = query.filter(
             func.coalesce(Procurement.hop_preapproval, "").ilike(f"%{hop_preapproval}%")
         )
+        applied_filters.append("hop_preapproval")
 
     hop_approval = (request_args.get("hop_approval") or "").strip()
     if hop_approval:
         query = query.filter(
             func.coalesce(Procurement.hop_approval, "").ilike(f"%{hop_approval}%")
         )
+        applied_filters.append("hop_approval")
 
     aay = (request_args.get("aay") or "").strip()
     if aay:
         query = query.filter(func.coalesce(Procurement.aay, "").ilike(f"%{aay}%"))
+        applied_filters.append("aay")
 
     status = (request_args.get("status") or "").strip()
     if status:
         query = query.filter(Procurement.status == status)
+        applied_filters.append("status")
 
     stage = (request_args.get("stage") or "").strip()
     if stage:
         query = query.filter(Procurement.stage == stage)
+        applied_filters.append("stage")
 
     supplier_afm = normalize_digits(request_args.get("supplier_afm"))
     supplier_name = (request_args.get("supplier_name") or "").strip()
@@ -15810,13 +17769,24 @@ def apply_list_filters(query, request_args: Mapping[str, object]):
             query = query.filter(
                 func.coalesce(Supplier.afm, "").ilike(f"%{supplier_afm}%")
             )
+            applied_filters.append("supplier_afm")
 
         if supplier_name:
             query = query.filter(
                 func.coalesce(Supplier.name, "").ilike(f"%{supplier_name}%")
             )
+            applied_filters.append("supplier_name")
 
         query = query.distinct()
+        applied_filters.append("winner_supplier_join")
+
+    if request_timing is not None:
+        request_timing.add_timing(
+            "procurement_query.apply_list_filters",
+            round((time.perf_counter() - started_at) * 1000.0, 2),
+        )
+        request_timing.mark("procurement_filters_count", len(applied_filters))
+        request_timing.mark("procurement_filters_applied", applied_filters)
 
     return query
 
@@ -15828,7 +17798,6 @@ __all__ = [
     "order_by_serial_no",
     "apply_list_filters",
 ]
-
 
 ```
 
@@ -17237,15 +19206,26 @@ Routes remain responsible only for:
 - flashing returned messages
 - render / redirect responses
 
-IMPORTANT SOURCE-OF-TRUTH NOTE
-------------------------------
-The current `combined_project.md` contains an inconsistency:
-`app/blueprints/settings/routes.py` uses Feedback fields such as `user_id`,
-`category`, and `related_procurement_id`, while the visible
-`app/models/feedback.py` excerpt in the same source does not show those fields.
+IMPORTANT IMPLEMENTATION NOTE
+-----------------------------
+The active Feedback model in the project stores only the fields that are
+actually present in `app/models/feedback.py`:
 
-This module preserves the route contract exactly as the route file currently
-uses it. The model/schema mismatch must be reconciled separately in the project.
+- name
+- email
+- subject
+- message
+- status
+- created_at / updated_at
+
+This service therefore intentionally avoids assumptions about fields that are
+not present in the current persisted model, such as:
+- user_id
+- category
+- related_procurement_id
+
+This keeps the feedback flow production-safe without requiring a schema
+migration.
 """
 
 from __future__ import annotations
@@ -17253,10 +19233,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from flask_login import current_user
+
 from ...extensions import db
 from ...models import Feedback
 from ..shared.operation_results import FlashMessage, OperationResult
-from ..shared.parsing import parse_optional_int
 
 FEEDBACK_CATEGORIES: list[tuple[str, str]] = [
     ("complaint", "Παράπονο"),
@@ -17272,15 +19253,54 @@ FEEDBACK_STATUS_CHOICES: dict[str, str] = {
     "closed": "Κλειστό",
 }
 
-FEEDBACK_CATEGORY_LABELS: dict[str | None, str] = {
-    "complaint": "Παράπονο",
-    "suggestion": "Πρόταση",
-    "bug": "Σφάλμα",
-    "other": "Άλλο",
-    None: "—",
-}
 
-VALID_FEEDBACK_CATEGORY_KEYS = {"complaint", "suggestion", "bug", "other"}
+def _current_user_sender_name() -> str:
+    """
+    Build a best-effort sender display name from the authenticated user.
+
+    RETURNS
+    -------
+    str
+        Human-readable sender name suitable for Feedback.name.
+
+    FALLBACK ORDER
+    --------------
+    1. current_user.display_name when available and non-empty
+    2. current_user.username when available and non-empty
+    3. generic fallback label
+    """
+    display_name = getattr(current_user, "display_name", None)
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+
+    username = getattr(current_user, "username", None)
+    if isinstance(username, str) and username.strip():
+        return username.strip()
+
+    return "Χρήστης εφαρμογής"
+
+
+def _current_user_sender_email() -> str | None:
+    """
+    Return a best-effort sender email for Feedback.email.
+
+    RETURNS
+    -------
+    str | None
+        Currently None unless a real email field is present on the active user
+        object in the running project.
+
+    WHY THIS HELPER EXISTS
+    ----------------------
+    The current visible source of truth does not guarantee that User has an
+    email field. This helper therefore remains defensive and avoids
+    assumptions.
+    """
+    email = getattr(current_user, "email", None)
+    if isinstance(email, str) and email.strip():
+        return email.strip()
+
+    return None
 
 
 def build_feedback_page_context(*, user_id: int) -> dict[str, Any]:
@@ -17296,17 +19316,16 @@ def build_feedback_page_context(*, user_id: int) -> dict[str, Any]:
     -------
     dict[str, Any]
         Template context for feedback submission/history display.
-    """
-    recent_feedback = (
-        Feedback.query.filter_by(user_id=user_id)
-        .order_by(Feedback.created_at.desc())
-        .limit(5)
-        .all()
-    )
 
+    IMPORTANT
+    ---------
+    The active Feedback model does not contain a user_id field. Therefore the
+    "recent feedback" section is intentionally omitted in this hotfix path to
+    avoid unsafe filtering assumptions.
+    """
     return {
         "categories": FEEDBACK_CATEGORIES,
-        "recent_feedback": recent_feedback,
+        "recent_feedback": [],
     }
 
 
@@ -17317,7 +19336,8 @@ def execute_feedback_submission(*, user_id: int, form_data: Mapping[str, object]
     PARAMETERS
     ----------
     user_id:
-        Authenticated user id.
+        Authenticated user id. Retained for route compatibility, but not
+        persisted because the current Feedback model has no user_id field.
     form_data:
         Submitted form payload.
 
@@ -17325,11 +19345,24 @@ def execute_feedback_submission(*, user_id: int, form_data: Mapping[str, object]
     -------
     OperationResult
         Result object for route flashing/redirecting.
+
+    HOTFIX STORAGE POLICY
+    ---------------------
+    This implementation persists only fields that are present in the active
+    Feedback model:
+    - name
+    - email
+    - subject
+    - message
+    - status
+
+    Extra form fields such as category or related procurement id are ignored
+    intentionally in this compatibility-safe hotfix.
     """
-    category = form_data.get("category") or None
+    _ = user_id  # Route contract retained intentionally.
+
     subject = (form_data.get("subject") or "").strip()
     message = (form_data.get("message") or "").strip()
-    related_procurement_id_raw = (form_data.get("related_procurement_id") or "").strip()
 
     if not subject:
         return OperationResult(
@@ -17343,19 +19376,11 @@ def execute_feedback_submission(*, user_id: int, form_data: Mapping[str, object]
             flashes=(FlashMessage("Το κείμενο είναι υποχρεωτικό.", "danger"),),
         )
 
-    related_procurement_id = parse_optional_int(related_procurement_id_raw)
-    if related_procurement_id_raw and related_procurement_id is None:
-        return OperationResult(
-            ok=False,
-            flashes=(FlashMessage("Μη έγκυρο Α/Α προμήθειας.", "danger"),),
-        )
-
     feedback_row = Feedback(
-        user_id=user_id,
-        category=category,
+        name=_current_user_sender_name(),
+        email=_current_user_sender_email(),
         subject=subject,
         message=message,
-        related_procurement_id=related_procurement_id,
         status="new",
     )
     db.session.add(feedback_row)
@@ -17380,27 +19405,26 @@ def build_feedback_admin_page_context(args: Mapping[str, object]) -> dict[str, A
     RETURNS
     -------
     dict[str, Any]
-        Template context with filters, labels, and the filtered feedback list.
+        Template context with filters and the filtered feedback list.
+
+    IMPORTANT
+    ---------
+    Category filtering is intentionally unsupported in this hotfix because the
+    active Feedback model does not define a category field.
     """
     status_filter = (args.get("status") or "").strip() or None
-    category_filter = (args.get("category") or "").strip() or None
 
     query = Feedback.query
 
     if status_filter and status_filter in FEEDBACK_STATUS_CHOICES:
         query = query.filter(Feedback.status == status_filter)
 
-    if category_filter and category_filter in VALID_FEEDBACK_CATEGORY_KEYS:
-        query = query.filter(Feedback.category == category_filter)
-
     feedback_items = query.order_by(Feedback.created_at.desc()).all()
 
     return {
         "feedback_items": feedback_items,
         "status_choices": FEEDBACK_STATUS_CHOICES,
-        "category_labels": FEEDBACK_CATEGORY_LABELS,
         "status_filter": status_filter,
-        "category_filter": category_filter,
     }
 
 
@@ -17421,7 +19445,11 @@ def execute_feedback_admin_status_update(form_data: Mapping[str, object]) -> Ope
     feedback_id_raw = (form_data.get("feedback_id") or "").strip()
     new_status = (form_data.get("status") or "").strip()
 
-    feedback_id = parse_optional_int(feedback_id_raw)
+    try:
+        feedback_id = int(feedback_id_raw)
+    except (TypeError, ValueError):
+        feedback_id = None
+
     if feedback_id is None or new_status not in FEEDBACK_STATUS_CHOICES:
         return OperationResult(
             ok=False,
@@ -17449,13 +19477,11 @@ def execute_feedback_admin_status_update(form_data: Mapping[str, object]) -> Ope
 __all__ = [
     "FEEDBACK_CATEGORIES",
     "FEEDBACK_STATUS_CHOICES",
-    "FEEDBACK_CATEGORY_LABELS",
     "build_feedback_page_context",
     "execute_feedback_submission",
     "build_feedback_admin_page_context",
     "execute_feedback_admin_status_update",
 ]
-
 
 ```
 
@@ -22498,9 +24524,15 @@ FILE: .\app\templates\procurements\edit.html
         Σύμβαση
       </a>
 
-      <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+      <a
+        class="btn btn-sm btn-outline-primary"
+        href="{{ url_for('procurements.report_protocol_docx', procurement_id=procurement.id) }}"
+        target="_blank"
+        rel="noopener"
+        title="Άνοιγμα Πρωτοκόλλου (PDF)"
+      >
         Πρωτόκολλο
-      </button>
+      </a>
       <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
         ΚΠΔ
       </button>
@@ -23504,9 +25536,13 @@ FILE: .\app\templates\procurements\implementation.html
       Σύμβαση
     </a>
 
-    <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
+    <a
+      class="btn btn-sm btn-outline-primary"
+      href="{{ url_for('procurements.report_protocol_docx', procurement_id=procurement.id) }}"
+      title="Λήψη Πρωτοκόλλου (DOCX)"
+    >
       Πρωτόκολλο
-    </button>
+    </a>
     <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Σύντομα">
       ΚΠΔ
     </button>
@@ -24139,18 +26175,18 @@ FILE: .\app\templates\procurements\list.html
         <table class="table table-sm align-middle mb-0 procurements-table">
           <thead>
             <tr class="text-center">
-              <th>Υπηρεσία</th>
+              <th>ΥΠΗΡΕΣΙΑ</th>
               <th>Α/Α</th>
-              <th>Σύντομη Περιγραφή</th>
+              <th>ΣΥΝΤΟΜΗ ΠΕΡΙΓΡΑΦΗ</th>
               <th>ΑΛΕ</th>
               <th>ΑΦΜ</th>
-              <th>Μειοδότης</th>
-              <th>ΗΩΠ Προέγκρισης</th>
-              <th>ΗΩΠ Έγκρισης</th>
+              <th>ΜΕΙΟΔΟΤΗΣ</th>
+              <th>ΗΩΠ ΠΡΟΕΓΚΡΙΣΗΣ</th>
+              <th>ΗΩΠ ΕΓΚΡΙΣΗΣ</th>
               <th>ΑΑΥ</th>
               <th>ΠΟΣΟ</th>
-              <th>Κατάσταση</th>
-              <th>Στάδιο</th>
+              <th>ΚΑΤΑΣΤΑΣΗ</th>
+              <th>ΣΤΑΔΙΟ</th>
               {% if show_open_button %}
                 <th></th>
               {% endif %}
@@ -24316,18 +26352,12 @@ FILE: .\app\templates\procurements\list.html
                         {% endif %}
 
                         {% if allow_delete %}
-                          <form method="post"
-                                action="{{ url_for('procurements.delete_procurement', procurement_id=p.id) }}"
-                                class="d-inline js-delete-procurement-form">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="next" value="{{ request.full_path }}">
-                            <input type="hidden" name="delete_origin" value="all_procurements">
-                            <button type="submit"
-                                    class="btn btn-sm btn-outline-danger"
-                                    data-procurement-label="{{ p.serial_no or p.id }}">
-                              Διαγραφή
-                            </button>
-                          </form>
+                          <button type="submit"
+                                  form="delete-procurement-{{ p.id }}"
+                                  class="btn btn-sm btn-outline-danger"
+                                  data-procurement-label="{{ p.serial_no or p.id }}">
+                            Διαγραφή
+                          </button>
                         {% endif %}
                       </div>
                     </td>
@@ -24345,6 +26375,19 @@ FILE: .\app\templates\procurements\list.html
         </table>
       </div>
     </form>
+
+    {% if allow_delete and procurements %}
+      {% for p in procurements %}
+        <form id="delete-procurement-{{ p.id }}"
+              method="post"
+              action="{{ url_for('procurements.delete_procurement', procurement_id=p.id) }}"
+              class="js-delete-procurement-form d-none">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.full_path }}">
+          <input type="hidden" name="delete_origin" value="all_procurements">
+        </form>
+      {% endfor %}
+    {% endif %}
 
     {% if total_pages > 1 %}
       <form method="get" action="{{ request.path }}" class="mt-3">
@@ -24455,7 +26498,8 @@ FILE: .\app\templates\procurements\list.html
 (function() {
   document.querySelectorAll(".js-delete-procurement-form").forEach(form => {
     form.addEventListener("submit", function(ev) {
-      const btn = form.querySelector("button[type='submit']");
+      const formId = form.getAttribute("id");
+      const btn = formId ? document.querySelector('button[form="' + formId + '"]') : null;
       const label = btn?.getAttribute("data-procurement-label") || "τη συγκεκριμένη προμήθεια";
       const ok = window.confirm(
         `Είσαι βέβαιος ότι θέλεις να διαγράψεις την προμήθεια ${label}; Η ενέργεια δεν αναιρείται.`
@@ -25347,16 +27391,7 @@ FILE: .\app\templates\settings\feedback.html
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <div class="row g-3">
-        <div class="col-12 col-md-4">
-          <label class="form-label">Κατηγορία</label>
-          <select name="category" class="form-select">
-            {% for key, label in categories %}
-              <option value="{{ key }}">{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-
-        <div class="col-12 col-md-8">
+        <div class="col-12">
           <label class="form-label">Τίτλος</label>
           <input name="subject" class="form-control" required>
         </div>
@@ -25370,18 +27405,6 @@ FILE: .\app\templates\settings\feedback.html
             placeholder="Περιγράψτε όσο πιο αναλυτικά γίνεται το ζήτημα ή την πρότασή σας."
             required
           ></textarea>
-        </div>
-
-        <div class="col-12 col-md-4">
-          <label class="form-label">Σχετική προμήθεια (Α/Α)</label>
-          <input
-            name="related_procurement_id"
-            class="form-control"
-            placeholder="π.χ. 123"
-          >
-          <div class="form-text">
-            Προαιρετικό: Α/Α προμήθειας από τη λίστα προμηθειών.
-          </div>
         </div>
       </div>
 
@@ -25406,16 +27429,6 @@ FILE: .\app\templates\settings\feedback.html
                 <div class="fw-semibold">{{ fb.subject }}</div>
                 <div class="small text-muted">
                   {{ fb.created_at.strftime('%d/%m/%Y %H:%M') }}
-                  {% if fb.category %}
-                    •
-                    {% if fb.category == 'complaint' %}Παράπονο{% endif %}
-                    {% if fb.category == 'suggestion' %}Πρόταση{% endif %}
-                    {% if fb.category == 'bug' %}Σφάλμα{% endif %}
-                    {% if fb.category == 'other' %}Άλλο{% endif %}
-                  {% endif %}
-                  {% if fb.related_procurement_id %}
-                    • Προμήθεια Α/Α: {{ fb.related_procurement_id }}
-                  {% endif %}
                 </div>
               </div>
               <div class="small text-muted">
@@ -25432,7 +27445,6 @@ FILE: .\app\templates\settings\feedback.html
   </div>
 {% endif %}
 {% endblock %}
-
 
 ```
 
@@ -25465,17 +27477,6 @@ FILE: .\app\templates\settings\feedback_admin.html
         </select>
       </div>
 
-      <div class="col-12 col-md-4">
-        <label class="form-label">Κατηγορία</label>
-        <select name="category" class="form-select">
-          <option value="">(Όλες)</option>
-          <option value="complaint" {% if category_filter == 'complaint' %}selected{% endif %}>Παράπονο</option>
-          <option value="suggestion" {% if category_filter == 'suggestion' %}selected{% endif %}>Πρόταση</option>
-          <option value="bug" {% if category_filter == 'bug' %}selected{% endif %}>Σφάλμα</option>
-          <option value="other" {% if category_filter == 'other' %}selected{% endif %}>Άλλο</option>
-        </select>
-      </div>
-
       <div class="col-12 col-md-4 d-flex align-items-end">
         <button class="btn btn-outline-primary me-2">
           Φιλτράρισμα
@@ -25496,11 +27497,9 @@ FILE: .\app\templates\settings\feedback_admin.html
           <thead>
             <tr>
               <th>Ημ/νία</th>
-              <th>Χρήστης</th>
-              <th>Κατηγορία</th>
+              <th>Αποστολέας</th>
               <th>Τίτλος</th>
               <th>Μήνυμα</th>
-              <th>Προμήθεια</th>
               <th>Κατάσταση</th>
               <th></th>
             </tr>
@@ -25512,23 +27511,13 @@ FILE: .\app\templates\settings\feedback_admin.html
                   {{ fb.created_at.strftime('%d/%m/%Y %H:%M') }}
                 </td>
                 <td class="small">
-                  {{ fb.user.username if fb.user else '—' }}
-                </td>
-                <td class="small">
-                  {{ category_labels.get(fb.category, '—') }}
+                  {{ fb.sender_display }}
                 </td>
                 <td class="small fw-semibold">
                   {{ fb.subject }}
                 </td>
-                <td class="small text-break" style="max-width: 280px;">
+                <td class="small text-break" style="max-width: 360px;">
                   {{ fb.message }}
-                </td>
-                <td class="small">
-                  {% if fb.related_procurement_id %}
-                    Α/Α: {{ fb.related_procurement_id }}
-                  {% else %}
-                    —
-                  {% endif %}
                 </td>
                 <td class="small">
                   {{ status_choices.get(fb.status or 'new', 'Νέο') }}
@@ -25562,7 +27551,6 @@ FILE: .\app\templates\settings\feedback_admin.html
   </div>
 </div>
 {% endblock %}
-
 
 ```
 
